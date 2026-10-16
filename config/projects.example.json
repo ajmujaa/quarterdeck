@@ -1,0 +1,26 @@
+{
+  "my-web-app": {
+    "repo": "your-account/my-web-app",
+    "path": "~/Projects/my-web-app",
+    "summary": "One sentence on what this project is. The crew reads it before it works.",
+    "default_branch": "main",
+    "duties": ["surveyor", "foreman", "inspector", "shipwright", "panel", "joiner"],
+    "guardrails": [
+      "Never merge a pull request.",
+      "Never push to the default branch; every change goes on its own branch.",
+      "Never touch .env files or anything that holds a secret.",
+      "Follow the repository's own AGENTS.md or CLAUDE.md where it has one."
+    ],
+    "verify": "npm test",
+    "forbidden_paths": ["db/migrations/", "infra/production/", ".env"]
+  },
+  "my-api": {
+    "repo": "your-account/my-api",
+    "path": "~/Projects/my-api",
+    "summary": "A backend service. Replace this with what yours does.",
+    "default_branch": "main",
+    "duties": ["surveyor", "foreman"],
+    "guardrails": ["Never merge a pull request.", "Never run anything against production."],
+    "verify": ""
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "id": "ga4",
+  "label": "Site analytics",
+  "what": "Visitors, users and sessions for the last 7 days, the top pages and the top sources, from Google Analytics 4.",
+  "module": "ga4",
+  "snapshots": [
+    "ga4"
+  ],
+  "minutes": 60,
+  "credentials": [
+    {
+      "key": "GA4_SERVICE_ACCOUNT_FILE",
+      "label": "Service account key file",
+      "secret": false,
+      "help": "The path to the JSON key file on this computer. Only the path is stored. The file is read by the feed and never shown.",
+      "looks": "A path such as /Users/you/keys/analytics.json"
+    }
+  ],
+  "settings": [
+    "property_id",
+    "site_url"
+  ],
+  "reads": [
+    "Page views, users and sessions for 7 days against the 7 before.",
+    "The top 8 pages by views and the top 3 traffic sources."
+  ],
+  "not_reads": [
+    "Individual visitors.",
+    "Anything outside the one property you add the account to."
+  ],
+  "scopes": [
+    "Viewer on your Google Analytics property, for the service account only."
+  ],
+  "steps": [
+    "In Google Cloud turn on the Google Analytics Data API for a project.",
+    "Create a service account and download its key as a JSON file. Keep the file outside the Quarterdeck folder.",
+    "In Google Analytics open Admin, then Property access management, and add the service account's email as a Viewer.",
+    "Enter the path to the key file here and save it.",
+    "Put your numeric property id in config/integrations.json under ga4.property_id. Admin, then Property details, shows it.",
+    "Switch Site analytics on. The openssl command is needed. It is already on a Mac."
+  ],
+  "revoke": "In Google Analytics remove the service account from Property access management. Delete the key in Google Cloud, then remove the path here.",
+  "tested": "Parsing tested against sample data only; not tested against the real service.",
+  "links": [
+    {
+      "label": "Analytics Data API (Google)",
+      "url": "https://developers.google.com/analytics/devguides/reporting/data/v1"
+    }
+  ]
+}

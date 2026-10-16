@@ -1,0 +1,37 @@
+{
+  "id": "linkedin",
+  "label": "LinkedIn",
+  "what": "Your posts and their numbers, from LinkedIn's own data export. A file import, not a live feed.",
+  "module": "linkedin",
+  "snapshots": [
+    "linkedin"
+  ],
+  "minutes": 60,
+  "credentials": [],
+  "reads": [
+    "The posts file from your own data export (Shares.csv, or the .zip).",
+    "An optional post analytics file in the same folder, for impressions, reactions and comments."
+  ],
+  "not_reads": [
+    "Messages, connections and anything else in the export.",
+    "Anything newer than the export you dropped."
+  ],
+  "scopes": [
+    "None. There is no login and no network call. It reads files in one folder."
+  ],
+  "steps": [
+    "On linkedin.com open Settings, then Data privacy, then Get a copy of your data.",
+    "Choose Posts and request the archive. LinkedIn emails you when it is ready.",
+    "Download it and put Shares.csv, or the whole .zip, in ~/Documents/quarterdeck-inbox/linkedin/",
+    "Optional: export per-post analytics as CSV or XLSX and put it in the same folder.",
+    "Switch LinkedIn on. It shows your latest 8 posts and updates when you drop new files."
+  ],
+  "revoke": "Delete the files from ~/Documents/quarterdeck-inbox/linkedin/ and switch LinkedIn off. There is nothing to revoke at LinkedIn.",
+  "tested": "Parsing tested against sample data only; not tested against the real service.",
+  "links": [
+    {
+      "label": "Download your LinkedIn data (LinkedIn Help)",
+      "url": "https://www.linkedin.com/help/linkedin/answer/a1339364"
+    }
+  ]
+}

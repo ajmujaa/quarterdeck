@@ -1,0 +1,8 @@
+- Find the project's own commands in `package.json` scripts before running anything: `test`, `lint`, `typecheck`, `build`. Use the package manager its lock file names (`pnpm-lock.yaml` means pnpm, `yarn.lock` yarn, `package-lock.json` npm). Never mix two.
+- A passing test run is not a passing type check. If there is a `typecheck` script or a `tsconfig.json`, run `tsc --noEmit` (through the script if there is one) as well as the tests.
+- Do not silence the compiler to get a change through: no new `any`, `@ts-ignore` or `@ts-expect-error` without a one-line reason beside it, and no loosening of `strict` or other `tsconfig` options.
+- Change `dependencies` only when the task needs it, and never edit a lock file by hand. If a lock file changes, say why.
+- Environment values come from `.env` files and the host. Never read, print or commit them; read how the code uses them from `.env.example` or the config module.
+- In React code, keep effects free of work that belongs in event handlers, give list items stable keys, and do not fetch inside a render path.
+- Node's test files often share state through module scope. When a test passes alone and fails in the suite, look for shared state before blaming the code.
+- Generated folders (`dist/`, `build/`, `.next/`, `node_modules/`) are never edited or committed.

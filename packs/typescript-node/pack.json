@@ -1,0 +1,2 @@
+{"id": "typescript-node", "label": "TypeScript and Node", "about": "Type checks, test runners and the usual traps in a TypeScript project.",
+ "match": {"languages": ["TypeScript"], "package_managers": ["npm", "pnpm", "yarn", "bun"], "frameworks": ["React", "Next.js", "Express", "Fastify", "Vite", "Jest", "Vitest"]}}

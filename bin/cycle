@@ -1,0 +1,449 @@
+#!/bin/bash
+# quarterdeck cycle — one bounded run of the whole development cycle for ONE issue, then stop for a person.
+#
+# Like bin/fix this is not a duty and not a fifth abstraction: it holds no prompt, makes no model call of its own and decides
+# nothing about code. It is the harness typing, in order, the commands you would type yourself, and stopping at the first
+# thing that needs a person, a budget, or a fix:
+#
+#   purser      requirements into the issue body
+#   panel       the dev panel's plan (one round)
+#   shipwright  builds it on a branch, opens the pull request
+#   assayer     tests written from the acceptance checks alone, in a worktree of the BASE branch (never sees the diff)
+#   surveyor, marshal, lookout, pilot, inspector    in parallel, on the pull request (a reviewer that does not apply is skipped,
+#               with the reason on the record: lookout and pilot need qa.start in the registry, i.e. an app with a screen)
+#   caulker     seals exactly the findings, at most three cycles; every cycle is followed by the reviewers again
+#   STOP        a person reads the pull request and merges it. Nothing here merges, approves or pushes to the trunk.
+#
+#   quarterdeck cycle <project> --issue 12              report only: purser and the dev panel run (they write nothing), the
+#                                                   later stages are listed with what each WOULD do
+#   quarterdeck cycle <project> --issue 12 --apply      every stage follows its own duty's --apply rules
+#   quarterdeck cycle --resume <id>                     a stopped or crashed cycle goes on at the failed stage; a finished stage is never repeated
+#   quarterdeck cycle --status [<id>]                   the stages, their verdicts and what each cost
+#
+# Off unless the project opts in: "cycle": true in its registry entry. It is never started by a schedule or the fix queue (it is not
+# a duty, so neither can name it). The dashboard starts one only from the Mission page's "Start a full cycle" dialog, for an opted-in
+# project, after showing the expected cost and asking for a confirm; otherwise it shows a cycle on the Mission page, read only.
+#
+# Money. Every model call is booked in state/spend.jsonl; this script tags its calls with the cycle id (QUARTERDECK_FIX_KEY=cycle:<id>)
+# and reads each stage's cost back from that ledger. Before every stage two limits are checked, and a stage that would cross either is
+# not started: the day's total against QUARTERDECK_DAILY_BUDGET, and this cycle's total against QUARTERDECK_CYCLE_BUDGET (default 15,
+# API-equivalent dollars). "Would cross" is the total plus one call's cap (QUARTERDECK_CALL_BUDGET), because that is the most the first
+# call of a stage can add; the stage's later calls are each capped the same way. The record then says "stopped at the cap".
+#
+# The record is state/cycles/<id>.json: every stage, its verdict, its duty run ids, its cost, start and end, and the final state.
+set -uo pipefail
+# quarterdeck: read-whole-file
+# Everything below is one brace group, so bash reads this whole file before it runs any of it (see bin/fix for why).
+{
+SELF="${BASH_SOURCE[0]}"
+while [ -L "$SELF" ]; do
+  d="$(cd "$(dirname "$SELF")" && pwd)"; SELF="$(readlink "$SELF")"
+  case "$SELF" in /*) ;; *) SELF="$d/$SELF" ;; esac
+done
+source "$(cd "$(dirname "$SELF")" && pwd)/lib.sh"
+
+CYCLES="$QUARTERDECK_HOME/state/cycles"
+GH="${QUARTERDECK_GH:-gh}"
+MAX_CAULK=3                                   # a cap in code, not a setting: the caulker's own counter also stops at 3
+CEILING="${QUARTERDECK_CYCLE_BUDGET:-15}"
+PANEL_ROUNDS="${QUARTERDECK_CYCLE_PANEL_ROUNDS:-1}"
+REVIEWERS="surveyor marshal lookout pilot inspector"
+
+PROJECT="" ISSUE="" APPLY=0 RESUME="" STATUS_ID="" WANT_STATUS=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --issue)  ISSUE="${2:-}"; shift ;;
+    --apply)  APPLY=1 ;;
+    --resume) RESUME="${2:-}"; shift ;;
+    --status) WANT_STATUS=1; case "${2:-}" in ""|--*) ;; *) STATUS_ID="$2"; shift ;; esac ;;
+    -*) die "cycle: unknown argument '$1'" ;;
+    *)  [ -z "$PROJECT" ] && PROJECT="$1" || die "cycle: one project at a time" ;;
+  esac
+  shift
+done
+
+num_ok() { [[ "${1:-}" =~ ^[0-9]+(\.[0-9]+)?$ ]]; }
+gt() { awk -v a="$1" -v b="$2" 'BEGIN { exit !(a + 0 > b + 0) }'; }
+now() { date -u +%FT%TZ; }
+human() { # human <seconds> — "4m 12s"
+  awk -v s="$1" 'BEGIN { if (s >= 3600) printf "%dh %dm", s/3600, (s%3600)/60; else if (s >= 60) printf "%dm %ds", s/60, s%60; else printf "%ds", s }'
+}
+
+# ---- reading a record ----------------------------------------------------------------------------------------------
+table() { # table <record> — the stages, their verdicts, their cost, and the total
+  jq -r '.stages[] | [.title, .state, ((.verdict // "") + (if (.note // "") != "" then " (" + .note + ")" else "" end)), (.cost // 0)] | @tsv' "$1" \
+    | awk -F'\t' '{ v = $3; if (length(v) > 64) v = substr(v, 1, 61) "..."; printf "  %-26s %-9s %-66s $%.2f\n", $1, $2, v, $4; t += $4 }
+                  END { printf "  %-26s %-9s %-66s $%.2f\n", "total", "", "", t }'
+}
+show() { # show <record>
+  local f=$1
+  echo "cycle $(jq -r .id "$f")  ·  $(jq -r .project "$f") issue #$(jq -r .issue "$f")  ·  $(jq -r 'if .apply then "apply" else "report only" end' "$f")"
+  echo "state: $(jq -r .status "$f")"
+  jq -r 'if (.final // "") != "" then "       " + .final else empty end' "$f"
+  echo
+  table "$f"
+  echo
+  jq -r 'if .pr then "pull request: " + .pr else empty end' "$f"
+  jq -r '(.notes // []) | map("note: " + .) | .[]' "$f"
+  jq -r 'if .finished then "wall time: " + (.seconds | tostring) + "s" else empty end' "$f"
+}
+
+if [ "$WANT_STATUS" = 1 ]; then
+  if [ -z "$STATUS_ID" ]; then
+    echo "cycles on record (newest first):"
+    ls -t "$CYCLES"/*.json 2>/dev/null | while read -r f; do
+      jq -r 'select(.kind == "cycle") | "  \(.id)  \(.status)  \(.project) #\(.issue)"' "$f" 2>/dev/null
+    done
+    exit 0
+  fi
+  [[ "$STATUS_ID" =~ ^[A-Za-z0-9._-]+$ ]] || die "cycle: that is not a cycle id"
+  [ -f "$CYCLES/$STATUS_ID.json" ] && [ "$(jq -r .kind "$CYCLES/$STATUS_ID.json" 2>/dev/null)" = cycle ] || die "cycle: no cycle called $STATUS_ID"
+  show "$CYCLES/$STATUS_ID.json"
+  exit 0
+fi
+
+# ---- which cycle, and may it run -----------------------------------------------------------------------------------
+if [ -n "$RESUME" ]; then
+  [ -z "$PROJECT$ISSUE" ] || die "cycle: --resume takes only the cycle id"
+  [[ "$RESUME" =~ ^[A-Za-z0-9._-]+$ ]] || die "cycle: that is not a cycle id"
+  REC="$CYCLES/$RESUME.json"
+  [ -f "$REC" ] && [ "$(jq -r .kind "$REC" 2>/dev/null)" = cycle ] || die "cycle: no cycle called $RESUME"
+  ID="$RESUME"; PROJECT=$(jq -r .project "$REC"); ISSUE=$(jq -r .issue "$REC"); APPLY=$(jq -r 'if .apply then 1 else 0 end' "$REC")
+  [ "$APPLY" = 1 ] || die "cycle: $ID was a report-only run; there is nothing to resume. Run it again with --apply."
+  case "$(jq -r .status "$REC")" in
+    running|failed|stopped-cap|stopped-ceiling) ;;
+    needs-human)
+      # Only a caulker that stopped on its own verdict (not the hand-over after three cycles) can be tried again, once whatever stopped it is fixed.
+      last=$(jq -r '[.stages[] | select((.id | test("^caulk[0-9]+$")) and .state == "done")] | last | if . != null and (.verdict == "NEEDS_HUMAN" or .verdict == "REFUSED") then .id else "" end' "$REC")
+      [ -n "$last" ] || die "cycle: $ID is waiting for a person ($(jq -r .final "$REC" | cut -c1-120)); there is nothing to resume"
+      jq --arg id "$last" '.stages |= map(if .id == $id then .state = "failed" else . end)' "$REC" > "$REC.t" && mv "$REC.t" "$REC" ;;
+    *) die "cycle: $ID is finished ($(jq -r .status "$REC")); there is nothing to resume" ;;
+  esac
+else
+  [ -n "$PROJECT" ] || die "usage: quarterdeck cycle <project> --issue <n> [--apply]   |   --resume <id>   |   --status [<id>]"
+  [[ "$ISSUE" =~ ^[0-9]+$ ]] || die "cycle: which issue? --issue <number>"
+fi
+project_exists "$PROJECT" || die "unknown project '$PROJECT' (see: quarterdeck projects)"
+[ "$(jq -r --arg p "$PROJECT" '.[$p].cycle // false' "$PROJECTS_FILE")" = true ] \
+  || die "cycle: '$PROJECT' has not opted in. Add \"cycle\": true to its entry in $PROJECTS_FILE first; a cycle spends real money and opens real pull requests, so it is never on by default."
+project_has_duty "$PROJECT" shipwright || die "cycle: the shipwright is not enabled for '$PROJECT' (duties[] in the registry); a cycle with nothing to build with has no point"
+WORKDIR=$(project_path "$PROJECT")
+[ -d "$WORKDIR/.git" ] || die "cycle: no git checkout at $WORKDIR"
+REPO=$(project_get "$PROJECT" repo)
+num_ok "$CEILING" || die "cycle: QUARTERDECK_CYCLE_BUDGET must be a number of dollars"
+
+LOG_FILE="$QUARTERDECK_HOME/logs/cycle-$PROJECT.log"
+mkdir -p "$CYCLES"
+if [ -d "$QUARTERDECK_HOME/state/cycle-$PROJECT-$ISSUE.lock" ] && holder=$(cat "$QUARTERDECK_HOME/state/cycle-$PROJECT-$ISSUE.lock/pid" 2>/dev/null) && kill -0 "$holder" 2>/dev/null; then
+  die "cycle: a cycle is already running for $PROJECT #$ISSUE (pid $holder)"
+fi
+acquire_lock "cycle-$PROJECT-$ISSUE"
+# acquire_lock set a trap that drops the lock; keep that, and never leave a record saying "running" behind a process that is gone.
+trap 'if [ -n "${REC:-}" ] && [ -f "$REC" ] && [ "$(jq -r .status "$REC" 2>/dev/null)" = running ]; then
+        jq --arg at "$(now)" ".status = \"failed\" | .final = \"stopped before it finished; resume with: quarterdeck cycle --resume ${ID:-}\" | .finished = \$at" "$REC" > "$REC.t" && mv "$REC.t" "$REC"; fi
+      rm -rf "$QUARTERDECK_LOCK"' EXIT
+
+if [ -z "$RESUME" ]; then
+  ID="cyc-$(tr -c 'A-Za-z0-9._\n-' '-' <<<"$PROJECT")-$ISSUE-$(date +%s)"
+  REC="$CYCLES/$ID.json"
+  jq -n --arg id "$ID" --arg p "$PROJECT" --argjson i "$ISSUE" --argjson a "$([ "$APPLY" = 1 ] && echo true || echo false)" \
+        --arg at "$(now)" --argjson t "$(date +%s)" --argjson ceil "$CEILING" --arg daily "${QUARTERDECK_DAILY_BUDGET:-}" --arg call "${QUARTERDECK_CALL_BUDGET:-}" \
+    '{kind:"cycle", id:$id, project:$p, issue:$i, apply:$a, status:"running", final:"", started:$at, finished:null, t0:$t, seconds:null,
+      pr:null, prnum:null, cost:0, notes:[],
+      budget:{ceiling:$ceil, daily:($daily | tonumber? // null), call:($call | tonumber? // null)}, stages:[]}' > "$REC"
+else
+  jq --arg at "$(now)" '.status = "running" | .final = "" | .finished = null | .resumed = ((.resumed // 0) + 1)' "$REC" > "$REC.t" && mv "$REC.t" "$REC"
+fi
+export QUARTERDECK_MISSION_RUN="cycle:$ID" QUARTERDECK_FIX_KEY="cycle:$ID"
+# A cycle without --apply is report-only whatever the machine's default says: a duty run with QUARTERDECK_DRY_RUN=0 would write unasked.
+[ "$APPLY" = 1 ] || export QUARTERDECK_DRY_RUN=1
+TMPD=$(mktemp -d)
+SPEND="$QUARTERDECK_HOME/state/spend.jsonl"; touch "$SPEND"
+PLAN="$QUARTERDECK_HOME/workspace/${PROJECT}-plan-${ISSUE}.md"
+working_on "cycle $ID · issue #$ISSUE"
+
+# ---- the record ----------------------------------------------------------------------------------------------------
+rec_set() { local t; t=$(mktemp "$REC.XXXXXX") && jq "$@" "$REC" > "$t" && mv "$t" "$REC"; }
+stage_get() { jq -r --arg id "$1" "(.stages[] | select(.id == \$id) | $2) // empty" "$REC"; }
+stage_state() { stage_get "$1" .state; }
+stage_patch() { # stage_patch <id> <patch-json> — create the stage if it is new (stages keep the order they first appeared in)
+  rec_set --arg id "$1" --argjson p "$2" \
+    '.stages |= (if any(.[]; .id == $id) then map(if .id == $id then . + $p else . end) else . + [{id: $id} + $p] end)
+     | .cost = ([.stages[].cost // 0] | add // 0)'
+}
+cost_so_far() { jq -r '[.stages[].cost // 0] | add // 0' "$REC"; }
+
+# ---- the two limits, checked before a stage starts -------------------------------------------------------------------
+spent_today() {
+  local since
+  since=$(python3 -c 'from datetime import datetime, timezone; print(datetime.now().astimezone().replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))')
+  jq -Rn --arg s "$since" '[inputs | fromjson? | select((.at // "") >= $s) | .cost // 0] | add // 0' "$SPEND"
+}
+finish() { # finish <status> <message> <exit-code> — the one way out after the record exists
+  local status=$1 msg=$2 code=$3 t0 secs tok
+  t0=$(jq -r .t0 "$REC"); secs=$(( $(date +%s) - t0 ))
+  rec_set --arg s "$status" --arg m "$msg" --arg at "$(now)" --argjson secs "$secs" '.status = $s | .final = $m | .finished = $at | .seconds = $secs'
+  case "$status" in
+    awaiting-review) tok=AWAITING-REVIEW ;; needs-human) tok=NEEDS_HUMAN ;; stopped-cap) tok=STOPPED-CAP ;; stopped-ceiling) tok=STOPPED-CEILING ;;
+    failed) tok=FAILED ;; nothing) tok=NOTHING-TO-BUILD ;; report-only) tok=DRY-RUN ;; *) tok=STOPPED ;;
+  esac
+  record_run "$PROJECT" cycle "$tok" "$ID — #$ISSUE: $msg" "$(jq -r '.pr // ""' "$REC")"
+  say ""
+  say "── cycle $ID · $status ──"
+  say "$msg"
+  say ""
+  table "$REC" >&2
+  say ""
+  say "  wall time $(human "$secs")"
+  [ "$(jq -r '.pr // ""' "$REC")" != "" ] && say "  pull request: $(jq -r .pr "$REC")"
+  jq -r '(.notes // []) | map("  note: " + .) | .[]' "$REC" >&2
+  say ""
+  say "  record: $REC"
+  rm -rf "$TMPD"
+  exit "$code"
+}
+gate() { # gate <stage-id> — a stage that would cross the daily budget or this cycle's ceiling is not started
+  local est=0 s d c
+  num_ok "${QUARTERDECK_CALL_BUDGET:-}" && est=$QUARTERDECK_CALL_BUDGET
+  d="${QUARTERDECK_DAILY_BUDGET:-}"
+  if num_ok "$d" && gt "$d" 0; then
+    s=$(spent_today)
+    if gt "$(awk -v a="$s" -v b="$est" 'BEGIN { print a + b }')" "$d"; then
+      finish stopped-cap "stopped at the cap: \$$(printf '%.2f' "$s") of today's \$$d is spent, so the next stage ($1) was not started. Nothing was lost. After the cap resets or is raised (QUARTERDECK_DAILY_BUDGET): quarterdeck cycle --resume $ID" 2
+    fi
+  fi
+  c=$(cost_so_far)
+  if gt "$(awk -v a="$c" -v b="$est" 'BEGIN { print a + b }')" "$CEILING"; then
+    finish stopped-ceiling "stopped at the cycle ceiling: this cycle has cost \$$(printf '%.2f' "$c") of its \$$CEILING (QUARTERDECK_CYCLE_BUDGET), so the next stage ($1) was not started. To go on, raise it and: quarterdeck cycle --resume $ID" 2
+  fi
+}
+
+# ---- running a stage -------------------------------------------------------------------------------------------------
+LV="" LD="" LU="" LST=""
+loadstage() { LV=$(stage_get "$1" .verdict); LD=$(stage_get "$1" .detail); LU=$(stage_get "$1" .url); LST=$(stage_state "$1"); }
+begin_stage() { # begin_stage <id> <title> <duty>
+  local from rows
+  from=$(stage_get "$1" .spend_from); [ -n "$from" ] || from=$(wc -l < "$SPEND" | tr -d ' ')
+  rows=$(jq --arg t "cycle:$ID" --arg d "$3" '[.[] | select(.mission == $t and .duty == $d)] | length' "$RUNS_LEDGER")
+  stage_patch "$1" "$(jq -nc --arg t "$2" --arg d "$3" --arg at "$(now)" --argjson f "${from:-0}" --argjson r "${rows:-0}" \
+    '{title:$t, duty:$d, state:"running", verdict:null, detail:"", url:"", started:$at, finished:null, spend_from:$f, rows_before:$r}')"
+}
+end_stage() { # end_stage <id> <duty> <exit-code> — read back the verdict and the cost; the stage is done unless it recorded ERROR or nothing
+  local id=$1 duty=$2 rc=$3 rb from row v d u state cost runs
+  rb=$(stage_get "$id" .rows_before); from=$(stage_get "$id" .spend_from)
+  row=$(jq -c --arg t "cycle:$ID" --arg d "$duty" --argjson n "${rb:-0}" '[.[] | select(.mission == $t and .duty == $d)] | if length > $n then last else empty end' "$RUNS_LEDGER")
+  if [ -n "$row" ]; then
+    v=$(jq -r .verdict <<<"$row"); d=$(jq -r '.detail // ""' <<<"$row"); u=$(jq -r '.url // ""' <<<"$row")
+  else
+    v=""; d="the duty recorded no verdict (exit $rc): a usage limit, a lock held by another run, or it crashed. See logs/$duty-$PROJECT.log"; u=""
+  fi
+  state=done; { [ -z "$v" ] || [ "$v" = ERROR ]; } && state=failed
+  # a caulker run that ended in ERROR still used one of its cycles (its own counter says so), so it is a finished attempt, not a stage to repeat
+  [ "$duty" = caulker ] && [ "$v" = ERROR ] && state=done
+  [ -n "$v" ] || v=NONE
+  cost=$(tail -n +$(( ${from:-0} + 1 )) "$SPEND" | jq -Rn --arg k "cycle:$ID" --arg d "$duty" '[inputs | fromjson? | select(.fix == $k and .duty == $d)] | {cost: (map(.cost // 0) | add // 0), runs: (map(.run // "") | map(select(. != "")) | unique)}')
+  stage_patch "$id" "$(jq -nc --arg s "$state" --arg v "$v" --arg d "$d" --arg u "$u" --arg at "$(now)" --argjson c "$cost" \
+    '{state:$s, verdict:$v, detail:$d, url:$u, finished:$at, cost:$c.cost, runs:$c.runs}')"
+  loadstage "$id"
+  say "  $duty: $LV${LD:+ — $LD}  (\$$(printf '%.2f' "$(stage_get "$id" .cost)"))"
+}
+run_duty() { # run_duty <duty> <args...>
+  QUARTERDECK_PROJECT="$PROJECT" QUARTERDECK_WORKDIR="$WORKDIR" bash "$QUARTERDECK_DIR/duties/$1.sh" "${@:2}"
+}
+skip_reason() { # skip_reason <duty> — empty when it applies
+  project_has_duty "$PROJECT" "$1" || { echo "not enabled for $PROJECT (duties[] in the registry)"; return; }
+  case "$1" in
+    lookout|pilot) [ -n "$(project_get "$PROJECT" qa.start)" ] || echo "no qa.start in the registry: nothing says how to start the app, so there is no screen to take pictures of or drive" ;;
+    assayer)       [ -n "$(project_get "$PROJECT" test_file)" ] || echo "no test_file in the registry: without it the harness cannot tell whether a test fails first" ;;
+  esac
+}
+simple_stage() { # simple_stage <id> <title> <duty> <args...> — runs the duty in the foreground, once; sets LV LD LU LST
+  local id=$1 title=$2 duty=$3 why rc
+  shift 3
+  case "$(stage_state "$id")" in done|skipped) loadstage "$id"; return 0 ;; esac
+  why=$(skip_reason "$duty")
+  if [ -n "$why" ]; then
+    stage_patch "$id" "$(jq -nc --arg t "$title" --arg d "$duty" --arg w "$why" '{title:$t, duty:$d, state:"skipped", verdict:"SKIPPED", detail:$w, note:"skipped", url:"", cost:0, runs:[]}')"
+    say ""; say "── $title: skipped — $why"
+    loadstage "$id"; return 0
+  fi
+  gate "$id"
+  say ""; say "── $title ──"
+  begin_stage "$id" "$title" "$duty"
+  run_duty "$duty" "$@" >&2; rc=$?
+  end_stage "$id" "$duty" "$rc"
+}
+review_round() { # review_round <n> — the reviewers run side by side on the pull request's current head; all are collected before anything is decided
+  local r=$1 d id todo=() why pids=() rcs=() i title w
+  for d in $REVIEWERS; do
+    id="r$r:$d"; title="$(tr '[:lower:]' '[:upper:]' <<<"${d:0:1}")${d:1} (round $r)"
+    case "$(stage_state "$id")" in done|skipped) continue ;; esac
+    why=$(skip_reason "$d")
+    if [ -n "$why" ]; then
+      if [ "$r" = 1 ]; then
+        stage_patch "$id" "$(jq -nc --arg t "$title" --arg d "$d" --arg w "$why" '{title:$t, duty:$d, state:"skipped", verdict:"SKIPPED", detail:$w, note:"skipped", url:"", cost:0, runs:[]}')"
+        say "  $d: skipped — $why"
+      fi
+      continue
+    fi
+    [ "$r" -gt 1 ] && [ "$(stage_state "r1:$d")" = skipped ] && continue
+    todo[${#todo[@]}]=$d
+  done
+  [ ${#todo[@]} -gt 0 ] || return 0
+  gate "round $r"
+  say ""; say "── review, round $r: ${todo[*]} (side by side) ──"
+  for d in "${todo[@]}"; do
+    title="$(tr '[:lower:]' '[:upper:]' <<<"${d:0:1}")${d:1} (round $r)"
+    begin_stage "r$r:$d" "$title" "$d"
+    case "$d" in
+      inspector) ( run_duty inspector --pr "$PRNUM" --issue "$ISSUE" --apply ) > "$TMPD/r$r-$d.out" 2>&1 & ;;
+      *)         ( run_duty "$d" --pr "$PRNUM" --apply ) > "$TMPD/r$r-$d.out" 2>&1 & ;;
+    esac
+    pids[${#pids[@]}]=$!
+  done
+  i=0; local bad=""
+  for d in "${todo[@]}"; do
+    wait "${pids[$i]}"; rcs[$i]=$?
+    cp "$TMPD/r$r-$d.out" "$QUARTERDECK_HOME/logs/$ID-r$r-$d.log" 2>/dev/null || true
+    end_stage "r$r:$d" "$d" "${rcs[$i]}"
+    [ "$LST" = failed ] && bad="${bad:+$bad, }$d"
+    i=$((i + 1))
+  done
+  [ -z "$bad" ] || finish failed "round $r: $bad did not report a verdict. Everything else is on the record. Resume with: quarterdeck cycle --resume $ID" 1
+}
+open_findings() { # the findings the caulker could act on: files for this exact head whose verdict is not clean
+  local sha; sha=$(guard 60 "$GH" pr view "$PRNUM" -R "$REPO" --json headRefOid -q .headRefOid 2>>"$LOG_FILE") || { echo "?"; return; }
+  local f n=0 k
+  for f in "$QUARTERDECK_HOME"/state/findings/"${PROJECT}-pr${PRNUM}-"*.json; do
+    [ -f "$f" ] || continue
+    k=$(jq -r --arg h "$sha" 'if .head == $h and ((.verdict // "") | test("^(CLEAN|PASSED|PROVEN)") | not) then (.findings | length) else 0 end' "$f" 2>/dev/null || echo 0)
+    n=$((n + ${k:-0}))
+  done
+  echo "$n"
+}
+note() { rec_set --arg n "$1" 'if (.notes | index($n)) then . else .notes += [$n] end'; }
+
+# ---- 0. is there anything to start from ------------------------------------------------------------------------------
+if [ -z "$RESUME" ]; then
+  info=$(guard 60 "$GH" issue view "$ISSUE" -R "$REPO" --json title,state 2>>"$LOG_FILE") || { rec_set '.status = "failed"'; die "cycle: could not read issue #$ISSUE in $REPO"; }
+  [ "$(jq -r .state <<<"$info")" = OPEN ] || { rec_set '.status = "failed"'; die "cycle: issue #$ISSUE is not open"; }
+  rec_set --arg t "$(jq -r .title <<<"$info")" '.title = $t'
+fi
+TITLE=$(jq -r '.title // ""' "$REC")
+say "quarterdeck cycle: $PROJECT — #$ISSUE $TITLE"
+say "  $ID · $([ "$APPLY" = 1 ] && echo apply || echo 'report only') · ceiling \$$CEILING · $(num_ok "${QUARTERDECK_DAILY_BUDGET:-}" && echo "daily cap \$$QUARTERDECK_DAILY_BUDGET" || echo 'no daily cap')"
+
+# ---- 1. the purser -------------------------------------------------------------------------------------------------
+simple_stage purser "Purser" purser --issue "$ISSUE" $([ "$APPLY" = 1 ] && echo --apply)
+[ "$LST" = failed ] && finish failed "the purser failed: $LD. Resume with: quarterdeck cycle --resume $ID" 1
+[ "$LV" = NEEDS_HUMAN ] && finish needs-human "the purser could not write requirements: $LD" 0
+
+# ---- 2. the dev panel ------------------------------------------------------------------------------------------------
+# The panel is a light one (one round) on the routine tier's model, as bin/fix does for a routine item; the full panel is a decision for a person.
+PANEL_MODEL="${QUARTERDECK_CYCLE_PANEL_MODEL:-${QUARTERDECK_TIER_ROUTINE:-claude-sonnet-5}}"
+panel_stage() {
+  local why rc
+  case "$(stage_state panel)" in done|skipped) loadstage panel; return 0 ;; esac
+  why=$(skip_reason panel)
+  if [ -n "$why" ]; then
+    stage_patch panel "$(jq -nc --arg w "$why" '{title:"Dev panel", duty:"panel", state:"skipped", verdict:"SKIPPED", detail:$w, note:"skipped", url:"", cost:0, runs:[]}')"
+    say ""; say "── Dev panel: skipped — $why"; loadstage panel; return 0
+  fi
+  gate panel
+  say ""; say "── Dev panel ──"
+  begin_stage panel "Dev panel" panel
+  QUARTERDECK_MODEL_OVERRIDE="$PANEL_MODEL" run_duty panel --panel dev --issue "$ISSUE" --rounds "$PANEL_ROUNDS" >&2; rc=$?
+  end_stage panel panel "$rc"
+}
+panel_stage
+[ "$LST" = failed ] && finish failed "the dev panel failed: $LD. Resume with: quarterdeck cycle --resume $ID" 1
+if [ "$LST" != skipped ]; then
+  case "$LV" in
+    RULED) kept=$(sed -nE 's/^dev: ([0-9]+) of .*/\1/p' <<<"$LD")
+           [ "${kept:-0}" = 0 ] && finish nothing "the dev panel ruled there is nothing to change for #$ISSUE" 0
+           [ -f "$PLAN" ] || finish failed "the dev panel ruled but wrote no plan ($PLAN)" 1 ;;
+    CLEAN) finish nothing "the dev panel found nothing to change for #$ISSUE" 0 ;;
+    *)     finish failed "the dev panel did not reach a ruling: $LV $LD. Resume with: quarterdeck cycle --resume $ID" 1 ;;
+  esac
+fi
+
+# ---- report only stops here: the rest is what it WOULD do ----------------------------------------------------------------
+if [ "$APPLY" != 1 ]; then
+  would() { # would <id> <title> <duty> <text>
+    stage_patch "$1" "$(jq -nc --arg t "$2" --arg d "$3" --arg w "$4" '{title:$t, duty:$d, state:"would", verdict:"WOULD", detail:$w, note:"report only", url:"", cost:0, runs:[]}')"
+  }
+  would shipwright "Shipwright" shipwright "would build the plan on a branch and open a pull request"
+  r=$(skip_reason assayer)
+  if [ -n "$r" ]; then would assayer "Assayer" assayer "would be skipped: $r"
+  else would assayer "Assayer" assayer "would write tests from the acceptance checks alone, in a worktree of the base branch; each must fail there and pass on the pull request's head"; fi
+  for d in $REVIEWERS; do
+    r=$(skip_reason "$d")
+    if [ -n "$r" ]; then w="would be skipped: $r"; else w="would review the pull request, side by side with the others"; fi
+    would "r1:$d" "$(tr '[:lower:]' '[:upper:]' <<<"${d:0:1}")${d:1} (round 1)" "$d" "$w"
+  done
+  would caulker "Caulker" caulker "would seal exactly the open findings, at most $MAX_CAULK cycles, the reviewers reading each new head again"
+  would human "Human review" human "the cycle stops; a person reads the pull request and merges it"
+  finish report-only "report only: the purser and the dev panel ran (they write nothing outside Quarterdeck's own folders). Each later stage is listed with what it would do. Add --apply to run them." 0
+fi
+
+# ---- 3. the shipwright -------------------------------------------------------------------------------------------------
+adopt() { # a pull request this cycle opened before a crash
+  local u; u=$(jq -r --arg t "cycle:$ID" 'map(select(.mission == $t and .duty == "shipwright" and .verdict == "PR")) | last | .url // empty' "$RUNS_LEDGER")
+  [ -n "$u" ] || return 1
+  begin_stage shipwright "Shipwright" shipwright
+  stage_patch shipwright "$(jq -nc --arg u "$u" --arg at "$(now)" '{state:"done", verdict:"PR", detail:"adopted: the pull request this cycle had already opened", url:$u, finished:$at}')"
+  return 0
+}
+if [ "$(stage_state shipwright)" != done ]; then adopt || true; fi
+simple_stage shipwright "Shipwright" shipwright --issue "$ISSUE" --plan "$PLAN" --apply
+[ "$LST" = failed ] && finish failed "the shipwright failed: $LD. Resume with: quarterdeck cycle --resume $ID" 1
+case "$LV" in
+  PR) ;;
+  NO_CHANGE) finish nothing "the shipwright judged nothing should change: $LD" 0 ;;
+  *) finish needs-human "no pull request: the shipwright said $LV${LD:+ — $LD}" 0 ;;
+esac
+PR="$LU"; PRNUM="${PR##*/}"
+rec_set --arg u "$PR" --argjson n "${PRNUM:-0}" '.pr = $u | .prnum = $n'
+
+# ---- 4. the assayer: tests from the acceptance checks, by an agent that never sees the diff -----------------------------
+simple_stage assayer "Assayer" assayer --issue "$ISSUE" --pr "$PRNUM" --apply
+[ "$LST" = failed ] && finish failed "the assayer failed: $LD. Resume with: quarterdeck cycle --resume $ID" 1
+case "$LV" in
+  VERIFIED) note "the assayer proposed tests as their own pull request: $LU. Merge it only if you agree with them." ;;
+  SKIPPED|NONE) ;;
+  *) note "assayer: $LV${LD:+ — $LD}" ;;
+esac
+
+# ---- 5. review, seal, review again ---------------------------------------------------------------------------------------
+while :; do
+  sealed=$(jq '[.stages[] | select((.id | startswith("caulk")) and .verdict == "SEALED")] | length' "$REC")
+  review_round $((sealed + 1))
+  open=$(open_findings)
+  if [ "$open" = "?" ]; then finish failed "could not read the pull request's head from GitHub to count the open findings. Resume with: quarterdeck cycle --resume $ID" 1; fi
+  [ "$open" = 0 ] && break
+  used=$(jq '[.stages[] | select((.id | test("^caulk[0-9]+$")) and .state == "done")] | length' "$REC")
+  if [ "$used" -ge "$MAX_CAULK" ]; then
+    # the caulker's own counter now hands the pull request to a person (label and comment); no model is asked
+    simple_stage caulk-handoff "Caulker (hand-over)" caulker --pr "$PRNUM" --apply
+    finish needs-human "$open finding(s) are still open after $used caulker cycle(s). The pull request is labelled needs-human with both positions in a comment." 0
+  fi
+  n=$((used + 1))
+  simple_stage "caulk$n" "Caulker (cycle $n)" caulker --pr "$PRNUM" --apply
+  [ "$LST" = failed ] && finish failed "the caulker recorded no verdict: $LD. Resume with: quarterdeck cycle --resume $ID" 1
+  case "$LV" in
+    SEALED|REJECTED|ERROR) ;;                       # a cycle was used; SEALED has a new head to read again
+    *) finish needs-human "the caulker stopped: $LV${LD:+ — $LD}. $open finding(s) are open for a person." 0 ;;
+  esac
+done
+
+# ---- 6. stop for a person -------------------------------------------------------------------------------------------------
+for d in $REVIEWERS; do
+  last=$(jq -r --arg d "$d" '[.stages[] | select(.duty == $d and .state == "done")] | last | .verdict // empty' "$REC")
+  case "$d:$last" in
+    inspector:UNPROVEN*|inspector:BROKEN*) note "the inspector says $last: $(jq -r '[.stages[] | select(.duty == "inspector" and .state == "done")] | last | .detail' "$REC")" ;;
+    pilot:BLOCKED*|lookout:BLOCKED*|marshal:BLOCK*) note "$d said $last: $(jq -r --arg d "$d" '[.stages[] | select(.duty == $d and .state == "done")] | last | .detail' "$REC")" ;;
+  esac
+done
+stage_patch human "$(jq -nc '{title:"Human review", duty:"human", state:"waiting", verdict:"WAITING", detail:"a person reads the pull request and merges it", url:"", cost:0, runs:[]}')"
+finish awaiting-review "The pull request $PR is open with no open findings on its current head. A person reads it and merges it; nothing here merges, approves or pushes to the trunk." 0
+}

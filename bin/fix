@@ -1,0 +1,522 @@
+#!/bin/bash
+# quarterdeck fix — take one item out of a panel's ruling and carry it through the
+# crew to a reviewed, verified pull request, by running the commands you would
+# have run yourself, in order.
+#
+# This is NOT a fifth abstraction and it is NOT a duty: it holds no prompt, makes
+# no model call of its own, and decides nothing. It is the harness typing:
+#
+#   quarterdeck run <p> foreman    --from <that one item> --apply     -> an issue
+#   quarterdeck run <p> panel      --panel dev --issue <n>            -> the crew's plan
+#   quarterdeck run <p> shipwright --issue <n> --plan <plan> --apply  -> a branch, a PR
+#   quarterdeck run <p> surveyor   --pr <n> --apply                   -> a code review
+#   quarterdeck run <p> inspector  --pr <n> --apply                   -> does it fix it?
+#
+# and stopping at the first step that refuses. A step that cannot run stops the
+# fix rather than being skipped: the reason to press the button is that the work
+# goes through the crew. Every gate each duty enforces still applies — forbidden
+# paths, local checks that must not regress, contracts that must parse, and an
+# issue someone else already has a pull request for is left alone.
+#
+#   quarterdeck fix harvest-pipeline --panel harvest-pipeline-design-1790122096 --item 3          # report only
+#   quarterdeck fix harvest-pipeline --panel harvest-pipeline-design-1790122096 --item 3 --apply
+#   quarterdeck fix harvest-pipeline --panel harvest-pipeline-design-1790122096 --item 12,13,22 --apply   # one batch, one PR
+#
+# A batch is several related items built on one branch as one pull request:
+# one issue, one plan, one review. Its tier is the hardest of its items.
+#
+#   quarterdeck fix harvest-pipeline --issue 247 --apply     # an issue that already exists
+#
+# An issue that is already filed — a card on the project board — is the same
+# pipeline from step 2, since there is nothing to file. The card follows the
+# work: In progress when it starts, In review when the pull request opens, and
+# back where it was if no pull request comes of it.
+set -uo pipefail
+# quarterdeck: read-whole-file
+# Everything below is one brace group, so bash reads this whole file before it
+# runs any of it. Without that, bash reads a script as it goes, and a script
+# edited while it runs resumes somewhere inside the new text: once, a fix opened
+# a pull request and then recorded itself as "taken". The group closes on the
+# last line of this file.
+{
+SELF="${BASH_SOURCE[0]}"
+while [ -L "$SELF" ]; do
+  d="$(cd "$(dirname "$SELF")" && pwd)"; SELF="$(readlink "$SELF")"
+  case "$SELF" in /*) ;; *) SELF="$d/$SELF" ;; esac
+done
+source "$(cd "$(dirname "$SELF")" && pwd)/lib.sh"
+
+PROJECT="${1:-}"; shift || true
+[ -n "$PROJECT" ] || die "usage: quarterdeck fix <project> --panel <id> --item <n> [--apply]"
+project_exists "$PROJECT" || die "unknown project '$PROJECT'"
+
+PANEL_ID="" ITEM="" ISSUE_ARG="" FROM="" APPLY=0 INSPECT=1
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --panel)     PANEL_ID="${2:-}"; shift ;;
+    --item)      ITEM="${2:-}"; shift ;;
+    --issue)     ISSUE_ARG="${2:-}"; shift ;;
+    --apply)     APPLY=1 ;;
+    --no-inspect) INSPECT=0 ;;
+    *) die "fix: unknown argument '$1'" ;;
+  esac
+  shift
+done
+if [ -n "$ISSUE_ARG" ]; then
+  [ -z "$PANEL_ID$ITEM" ] || die "fix: --issue stands alone; it takes no --panel or --item"
+  [[ "$ISSUE_ARG" =~ ^[0-9]+$ ]] || die "fix: --issue takes an issue number"
+  PANEL_ID=issue ITEM=$ISSUE_ARG
+else
+  [ -n "$PANEL_ID" ] && [ -n "$ITEM" ] || die "fix: --panel <id> --item <n>[,<n>...], or --issue <n>"
+  [[ "$ITEM" =~ ^[0-9]+(,[0-9]+)*$ ]] || die "fix: --item takes numbers, comma-separated"
+fi
+ITEMS=(${ITEM//,/ })
+# What the ledger and the working line call this fix. Also the identity every
+# lock below is scoped to: two fixes on the same project, on different issues,
+# now run side by side, each in its own worktree — only the same target still
+# serializes, and this is what makes it the same target.
+WHAT="item $ITEM of $PANEL_ID"; [ -n "$ISSUE_ARG" ] && WHAT="started from the board"
+KEY="${PANEL_ID}-${ITEM//,/-}"
+
+LOG_FILE="$QUARTERDECK_HOME/logs/fix-$PROJECT.log"
+if [ -z "$ISSUE_ARG" ]; then
+TX="$QUARTERDECK_HOME/state/panels/$PANEL_ID.json"
+[ -f "$TX" ] || die "fix: no panel called $PANEL_ID"
+
+items_json() { # the ruling items named by --item, each with its number as .n
+  jq -c --arg l "$ITEM" '[($l | split(",") | map(tonumber))[] as $i | .ruling[$i - 1] // empty | . + {n: $i}]' "$TX"
+}
+all=$(items_json)
+[ "$(jq length <<<"$all")" = "${#ITEMS[@]}" ] || die "fix: panel $PANEL_ID has no ruling item among $ITEM"
+
+# The chair labels every item with what it is and how hard it is. A ruling from
+# before it did falls back to the same defaults the panel now applies: on a
+# design or dev panel, a routine change; anywhere else, a decision.
+UNLABELLED=""
+if [ "$(jq '[.[] | select((.kind // "") == "" or (.tier // "") == "")] | length' <<<"$all")" != 0 ]; then
+  if [ "$APPLY" = 1 ]; then
+    # An unlabelled ruling: label the whole panel once, cheaply, then re-read.
+    # Only when applying — a report-only run spends nothing and changes nothing,
+    # so it shows the defaults below and says the item is not yet labelled.
+    say "  this ruling predates labels — labelling the panel (one small call)"
+    label_panel "$TX" && all=$(items_json)
+  else
+    UNLABELLED=" (not labelled yet — defaults shown; labelled when it runs)"
+  fi
+fi
+# The same rule panel.sh applies when it rules: findings and plans are changes.
+DEFKIND=decision; case "$(jq -r '.mode // ({design: "findings", dev: "plan"}[.discipline // ""]) // ""' "$TX")" in findings|plan) DEFKIND=change ;; esac
+all=$(jq -c --arg k "$DEFKIND" 'map(.kind = (.kind // $k) | .tier = (.tier // "routine"))' <<<"$all")
+
+# Only changes are built. In a batch, the rest are named and left out.
+for n in $(jq -r '.[] | select(.kind != "change") | .n' <<<"$all"); do
+  say "  item $n is labelled $(jq -r --argjson n "$n" '.[] | select(.n == $n) | .kind' <<<"$all"), not a change — left out"
+done
+build=$(jq -c 'map(select(.kind == "change"))' <<<"$all")
+if [ "$(jq length <<<"$build")" = 0 ]; then
+  KIND=$(jq -r '.[0].kind' <<<"$all")
+  say ""
+  say "quarterdeck: the panel labelled this a $KIND, not a change — there is nothing to build."
+  [ "$APPLY" = 1 ] && record_run "$PROJECT" fix "NOTHING-TO-BUILD" "item $ITEM of $PANEL_ID is a $KIND"
+  exit 0
+fi
+ITEMS=($(jq -r '.[].n' <<<"$build")); ITEM=$(IFS=,; echo "${ITEMS[*]}")
+KIND=change
+# The batch is as hard as its hardest item.
+TIER=$(jq -r 'map({mechanical:0, routine:1, intricate:2, hard:3}[.tier] // 1) | max
+              | ["mechanical","routine","intricate","hard"][.]' <<<"$build")
+BATCH=""; [ "${#ITEMS[@]}" -gt 1 ] && BATCH=1
+if [ -n "$BATCH" ]; then
+  area=$(jq -r 'map(.area) | unique | if length == 1 then .[0] else "related" end' <<<"$build")
+  title="$area: ${#ITEMS[@]} fixes (items $ITEM)"
+else
+  title=$(jq -r '.[0].title' <<<"$build")
+fi
+else
+# An issue that already exists: nothing to label, nothing to file. It is a
+# routine change unless QUARTERDECK_FIX_PLANNING=full says every fix gets the panel.
+ISSUE="$ISSUE_ARG"
+info=$(guard 60 "${QUARTERDECK_GH:-gh}" issue view "$ISSUE" -R "$(project_get "$PROJECT" repo)" \
+         --json title,state 2>>"$LOG_FILE") || die "fix: could not read issue #$ISSUE"
+[ "$(jq -r .state <<<"$info")" = OPEN ] || die "fix: #$ISSUE is not open"
+title=$(jq -r .title <<<"$info")
+KIND=change TIER=routine BATCH="" UNLABELLED=""
+build=$(jq -nc --argjson n "$ISSUE" --arg t "$title" '[{n: $n, title: $t}]')
+fi
+say "quarterdeck fix: $PROJECT — $title"
+PLANTIER=$TIER; [ "${QUARTERDECK_FIX_PLANNING:-tiered}" = full ] && [ "$TIER" != hard ] && PLANTIER=intricate
+[ -n "$ISSUE_ARG" ] && say "  issue #$ISSUE: already filed" || say "  labelled: $KIND, $TIER$UNLABELLED"
+# Every model call below is tagged with this, so the spend ledger can say what
+# one fix cost from filing to verdict.
+export QUARTERDECK_FIX_KEY="$PANEL_ID#$ITEM"
+tier_model() { # the model a tier builds with; "default" means the account's own
+  case "$1" in
+    mechanical) printf '%s' "${QUARTERDECK_TIER_MECHANICAL:-default}" ;;
+    routine)    printf '%s' "${QUARTERDECK_TIER_ROUTINE:-default}" ;;
+    intricate)  printf '%s' "${QUARTERDECK_TIER_INTRICATE:-default}" ;;
+    hard)       printf '%s' "${QUARTERDECK_TIER_HARD:-default}" ;;
+  esac
+}
+
+if [ -z "$ISSUE_ARG" ]; then
+# Step 0. The item becomes its own small document, because the foreman is the
+# one thing that files issues and it already knows how to skip what is filed.
+# One filing path, not two.
+DOC="$QUARTERDECK_HOME/workspace/${PROJECT}-fix-${PANEL_ID}-${ITEM//,/-}.md"
+section() { # the body of one ruling item
+  jq -r '"_" + .severity + " · " + .area + "_\n"' <<<"$1"
+  jq -r '.claim' <<<"$1"
+  echo
+  echo "**Where.** \`$(jq -r .where <<<"$1")\`"
+  echo
+  echo "**Why it matters.** $(jq -r .why <<<"$1")"
+  echo
+  echo "**Do this.** $(jq -r .action <<<"$1")"
+  jq -r 'if (.note // "") != "" then "\n> Ruling: " + .note else "" end' <<<"$1"
+}
+{
+  echo "# ${title}"
+  echo
+  if [ -n "$BATCH" ]; then
+    echo "These ${#ITEMS[@]} items are one batch: one branch, one pull request."
+    while read -r it; do
+      echo
+      echo "## Item $(jq -r .n <<<"$it"). $(jq -r .title <<<"$it")"
+      echo
+      section "$it"
+    done < <(jq -c '.[]' <<<"$build")
+  else
+    section "$(jq -c '.[0]' <<<"$build")"
+  fi
+  echo
+  echo "---"
+  echo
+  echo "_Item${BATCH:+s} ${ITEM} of the ruling of Quarterdeck panel \`${PANEL_ID}\`._"
+} > "$DOC"
+say "  item written to $(basename "$DOC")"
+
+if [ "$KIND" != change ]; then
+  say ""
+  say "quarterdeck: the panel labelled this a $KIND, not a change — there is nothing to build."
+  [ "$APPLY" = 1 ] && record_run "$PROJECT" fix "NOTHING-TO-BUILD" "item $ITEM of $PANEL_ID is a $KIND"
+  exit 0
+fi
+fi
+
+if [ "$APPLY" = 0 ]; then
+  say ""
+  if [ -n "$ISSUE_ARG" ]; then
+    say "quarterdeck: report only. With --apply this would take issue #$ISSUE through the crew:"
+    say "  1. move its card to In progress   (and back if no pull request comes of it)"
+  else
+    sed 's/^/  /' "$DOC" >&2
+    say ""
+    say "quarterdeck: report only. It is labelled $TIER; with --apply this would take it through the crew:"
+    if [ -n "$BATCH" ]; then say "  1. file the batch as one issue   (foreman)"; else say "  1. file it as an issue           (foreman)"; fi
+  fi
+  case "$PLANTIER" in
+    mechanical) say "  2. no developer panel            (mechanical: the panel that raised it already said what to do)" ;;
+    routine)    say "  2. a light developer panel       (one round, $(tier_model routine))" ;;
+    *)          say "  2. argue how to fix it           (the full dev panel: shipwright, naval-architect, inspector)" ;;
+  esac
+  say "  3. build that on a branch        (shipwright on $(tier_model "$TIER"), refusing any local check that regresses)"
+  say "  4. review the pull request       (surveyor)"
+  say "  5. check it fixes the issue      (inspector)"
+  record_run "$PROJECT" fix "DRY-RUN" "$WHAT — $title"
+  exit 0
+fi
+
+# ---- one pipeline per target, and it says so -----------------------------------
+# The duties inside this pipeline each take their own lock, scoped to this same
+# key, and a held lock makes them exit 0 without a word. So a second pipeline on
+# the SAME item running beside the first would read "the shipwright is busy" as
+# "the shipwright succeeded" and then go looking for a pull request that is not
+# its own. One pipeline per item, refused loudly, is the fix — a different item
+# on the same project is a different key throughout, and runs alongside it.
+FLOCK="$QUARTERDECK_HOME/state/fix-$PROJECT-$KEY.lock"
+if [ -d "$FLOCK" ] && holder=$(cat "$FLOCK/pid" 2>/dev/null) && kill -0 "$holder" 2>/dev/null; then
+  die "a fix is already running on $PROJECT for $WHAT: $(cat "$FLOCK/what" 2>/dev/null)"
+fi
+acquire_lock "fix-$PROJECT-$KEY"
+
+# Only rows this run wrote are ours. Taking "the last PR in the ledger" is how
+# a pipeline ends up claiming someone else's pull request. Every duty started
+# below inherits this tag (acquire_lock stamps it on that duty's own lock too),
+# and record_run writes it on each row — which is also how the dashboard can
+# tell a fix's own card and its current step's agent card are the same
+# operation, whichever duty that step happens to be.
+export QUARTERDECK_FIX_RUN="$PANEL_ID#$ITEM@$(date +%s).$$"
+
+# ---- per-item state, so the button can say what is happening -----------------
+# One file per item rather than one shared file: two projects can run fixes at
+# once, and a shared file would be a race. The dashboard reads these the way it
+# reads panel transcripts, and cross-checks "running" against the live lock.
+FIXDIR="$QUARTERDECK_HOME/state/fixes"; mkdir -p "$FIXDIR"
+# A batch keeps one file per member, so each item's button says what its
+# batch is doing; they are written together.
+FXS=(); for n in "${ITEMS[@]}"; do FXS+=("$FIXDIR/${PANEL_ID}-${n}.json"); done
+FX="${FXS[0]}"
+for n in "${ITEMS[@]}"; do
+  jq -n --arg p "$PROJECT" --arg pan "$PANEL_ID" --argjson i "$n" \
+        --arg t "$(jq -r --argjson n "$n" '.[] | select(.n == $n) | .title' <<<"$build")" \
+        --arg at "$(date -u +%FT%TZ)" --arg k "$KIND" --arg tier "$TIER" \
+        --arg lk "fix-$PROJECT-$KEY" --arg fr "$QUARTERDECK_FIX_RUN" \
+        --argjson b "$(jq -c 'map(.n)' <<<"$build")" \
+    '{project:$p, panel:$pan, item:$i, title:$t, kind:$k, tier:$tier, batch:(if ($b | length) > 1 then $b else null end),
+      status:"running", step:"filing", lock:$lk, fixrun:$fr,
+      started:$at, finished:null, issue:null, pr:null, verdict:null, detail:""}' > "$FIXDIR/${PANEL_ID}-${n}.json"
+done
+fx() { local t f; for f in "${FXS[@]}"; do t=$(mktemp); jq "$@" "$f" > "$t" && mv "$t" "$f"; done; }
+step() { fx --arg s "$1" '.step = $s'; working_on "$WHAT · $1 — $title"; }
+finish() { # finish <status> <detail>
+  fx --arg s "$1" --arg d "$2" --arg at "$(date -u +%FT%TZ)" \
+     '.status = $s | .detail = $d | .finished = $at | .step = null'
+}
+# The card follows the work, on a board that has one. Never fatal: a card in the
+# wrong column is not worth a fix, and board.py says why on stderr.
+BOARD_NUM=$(project_get "$PROJECT" board.number); BOARD_OWNER=$(project_get "$PROJECT" board.owner)
+board_move() { # board_move <meaning | column name> — prints the column the card left
+  [ -n "$ISSUE_ARG" ] && [ -n "$BOARD_NUM" ] || return 0
+  guard 60 python3 "$QUARTERDECK_DIR/bin/board.py" to "$BOARD_OWNER" "$BOARD_NUM" "$ISSUE" "$1" \
+    "$(project_get "$PROJECT" board.status)" 2>>"$LOG_FILE" || log "$PROJECT: could not move #$ISSUE to $1"
+}
+# If anything kills this before it reaches a verdict, the item must not sit at
+# "running" forever. acquire_lock set a trap to drop the lock; keep that, and
+# mark the item failed first. A card whose fix came to no pull request goes back
+# where it was: "In progress" with nobody on it is the stall the harbourmaster
+# exists to catch.
+trap 'st=$(jq -r .status "$FX" 2>/dev/null)
+      if [ "$st" = running ]; then
+        finish failed "stopped before it finished — see logs/fix-'"$PROJECT"'.log"; fi
+      [ "$st" != pr ] && [ -n "$FROM" ] && board_move "$FROM" >/dev/null
+      rm -rf "$FLOCK"' EXIT
+
+ours() { jq -c --arg f "$QUARTERDECK_FIX_RUN" --arg d "$1" \
+           'map(select(.fixrun == $f and .duty == $d)) | last // empty' "$RUNS_LEDGER"; }
+# busy <full lock name> — each duty's lock is now scoped to its own target
+# (an issue, a PR, a doc), not just the project, so the caller names exactly
+# which one it is about to take rather than busy() assuming "-$PROJECT".
+busy() { local l="$QUARTERDECK_HOME/state/$1.lock" pid
+         [ -d "$l" ] && pid=$(cat "$l/pid" 2>/dev/null) && kill -0 "$pid" 2>/dev/null; }
+
+# ---- 1. file it ---------------------------------------------------------------
+if [ -n "$ISSUE_ARG" ]; then
+  # Already an issue. Take the card, and say which issue this record is about.
+  FROM=$(board_move doing)
+  fx --argjson n "$ISSUE" '.issue = $n'
+else
+say ""
+say "── 1/5 filing ──"
+step filing
+busy "foreman-$PROJECT-$(basename "$DOC")" && { finish blocked "the foreman is already busy on this item"; die "the foreman is busy on this item — try again when it finishes"; }
+QUARTERDECK_PROJECT="$PROJECT" QUARTERDECK_WORKDIR="$(project_path "$PROJECT")" \
+  bash "$QUARTERDECK_DIR/duties/foreman.sh" --from "$DOC" ${BATCH:+--one} --apply >&2 \
+  || { finish failed "the foreman could not file it"; record_run "$PROJECT" fix ERROR "filing failed for item $ITEM"; exit 1; }
+
+# A retry finds the issue the first attempt filed, which is the right thing to
+# build; a first run that the foreman declined finds nothing.
+ISSUE=$(jq -r --arg d "$(basename "$DOC")" \
+  '[.[] | select(.document == $d) | .issues[]] | last | .number // empty' \
+  "$QUARTERDECK_HOME/state/filed.json" 2>/dev/null)
+if [ -z "$ISSUE" ]; then
+  say ""
+  say "quarterdeck: the foreman filed nothing — either this is already an issue, or it"
+  say "  is not a change to make (a decision, an invariant, a deferral)."
+  say "  Its reasoning is in logs/foreman-$PROJECT.log"
+  finish nothing "the foreman judged this not a change to make, or already filed"
+  record_run "$PROJECT" fix "NOTHING-TO-BUILD" "item $ITEM of $PANEL_ID was not filed"
+  exit 0
+fi
+fx --argjson n "$ISSUE" '.issue = $n'
+say "  filed as #$ISSUE"
+fi
+
+# ---- 4 and 5, shared -----------------------------------------------------------
+# Reached from a pull request this pipeline just opened, and from one Quarterdeck
+# opened on an earlier click that never got reviewed — either way the crew reads
+# it before this item counts as done.
+review_and_verify() { # needs PR, PRNUM, ISSUE
+  # A hard-to-reverse change is read by Opus at xhigh; anything else by the
+  # reviewer's and inspector's own defaults.
+  if [ "${TIER:-}" = hard ]; then
+    export QUARTERDECK_MODEL_OVERRIDE="$(tier_model hard)" QUARTERDECK_EFFORT_OVERRIDE=xhigh
+  else
+    unset QUARTERDECK_MODEL_OVERRIDE QUARTERDECK_EFFORT_OVERRIDE
+  fi
+  # ---- 4. review it -------------------------------------------------------------
+  # Someone other than the builder reads the diff. It posts its findings on the
+  # pull request, which is where a person deciding whether to merge will look.
+  if project_has_duty "$PROJECT" surveyor; then
+    say ""
+    say "── 4/5 reviewing ──"
+    step reviewing
+    if busy "surveyor-$PROJECT-$PRNUM"; then
+      say "  the surveyor is already on #$PRNUM — review it later"
+      fx '.review = "skipped: surveyor busy"'
+    else
+      QUARTERDECK_PROJECT="$PROJECT" QUARTERDECK_WORKDIR="$(project_path "$PROJECT")" \
+        bash "$QUARTERDECK_DIR/duties/surveyor.sh" --pr "$PRNUM" --apply >&2 || true
+      r=$(jq -r 'if . == null then "no review recorded" else "\(.verdict) \(.detail)" end' <<<"$(ours surveyor)")
+      fx --arg r "$r" '.review = $r'
+      say "  review: $r"
+    fi
+  fi
+
+  # ---- 5. verify it -------------------------------------------------------------
+  # And something that neither planned nor built it asks whether it fixes what the
+  # issue says. A pull request that type-checks is not a pull request that works.
+  if [ "$INSPECT" = 1 ] && project_has_duty "$PROJECT" inspector; then
+    say ""
+    say "── 5/5 verifying ──"
+    step verifying
+    if busy "inspector-$PROJECT-$PRNUM"; then
+      say "  the inspector is already on #$PRNUM — inspect it later"
+      fx '.verdict = "skipped: inspector busy"'
+    else
+      QUARTERDECK_PROJECT="$PROJECT" QUARTERDECK_WORKDIR="$(project_path "$PROJECT")" \
+        bash "$QUARTERDECK_DIR/duties/inspector.sh" --pr "$PRNUM" --issue "$ISSUE" --apply >&2 || true
+      v=$(jq -r '.verdict // empty' <<<"$(ours inspector)")
+      [ -n "$v" ] && fx --arg v "$v" '.verdict = $v'
+    fi
+  fi
+}
+
+# A pull request that closes this issue may be one Quarterdeck itself opened for it
+# before. That is not "someone else has it" — it is this item's pull request.
+ours_pr() { # ours_pr "#261 (branch), #270 (branch)" -> url of the first Quarterdeck opened
+  local n
+  for n in $(grep -oE '#[0-9]+' <<<"$1" | tr -d '#'); do
+    jq -r --arg n "$n" --arg p "$PROJECT" \
+      '[.[] | select(.project == $p and .duty == "shipwright" and .verdict == "PR"
+                     and (.url | endswith("/pull/" + $n)))] | last | .url // empty' "$RUNS_LEDGER"
+  done | grep -m1 . || true
+}
+adopt() { # adopt <url> — carry on from a pull request that already exists
+  PR="$1"; PRNUM="${PR##*/}"
+  fx --arg u "$PR" '.pr = $u'
+  say ""; say "quarterdeck: #$ISSUE already has $PR, which Quarterdeck opened — reviewing it rather than opening another."
+  review_and_verify
+  say ""; say "quarterdeck: #$ISSUE → $PR"
+  board_move review >/dev/null
+  finish pr "#$ISSUE → $PR"
+  record_run "$PROJECT" fix "PR" "$WHAT — #$ISSUE (existing)" "$PR"
+  exit 0
+}
+
+# ---- is anyone already on it? -----------------------------------------------
+# Checked before planning, not only before building: planning is seven model
+# calls, and spending them on an issue someone else is already fixing is the
+# most expensive way to find that out. The shipwright checks again anyway.
+TAKEN=$(guard 60 "${QUARTERDECK_GH:-gh}" pr list -R "$(project_get "$PROJECT" repo)" --state open --limit 100 \
+          --json number,headRefName,closingIssuesReferences \
+          --jq "[.[] | select(any(.closingIssuesReferences[]?; .number == $ISSUE))
+                 | \"#\\(.number) (\\(.headRefName))\"] | join(\", \")" 2>>"$LOG_FILE" || true)
+if [ -n "$TAKEN" ]; then
+  mine=$(ours_pr "$TAKEN"); [ -n "$mine" ] && adopt "$mine"
+  why="#$ISSUE already has $TAKEN"
+  say ""; say "quarterdeck: $why — someone is already on it, so this stops here."
+  finish taken "$why"
+  record_run "$PROJECT" fix "TAKEN" "$WHAT — $why"
+  exit 0
+fi
+
+# ---- 2. plan it ---------------------------------------------------------------
+# The developers argue the approach before anyone writes code: the shipwright
+# for the smallest change, the naval-architect for the right seam, the
+# inspector for how anyone will know it worked. The builder then implements the
+# ruling rather than deciding alone. If the panel cannot sit, the fix stops —
+# the point of pressing this button is that it goes through the crew, so it
+# does not quietly skip the part where they disagree.
+say ""
+say "── 2/5 planning ──"
+step planning
+# How much planning an item gets follows how hard it is. A mechanical change —
+# a string, a value — was already decided by the panel that raised it, and
+# convening three developers to argue about it is the most expensive way to
+# change a label. A routine one gets a light panel; intricate and hard ones get
+# the whole argument.
+if [ "$PLANTIER" = mechanical ]; then
+  PLAN="$DOC"
+  fx '.plan = "the ruling item itself — mechanical, no developer panel"'
+  say "  mechanical: building straight from the ruling item, no developer panel"
+else
+busy "panel-$PROJECT-$ISSUE" && { finish blocked "another panel is already planning #$ISSUE"; die "a panel is already planning #$ISSUE — try again once it rules"; }
+plan_args=(--panel dev --issue "$ISSUE"); plan_env=()
+case "$PLANTIER" in
+  routine) plan_args+=(--rounds 1); plan_env=(QUARTERDECK_MODEL_OVERRIDE="$(tier_model routine)") ;;
+  hard)    plan_env=(QUARTERDECK_MODEL_OVERRIDE="$(tier_model hard)" QUARTERDECK_EFFORT_OVERRIDE=xhigh) ;;
+esac
+env ${plan_env[@]+"${plan_env[@]}"} QUARTERDECK_PROJECT="$PROJECT" QUARTERDECK_WORKDIR="$(project_path "$PROJECT")" \
+  bash "$QUARTERDECK_DIR/duties/panel.sh" "${plan_args[@]}" >&2 || true
+row=$(ours panel)
+pv=$(jq -r '.verdict // empty' <<<"${row:-null}")
+kept=$(jq -r '.detail // ""' <<<"${row:-null}" | sed -nE 's/^dev: ([0-9]+) of .*/\1/p')
+PLAN="$QUARTERDECK_HOME/workspace/${PROJECT}-plan-${ISSUE}.md"
+case "$pv" in
+  RULED)
+    if [ "${kept:-0}" = 0 ]; then
+      finish nothing "the dev panel ruled there is nothing to change for #$ISSUE"
+      record_run "$PROJECT" fix "NOTHING-TO-BUILD" "#$ISSUE — the dev panel ruled nothing to change"
+      exit 0
+    fi
+    [ -f "$PLAN" ] || { finish blocked "the dev panel ruled but wrote no plan"; exit 1; }
+    fx --arg p "$(basename "$PLAN")" '.plan = $p'
+    say "  planned: $kept step(s) in $(basename "$PLAN")"
+    ;;
+  CLEAN)
+    finish nothing "the dev panel found nothing to change for #$ISSUE"
+    record_run "$PROJECT" fix "NOTHING-TO-BUILD" "#$ISSUE — the dev panel found nothing to change"
+    exit 0 ;;
+  *)
+    why=$(jq -r 'if . == null then "the dev panel did not reach a ruling (usage limit, or it was stopped)"
+                 else "\(.verdict) — \(.detail)" end' <<<"${row:-null}")
+    finish blocked "#$ISSUE filed, not planned — $why"
+    record_run "$PROJECT" fix "BLOCKED" "#$ISSUE filed, not planned — $why"
+    exit 0 ;;
+esac
+fi
+
+# ---- 3. build it --------------------------------------------------------------
+say ""
+say "── 3/5 building ──"
+step building
+busy "shipwright-$PROJECT-$ISSUE" && { finish blocked "the shipwright is already building #$ISSUE"; die "the shipwright is already building #$ISSUE"; }
+build_effort=""; [ "$TIER" = hard ] && build_effort=xhigh
+QUARTERDECK_MODEL_OVERRIDE="$(tier_model "$TIER")" QUARTERDECK_EFFORT_OVERRIDE="$build_effort" \
+QUARTERDECK_PROJECT="$PROJECT" QUARTERDECK_WORKDIR="$(project_path "$PROJECT")" \
+  bash "$QUARTERDECK_DIR/duties/shipwright.sh" --issue "$ISSUE" --plan "$PLAN" --apply >&2 || true
+
+row=$(ours shipwright)
+PR=$(jq -r '.url // empty' <<<"${row:-null}")
+if [ -z "$PR" ] && [ "$(jq -r '.verdict // empty' <<<"${row:-null}")" = TAKEN ]; then
+  why=$(jq -r '.detail' <<<"$row")
+  mine=$(ours_pr "$why"); [ -n "$mine" ] && adopt "$mine"
+  say ""; say "quarterdeck: $why — someone got there while it was planning."
+  finish taken "$why"
+  record_run "$PROJECT" fix "TAKEN" "$WHAT — $why"
+  exit 0
+fi
+if [ -z "$PR" ]; then
+  why=$(jq -r 'if . == null then "the shipwright recorded nothing"
+               else "\(.verdict) — \(.detail)" end' <<<"${row:-null}")
+  say ""
+  say "quarterdeck: no pull request for #$ISSUE — $why"
+  say "  The issue is filed and the plan is written, so nothing is lost."
+  finish blocked "$why"
+  record_run "$PROJECT" fix "BLOCKED" "#$ISSUE filed, not built — $why"
+  exit 0
+fi
+PRNUM="${PR##*/}"
+fx --arg u "$PR" '.pr = $u'
+say "  $PR"
+
+review_and_verify
+
+say ""
+say "quarterdeck: #$ISSUE → $PR"
+board_move review >/dev/null
+finish pr "#$ISSUE → $PR"
+record_run "$PROJECT" fix "PR" "$WHAT — #$ISSUE" "$PR"
+
+exit
+}

@@ -1,0 +1,57 @@
+{
+  "id": "x",
+  "label": "X",
+  "what": "Recent mentions of you and how your latest posts did.",
+  "module": "x",
+  "snapshots": [
+    "x"
+  ],
+  "minutes": 60,
+  "credentials": [
+    {
+      "key": "X_BEARER_TOKEN",
+      "label": "Bearer token",
+      "secret": true,
+      "help": "The app's bearer token from the X developer portal. It is read only here.",
+      "looks": "A very long string that often starts with many capital A letters"
+    },
+    {
+      "key": "X_USER_ID",
+      "label": "Your numeric user id",
+      "secret": false,
+      "help": "The number for your account, not your @name.",
+      "looks": "Digits only"
+    }
+  ],
+  "reads": [
+    "Your latest posts with their counts: impressions, likes, replies, reposts and quotes.",
+    "Recent posts that mention you."
+  ],
+  "not_reads": [
+    "Direct messages.",
+    "Anyone else's account."
+  ],
+  "scopes": [
+    "Read access only. Quarterdeck never posts, likes, follows or deletes."
+  ],
+  "steps": [
+    "Open the X developer portal and sign in with your account.",
+    "Check which access plan you have and what it costs. X's access tiers and prices change and may cost money, so read their current page first.",
+    "Create a project and an app, and generate a bearer token for it.",
+    "Find your numeric user id. The portal or a lookup in the API shows it. It is digits, not your @name.",
+    "Enter the bearer token and the user id here and save each one. Then switch X on.",
+    "If X answers that your plan does not include this, the page says so. Nothing else is tried."
+  ],
+  "revoke": "In the X developer portal regenerate or delete the bearer token, or delete the app. Then remove the fields here.",
+  "tested": "Parsing tested against sample data only. X's plans and endpoint access change. Not tested against the real service.",
+  "links": [
+    {
+      "label": "X API introduction (X)",
+      "url": "https://docs.x.com/x-api/introduction"
+    },
+    {
+      "label": "Mentions endpoint (X)",
+      "url": "https://docs.x.com/x-api/users/get-mentions"
+    }
+  ]
+}

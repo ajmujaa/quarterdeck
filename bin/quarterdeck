@@ -1,0 +1,431 @@
+#!/bin/bash
+# quarterdeck — control CLI for the personal agent fleet.
+set -uo pipefail
+# Follow symlinks to the real script before looking for lib.sh beside it.
+# `quarterdeck` is meant to be linked onto PATH, and dirname of the LINK points at
+# wherever the link lives — which is how "symlink it somewhere on PATH", the
+# advice in the README, produced "lib.sh: No such file or directory".
+SELF="${BASH_SOURCE[0]}"
+while [ -L "$SELF" ]; do
+  d="$(cd "$(dirname "$SELF")" && pwd)"
+  SELF="$(readlink "$SELF")"
+  case "$SELF" in /*) ;; *) SELF="$d/$SELF" ;; esac
+done
+SELF="$(cd "$(dirname "$SELF")" && pwd)"
+source "$SELF/lib.sh"
+
+usage() {
+  cat <<'EOF'
+Usage: quarterdeck <command>
+
+  status                      what is registered, what has run, what is pending
+  doctor                      check the wiring: claude, gh, jq, repos, config
+  check                       run every test and ask the dashboard if it is healthy: green or red
+  home [init [path]]          show where your data lives (apart from the program); init makes ~/.quarterdeck
+  home migrate [--apply]      copy your data from the program folder to ~/.quarterdeck, verified; dry run unless --apply
+  home rollback               switch back to the program folder (nothing is deleted)
+  projects                    list registered projects and their duties
+  duties                      list available duties
+  crew                        list the crew and which panel each sits on
+  add [name]                  register a project (infers repo and path from the
+                              current git checkout when run inside one)
+  remove <name>               unregister a project
+  run <project> <duty> [...]  run one duty once. Reports only unless --apply.
+  fix <project> --panel <id> --item <n>
+                              carry one item of a panel's ruling to a pull
+                              request: file it, build it, inspect it. Runs the
+                              same duties you would run by hand, stopping at the
+                              first one that refuses.
+  cycle <project> --issue <n> [--apply]
+                              the whole cycle on one issue, then stop for a person: purser, dev panel, shipwright,
+                              assayer, the reviewers side by side, the caulker (at most 3 cycles). Needs "cycle": true in
+                              the project's entry. Report only without --apply. --resume <id> goes on after a stop;
+                              --status [<id>] shows the stages and their cost.
+  plan approve <project> <id> approve a sprint plan the planner wrote (run: quarterdeck run <p> planner --apply)
+  plan apply <project> <id> [--apply]
+                              list, or with --apply make, the approved plan's card moves (Backlog to Ready)
+  plan list <project>         the plans on record and their status
+  brief --idea "..." [--for "..."] [--apply]
+                              the draughtsman: turn an idea (or, with  run <p> brief --issue N,  an issue) into a one-page
+                              design brief in plain words. Report only without --apply. Builds nothing.
+  brief approve <id> | changes <id> "note" | list     answer a brief; brief --revise <id> writes the next version
+  mockup <brief-id> [--apply] the modelmaker: static pages, one per screen, from an APPROVED brief; checked by the harness
+  mockup approve <brief-id> | changes <brief-id> "note"     answer a set of mock-ups
+  dashboard [stop]            start and open the live dashboard (loopback only)
+  logs [name] [-f]            tail a log
+  runs [n]                    last n entries of the run ledger
+
+Flags for run:
+  --apply           actually perform the writes (default is report-only)
+  --pr <number>     limit a review duty to one pull request
+  --issue <number>  the issue a duty should work from
+  --diff <base>     the infra duty: the checked-out HEAD against a base branch (files only; nothing runs against a cloud)
+  --plan <file>     a dev panel's ruling for the shipwright to implement
+  --from <file>     a document for the foreman to file
+
+Flags for the panel duty:
+  --panel <name>    which panel sits: design | dev | spec | qa
+  --target <path>   limit a design panel to part of the interface
+  --issue <number>  the issue a dev panel should plan
+  --idea "..."      the rough note a spec panel should turn into a spec
+  --from <file>     read that note from a file instead
+  --seats a,b       override the roster for one run
+  --brief "..."     what prompted this review, for any panel
+  --rounds <n>      1 = every seat alone, 2 = they read each other (default)
+  --resume <id>     rule a panel that argued but never ruled; only the chair runs
+
+Flags for add:
+  --repo <owner/name>   override the inferred GitHub repo
+  --path <dir>          override the inferred checkout path
+  --duties a,b          duties to enable (default: review)
+
+quarterdeck new <name> [--in DIR] [--about "..."]
+                        start something new: a folder with git and a README, nothing registered
+  quarterdeck attach <dir> [--name N] [--apply]
+                        scan a folder and propose the crew set-up; --apply registers it
+
+Onboarding any project is two commands:
+  cd ~/Projects/Whatever && quarterdeck add
+  quarterdeck run whatever review
+
+Examples:
+  quarterdeck doctor
+  quarterdeck add --duties review,triage
+  quarterdeck run harvest-pipeline surveyor --pr 168
+  quarterdeck run harvest-pipeline surveyor --pr 168 --apply
+  quarterdeck run harvest-pipeline panel --panel design --target src/screens
+  quarterdeck run harvest-pipeline panel --panel dev --issue 204
+  quarterdeck run harvest-pipeline shipwright --issue 204 --plan workspace/harvest-pipeline-plan-204.md
+  quarterdeck run harvest-pipeline inspector --pr 218 --apply
+EOF
+}
+
+cmd="${1:-status}"; shift || true
+
+case "$cmd" in
+  status)
+    echo "── Quarterdeck ──"
+    echo
+    printf '  %-12s %-28s %s\n' PROJECT REPO DUTIES
+    while read -r p; do
+      printf '  %-12s %-28s %s\n' "$p" "$(project_get "$p" repo)" \
+        "$(jq -r --arg p "$p" '(.[$p].duties // []) | join(", ")' "$PROJECTS_FILE")"
+    done < <(project_names)
+    echo
+    echo "  duties available: $(duty_names | tr '\n' ' ')"
+    echo "  claude:           ${CLAUDE_BIN:-NOT FOUND}"
+    echo "  writes:           $([ "${QUARTERDECK_DRY_RUN:-1}" = 1 ] && echo 'report-only (pass --apply to write)' || echo 'ENABLED by config')"
+    echo
+    local_n=$(jq 'length' "$RUNS_LEDGER" 2>/dev/null || echo 0)
+    echo "  runs on record:   $local_n"
+    if [ "$local_n" -gt 0 ]; then
+      echo
+      echo "  recent:"
+      jq -r '.[-5:] | reverse[] | "    \(.at[0:16])  \(.project)/\(.duty)  \(.verdict)\(if .detail != "" then "  — " + .detail else "" end)"' "$RUNS_LEDGER"
+    fi
+    ;;
+
+  doctor)
+    fail=0
+    chk() { # chk <label> <ok?> <detail>
+      if [ "$2" = ok ]; then printf '  \033[32m✓\033[0m %-22s %s\n' "$1" "$3"
+      else printf '  \033[31m✗\033[0m %-22s %s\n' "$1" "$3"; fail=1; fi
+    }
+    echo "── Quarterdeck doctor ──"
+    echo
+    [ -n "$CLAUDE_BIN" ] && chk "claude" ok "$CLAUDE_BIN" || chk "claude" no "not on PATH"
+    command -v jq >/dev/null && chk "jq" ok "$(command -v jq)" || chk "jq" no "missing"
+    command -v gh >/dev/null && chk "gh" ok "$(command -v gh)" || chk "gh" no "missing"
+    if gh auth status >/dev/null 2>&1; then
+      chk "gh auth" ok "$(gh api user --jq .login 2>/dev/null || echo 'authenticated')"
+    else
+      chk "gh auth" no "not logged in — run: gh auth login"
+    fi
+    jq -e . "$PROJECTS_FILE" >/dev/null 2>&1 \
+      && chk "projects.json" ok "$(project_names | wc -l | tr -d ' ') project(s)" \
+      || chk "projects.json" no "does not parse"
+    echo
+    while read -r p; do
+      d=$(project_path "$p")
+      if [ -d "$d/.git" ]; then
+        chk "repo: $p" ok "$d"
+      elif [ -d "$d" ]; then
+        chk "repo: $p" no "$d exists but is not a git checkout"
+      else
+        chk "repo: $p" no "$d not found"
+      fi
+      for duty in $(jq -r --arg p "$p" '(.[$p].duties // [])[]' "$PROJECTS_FILE"); do
+        duty_exists "$duty" || chk "  duty: $p/$duty" no "duties/$duty.sh not implemented yet"
+      done
+    done < <(project_names)
+    echo
+    # The wiring above is files and binaries. This is the logic that decides
+    # when something runs unattended and what a loopback POST may start.
+    for st_file in selftest.py selftest.sh selftest-fix.sh selftest-panel.sh selftest-harbourmaster.sh selftest-purser.sh selftest-planner.sh selftest-untrusted.sh selftest-pilot.sh selftest-portable.sh selftest-lookout.sh selftest-marshal.sh selftest-caulker.sh selftest-assayer.sh selftest-logkeeper.sh selftest-quartermaster.sh selftest-bosun.sh selftest-packs.sh selftest-cycle.sh selftest-infra.sh selftest-brief.sh selftest-mockup.sh; do
+      [ -f "$QUARTERDECK_DIR/bin/$st_file" ] || continue
+      case "$st_file" in
+        # the tests build their own throwaway folders: they must not inherit this installation's data folder, which would take precedence
+        *.py) st=$(env -u QUARTERDECK_HOME -u QUARTERDECK_HOME_WHY python3 "$QUARTERDECK_DIR/bin/$st_file" 2>&1) ;;
+        *.sh) st=$(env -u QUARTERDECK_HOME -u QUARTERDECK_HOME_WHY bash "$QUARTERDECK_DIR/bin/$st_file" 2>&1) ;;
+      esac
+      strc=$?
+      case "$st_file" in
+        selftest.py)     label="self-check (logic)" ;;
+        selftest.sh)     label="self-check (commit gate)" ;;
+        selftest-fix.sh) label="self-check (fix pipeline)" ;;
+        selftest-panel.sh) label="self-check (panel prompts)" ;;
+        selftest-harbourmaster.sh) label="self-check (board notes stay local)" ;;
+        selftest-portable.sh) label="self-check (scripts run on macOS bash 3.2 and BSD tools)" ;;
+        selftest-purser.sh) label="self-check (requirements reach the issue body only)" ;;
+        selftest-planner.sh) label="self-check (the planner: validated plans, measured cost only, no card moves before approval)" ;;
+        selftest-packs.sh) label="self-check (stack notes reach prompts from listed packs only)" ;;
+        selftest-untrusted.sh) label="self-check (third-party text reaches prompts only as data)" ;;
+        selftest-pilot.sh) label="self-check (the pilot: the harness drives the browser)" ;;
+        selftest-lookout.sh) label="self-check (the lookout: only pictures the harness took)" ;;
+        selftest-marshal.sh) label="self-check (the marshal: forbidden paths block before any model)" ;;
+        selftest-caulker.sh) label="self-check (the caulker: only what was found, only the PR's own branch, three cycles)" ;;
+        selftest-assayer.sh) label="self-check (the assayer: tests that fail first, written without the builder's code)" ;;
+        selftest-logkeeper.sh) label="self-check (the logkeeper: records, and what a review is shown)" ;;
+        selftest-quartermaster.sh) label="self-check (the quartermaster: facts by the harness, notes are data)" ;;
+        selftest-bosun.sh) label="self-check (the bosun: the harness finds, nothing is written to a repo)" ;;
+        selftest-infra.sh) label="self-check (the infra duty: files only, no cloud tool, no credential, report-only writes nothing)" ;;
+        selftest-brief.sh) label="self-check (the brief: plain words, bounded, no code, written only to the data folder)" ;;
+        selftest-mockup.sh) label="self-check (the mock-ups: only an approved brief, pages parsed against an allowlist, nothing that runs or loads)" ;;
+        selftest-cycle.sh) label="self-check (the cycle: stage order, caps, resume, report-only writes nothing)" ;;
+      esac
+      if [ "$strc" = 0 ]; then
+        chk "$label" ok "$(grep -c '^  ok' <<<"$st") check(s) passed"
+      else
+        chk "$label" no "$(grep -c 'FAIL\|ERROR' <<<"$st") failed"
+        grep 'FAIL\|ERROR' <<<"$st" | sed 's/^ */      /'
+      fi
+    done
+    echo
+    [ "$fail" = 0 ] && echo "  all good." || echo "  some checks failed — see above."
+    exit "$fail"
+    ;;
+
+  check)
+    exec python3 "$QUARTERDECK_DIR/bin/check.py" "$@"
+    ;;
+
+  home)
+    case "${1:-}" in
+      init) exec python3 "$QUARTERDECK_DIR/bin/home.py" init "${2:-$HOME/.quarterdeck}" ;;
+      migrate|rollback) sub="$1"; shift; exec python3 "$QUARTERDECK_DIR/bin/home.py" "$sub" "$@" ;;
+    esac
+    echo "  the program    $QUARTERDECK_DIR"
+    echo "  your data      $QUARTERDECK_HOME"
+    echo "  why            $QUARTERDECK_HOME_WHY"
+    for d in config state logs workspace; do
+      printf '  %-14s %s\n' "$d/" "$([ -d "$QUARTERDECK_HOME/$d" ] && echo "$(ls "$QUARTERDECK_HOME/$d" 2>/dev/null | wc -l | tr -d ' ') item(s)" || echo "not there yet")"
+    done
+    if [ "$QUARTERDECK_HOME" = "$QUARTERDECK_DIR" ]; then
+      echo; echo "  your data still sits inside the program folder. 'quarterdeck home init' makes ~/.quarterdeck; moving what you have there is a separate, checked step."
+    fi
+    ;;
+
+  crew)
+    printf '  %-16s %-10s %-30s %s\n' MEMBER PANEL SEAT "ARGUES FOR"
+    for c in $(crew_names); do
+      printf '  %-16s %-10s %-30s %s\n' "$c" "$(crew_meta "$c" discipline)" \
+        "$(crew_meta "$c" seat)" "$(crew_meta "$c" bias)"
+    done
+    echo
+    # Derived from the crew files, never a list kept here: adding a discipline
+    # is a line of frontmatter, and a hardcoded list would quietly hide it.
+    for d in $(for c in $(crew_names); do crew_meta "$c" discipline | tr ',' '\n'; done | tr -d ' ' | sort -u); do
+      seats=$(crew_by_discipline "$d" | tr '\n' ' ')
+      n=$(wc -w <<<"$seats" | tr -d ' ')
+      [ "$n" -ge 2 ] && printf '  %-9s panel: %s\n' "$d" "$seats" \
+                     || printf '  %-9s %s (no panel: needs two seats)\n' "$d" "$seats"
+    done
+    ;;
+
+  projects)
+    if [ "$(jq 'length' "$PROJECTS_FILE" 2>/dev/null || echo 0)" = 0 ]; then
+      echo "  no projects yet. Run 'quarterdeck add' inside a repository, or copy config/projects.example.json to $QUARTERDECK_HOME/config/projects.json and edit it."
+    else
+      jq -r 'to_entries[] | "\(.key)\t\(.value.repo)\t\(.value.summary // "")"' "$PROJECTS_FILE" | column -t -s $'\t'
+    fi ;;
+  duties)
+    # Two kinds of thing, never again in one list. An agent does a job alone;
+    # a panel seats several crew on one question and has a chair rule on it.
+    # Listing them together is what made `panel` look like a peer of `joiner`.
+    echo "AGENTS — one agent, one job:"
+    for d in $(duty_names); do
+      [ "$d" = panel ] && continue
+      printf '  %-14s %s\n' "$d" "$(sed -n '2s/^# *//p' "$QUARTERDECK_DIR/duties/$d.sh" | sed "s/^$d — //")"
+    done
+    if duty_exists panel; then
+      echo
+      echo "PANELS — several crew argue, the dockmaster rules:"
+      for disc in $(for c in $(crew_names); do crew_meta "$c" discipline | tr ',' '\n'; done \
+                    | tr -d ' ' | sort -u); do
+        seats=$(crew_by_discipline "$disc" | tr '\n' ' ')
+        [ "$(wc -w <<<"$seats")" -ge 2 ] || continue
+        printf '  %-14s %s\n' "--panel $disc" "$seats"
+      done
+      echo
+      echo "  run one with: quarterdeck run <project> panel --panel <name>"
+    fi
+    ;;
+
+  attach)
+    # scan a folder, propose how the crew should work on it, and register it only with --apply
+    exec python3 "$QUARTERDECK_DIR/bin/attach.py" "$@" ;;
+  new)
+    # start something new: a folder, a git repository, a README; nothing is registered
+    exec python3 "$QUARTERDECK_DIR/bin/newproject.py" "$@" ;;
+  add)
+    # Nothing here knows about any particular project. Registering one is the
+    # whole onboarding story: a block in projects.json, written from wherever
+    # you happen to be standing.
+    name="" repo="" path="" duties="review"
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --repo)   repo="${2:-}"; shift ;;
+        --path)   path="${2:-}"; shift ;;
+        --duties) duties="${2:-}"; shift ;;
+        -*) die "add: unknown flag '$1'" ;;
+        *)  name="$1" ;;
+      esac
+      shift
+    done
+
+    [ -n "$path" ] || path="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+    [ -n "$path" ] || die "not inside a git checkout — pass --path <dir>"
+    path="${path/#$HOME/~}"
+    abs="${path/#\~/$HOME}"
+    [ -d "$abs/.git" ] || die "$abs is not a git checkout"
+
+    if [ -z "$repo" ]; then
+      url="$(git -C "$abs" remote get-url origin 2>/dev/null || true)"
+      repo="$(sed -E 's#^(git@[^:]+:|https?://[^/]+/)##; s#\.git$##' <<<"$url")"
+    fi
+    [ -n "$repo" ] || die "could not infer the GitHub repo — pass --repo owner/name"
+    [ -n "$name" ] || name="$(basename "$abs" | tr '[:upper:]' '[:lower:]')"
+
+    branch="$(git -C "$abs" symbolic-ref --short HEAD 2>/dev/null || echo main)"
+
+    project_exists "$name" && die "'$name' is already registered — edit config/projects.json or: quarterdeck remove $name"
+
+    t=$(mktemp)
+    jq --arg n "$name" --arg r "$repo" --arg p "$path" --arg b "$branch" \
+       --argjson d "$(jq -Rc 'split(",")' <<<"$duties")" \
+       '.[$n] = {repo:$r, path:$p, summary:"", default_branch:$b, duties:$d,
+                 guardrails:["Never merge a pull request.","Never push to the default branch."]}' \
+       "$PROJECTS_FILE" > "$t" && mv "$t" "$PROJECTS_FILE"
+
+    echo "registered '$name' -> $repo  ($path)"
+    echo "  duties: $duties"
+    echo
+    echo "Now add project-specific guardrails in config/projects.json — the"
+    echo "defaults are deliberately thin, and they are injected into every prompt."
+    echo "Then: quarterdeck run $name ${duties%%,*}"
+    ;;
+
+  remove)
+    name="${1:-}"; [ -n "$name" ] || { usage; exit 1; }
+    project_exists "$name" || die "'$name' is not registered"
+    t=$(mktemp); jq --arg n "$name" 'del(.[$n])' "$PROJECTS_FILE" > "$t" && mv "$t" "$PROJECTS_FILE"
+    echo "removed '$name'"
+    ;;
+
+  fix)
+    exec bash "$QUARTERDECK_DIR/bin/fix" "$@"
+    ;;
+
+  cycle)
+    exec bash "$QUARTERDECK_DIR/bin/cycle" "$@"
+    ;;
+
+  run)
+    project="${1:-}"; duty="${2:-}"; shift 2 2>/dev/null || true
+    [ -n "$project" ] && [ -n "$duty" ] || { usage; exit 1; }
+    project_exists "$project" || die "unknown project '$project' (see: quarterdeck projects)"
+    duty_exists "$duty"       || die "unknown duty '$duty' (see: quarterdeck duties)"
+    project_has_duty "$project" "$duty" \
+      || die "'$duty' is not enabled for '$project' — add it to duties[] in config/projects.json"
+    wdir=$(project_path "$project")
+    [ -d "$wdir/.git" ] || die "no git checkout at $wdir"
+    export QUARTERDECK_PROJECT="$project" QUARTERDECK_WORKDIR="$wdir"
+    exec bash "$QUARTERDECK_DIR/duties/$duty.sh" "$@"
+    ;;
+
+  plan)
+    sub="${1:-}"; project="${2:-}"; pid="${3:-}"
+    case "$sub" in
+      list)    [ -n "$project" ] || { usage; exit 1; }
+               exec python3 "$QUARTERDECK_DIR/bin/plan.py" list "$QUARTERDECK_HOME" "$project" ;;
+      approve) [ -n "$project" ] && [ -n "$pid" ] || { usage; exit 1; }
+               exec python3 "$QUARTERDECK_DIR/bin/plan.py" approve "$QUARTERDECK_HOME" "$project" "$pid" ;;
+      apply)   [ -n "$project" ] && [ -n "$pid" ] || { usage; exit 1; }
+               project_exists "$project" || die "unknown project '$project' (see: quarterdeck projects)"
+               [ -n "$(project_get "$project" board.number)" ] || die "'$project' has no board in the registry"
+               shift 3
+               case "${1:-}" in ""|--apply) ;; *) die "plan apply: unknown argument '$1'" ;; esac
+               exec python3 "$QUARTERDECK_DIR/bin/plan.py" apply "$QUARTERDECK_HOME" "$project" "$pid" \
+                 "$(project_get "$project" board.owner)" "$(project_get "$project" board.number)" "$(project_get "$project" repo)" \
+                 "$(project_get "$project" board.status '-')" "$@" ;;
+      *) usage; exit 1 ;;
+    esac
+    ;;
+
+  brief)
+    case "${1:-}" in
+      approve) [ -n "${2:-}" ] || { usage; exit 1; }; exec python3 "$QUARTERDECK_DIR/bin/brief.py" approve "$QUARTERDECK_HOME" "$2" ;;
+      changes) [ -n "${2:-}" ] && [ -n "${3:-}" ] || { usage; exit 1; }; exec python3 "$QUARTERDECK_DIR/bin/brief.py" changes "$QUARTERDECK_HOME" "$2" "$3" ;;
+      list)    exec python3 "$QUARTERDECK_DIR/bin/brief.py" list "$QUARTERDECK_HOME" ;;
+      "")      usage; exit 1 ;;
+      *)       exec bash "$QUARTERDECK_DIR/duties/brief.sh" "$@" ;;     # --idea / --revise: no project needed
+    esac
+    ;;
+
+  mockup)
+    case "${1:-}" in
+      approve|changes) [ -n "${2:-}" ] || { usage; exit 1; }
+                       exec python3 "$QUARTERDECK_DIR/bin/mockup.py" act "$QUARTERDECK_HOME" "$2" "$1" "${3:-}" ;;
+      "")              usage; exit 1 ;;
+      *)               exec bash "$QUARTERDECK_DIR/duties/mockup.sh" "$@" ;;
+    esac
+    ;;
+
+  dashboard)
+    port="${QUARTERDECK_DASHBOARD_PORT:-7878}"
+    pidfile="$QUARTERDECK_HOME/state/dashboard.pid"
+    if [ "${1:-}" = stop ]; then
+      pid=$(cat "$pidfile" 2>/dev/null || true)
+      [ -n "$pid" ] && kill "$pid" 2>/dev/null && echo "dashboard stopped" || echo "not running"
+      rm -f "$pidfile"
+      exit 0
+    fi
+    pid=$(cat "$pidfile" 2>/dev/null || true)
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+      echo "dashboard already running: http://127.0.0.1:$port"
+    else
+      rm -f "$pidfile"
+      nohup python3 "$QUARTERDECK_DIR/bin/dashboard.py" >>"$QUARTERDECK_HOME/logs/dashboard-server.log" 2>&1 &
+      for _ in 1 2 3 4 5 6 7 8 9 10; do
+        curl -sf -m 1 -o /dev/null "http://127.0.0.1:$port/api/state" && break
+        sleep 0.3
+      done
+      echo "dashboard: http://127.0.0.1:$port"
+    fi
+    if [ "${1:-}" != "--no-open" ]; then
+      if [ "$(uname -s)" = Darwin ]; then open "http://127.0.0.1:$port"
+      elif command -v xdg-open >/dev/null 2>&1 && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then xdg-open "http://127.0.0.1:$port" >/dev/null 2>&1 || true
+      fi
+    fi
+    ;;
+
+  logs)
+    f="$QUARTERDECK_HOME/logs/${1:-quarterdeck}.log"
+    [ -f "$f" ] || { echo "no log yet: $f"; exit 0; }
+    [ "${2:-}" = "-f" ] && tail -f "$f" || tail -60 "$f"
+    ;;
+
+  runs) jq --argjson n "${1:-20}" '.[-$n:]' "$RUNS_LEDGER" ;;
+
+  *) usage ;;
+esac

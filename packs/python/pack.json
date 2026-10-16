@@ -1,0 +1,2 @@
+{"id": "python", "label": "Python", "about": "Environments, test runs and the usual traps in a Python project.",
+ "match": {"languages": ["Python"], "package_managers": ["pip", "poetry", "pipenv"], "frameworks": ["Django", "Flask", "FastAPI", "pytest", "SQLAlchemy"]}}

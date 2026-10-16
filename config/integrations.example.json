@@ -1,0 +1,10 @@
+{
+  "sources": {
+    "ga4": {"enabled": false, "minutes": 60},
+    "gmail": {"enabled": false, "minutes": 10},
+    "slack": {"enabled": false, "minutes": 5},
+    "linkedin": {"enabled": false, "minutes": 60},
+    "meta": {"enabled": false, "minutes": 60}
+  },
+  "ga4": {"property_id": "", "site_url": ""}
+}

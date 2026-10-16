@@ -1,0 +1,32 @@
+{
+  "id": "macmail",
+  "label": "Mac Mail",
+  "what": "How many messages are unread in the Mail app on this Mac, and how long the oldest has waited.",
+  "module": "macmail",
+  "snapshots": [
+    "macmail"
+  ],
+  "minutes": 10,
+  "credentials": [],
+  "reads": [
+    "The unread count of the Mail inbox.",
+    "The date each unread message arrived, to work out the age of the oldest."
+  ],
+  "not_reads": [
+    "Senders, subjects and message bodies.",
+    "Attachments and your other mailboxes."
+  ],
+  "scopes": [
+    "macOS Automation: allow the app that runs Quarterdeck to control Mail. There is no password and no key."
+  ],
+  "steps": [
+    "Open the Mail app once and make sure an account is set up there.",
+    "Switch Mac Mail on here.",
+    "The first refresh makes macOS ask whether the app that runs Quarterdeck may control Mail. Choose Allow.",
+    "If you chose Don't Allow, open System Settings, then Privacy and Security, then Automation. Turn on Mail under the app that runs Quarterdeck, then refresh.",
+    "Mail may open in the background while it reads the count. Nothing is changed in it."
+  ],
+  "revoke": "Open System Settings, then Privacy and Security, then Automation, and turn Mail off for that app. Or switch Mac Mail off here.",
+  "tested": "Parsing tested against sample data only; not tested against the real service.",
+  "links": []
+}

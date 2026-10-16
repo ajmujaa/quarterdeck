@@ -1,0 +1,3 @@
+{"id": "vercel-supabase", "label": "Vercel and Supabase", "about": "What to look for in Vercel config and Supabase migrations, policies, functions and settings. Files only.",
+ "tested": "Run on one small fixture (a Supabase migration, config.toml, an edge function stub, vercel.json) with a real model: 8 of 8 planted risks found in the last run, 5 of 8 in two earlier runs (a per-run item cap, since fixed); a harmless header change was rated low. NOT verified: a real project, Vercel environment variable scopes (they live in the dashboard, not in files), edge function code beyond a stub, storage policies written in SQL, more than one fixture. Not reviewed by a Vercel or Supabase specialist.",
+ "match": {"deploy_targets": ["Vercel", "Supabase"]}}

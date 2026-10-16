@@ -1,0 +1,54 @@
+{
+  "id": "slack",
+  "label": "Slack",
+  "what": "Unread direct messages and mentions, with a short preview.",
+  "module": "slack",
+  "snapshots": [
+    "slack"
+  ],
+  "minutes": 5,
+  "credentials": [
+    {
+      "key": "SLACK_USER_TOKEN",
+      "label": "Slack user token",
+      "secret": true,
+      "help": "A user token from your own Slack app.",
+      "looks": "Starts with xoxp-"
+    }
+  ],
+  "reads": [
+    "Direct messages and group messages newer than your last-read marker.",
+    "Channels where you were mentioned since you last read them. A 100 character preview of each."
+  ],
+  "not_reads": [
+    "Anything past the scopes below.",
+    "It never marks anything read and never posts."
+  ],
+  "scopes": [
+    "im:read",
+    "im:history",
+    "mpim:read",
+    "mpim:history",
+    "channels:read",
+    "channels:history",
+    "groups:read",
+    "groups:history",
+    "users:read",
+    "search:read"
+  ],
+  "steps": [
+    "Go to api.slack.com/apps and create an app for your workspace, from scratch.",
+    "Under OAuth and Permissions add the ten User Token Scopes listed here. Use user scopes, not bot scopes.",
+    "Install the app to your workspace. Your workspace may need an admin to approve it.",
+    "Copy the User OAuth Token. It starts with xoxp-.",
+    "Paste it here and save. Then switch Slack on."
+  ],
+  "revoke": "At api.slack.com/apps open your app and choose Revoke tokens, or uninstall it from the workspace. Then remove the token here.",
+  "tested": "Parsing tested against sample data only; not tested against the real service. Method names were written from Slack's documentation.",
+  "links": [
+    {
+      "label": "Slack tokens (Slack)",
+      "url": "https://docs.slack.dev/authentication/tokens"
+    }
+  ]
+}

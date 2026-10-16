@@ -1,0 +1,8 @@
+- Use the project's environment, not the system one: look for `poetry.lock`, `Pipfile.lock`, a `.venv` folder or a `requirements*.txt` and run tools through the matching runner (`poetry run`, `pipenv run`, or the virtual environment's own `python -m`). Do not install packages into the global interpreter.
+- Run tests as `python -m pytest` when pytest is a dependency, from the project root, so imports resolve the way they do in CI. Read `pyproject.toml`, `pytest.ini` or `tox.ini` for the project's own flags.
+- Respect the formatter and linter the project already configures (`ruff`, `black`, `flake8`, `isort` in `pyproject.toml` or setup files). Run them rather than reformatting by hand, and do not reformat lines you did not change.
+- Do not pin or upgrade a dependency to make a failure go away. Say what failed and why; changing versions is its own decision.
+- In Django projects, a model change needs a migration. Create it with `manage.py makemigrations`, read it, and never edit one that has already been applied or merged.
+- Mutable default arguments, bare `except:` and naive datetimes are the usual sources of bugs worth checking in a review.
+- Secrets live in environment variables or a `.env` the project ignores. Never read, print or commit them.
+- Generated files (`__pycache__/`, `*.pyc`, `.pytest_cache/`, `dist/`, `build/`, `*.egg-info/`) are never edited or committed.

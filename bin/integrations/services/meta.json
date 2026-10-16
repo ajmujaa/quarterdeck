@@ -1,0 +1,70 @@
+{
+  "id": "meta",
+  "label": "Facebook and Instagram",
+  "what": "Posts and their numbers for a Facebook Page you manage and its linked Instagram professional account.",
+  "module": "meta",
+  "snapshots": [
+    "facebook",
+    "instagram"
+  ],
+  "minutes": 60,
+  "credentials": [
+    {
+      "key": "META_PAGE_TOKEN",
+      "label": "Page access token",
+      "secret": true,
+      "help": "A long-lived token for the Page, with read access.",
+      "looks": "A very long string of letters and numbers, often starting with EAA"
+    },
+    {
+      "key": "META_PAGE_ID",
+      "label": "Facebook Page id",
+      "secret": false,
+      "help": "The numeric id of the Page.",
+      "looks": "Digits only, about 15 of them"
+    },
+    {
+      "key": "META_IG_USER_ID",
+      "label": "Instagram account id",
+      "secret": false,
+      "optional": true,
+      "help": "Optional. Leave it empty to skip Instagram.",
+      "looks": "Digits only, about 17 of them"
+    }
+  ],
+  "reads": [
+    "Your latest Page posts with reactions, comments, shares and impressions.",
+    "Your latest Instagram posts with likes, comments and reach, if you entered the Instagram id."
+  ],
+  "not_reads": [
+    "Private messages and the comment text.",
+    "Personal profiles. No API reaches them, and the token only covers the Page."
+  ],
+  "scopes": [
+    "pages_show_list",
+    "pages_read_engagement",
+    "read_insights",
+    "instagram_basic",
+    "instagram_manage_insights"
+  ],
+  "steps": [
+    "You need a Facebook Page, and an Instagram Business or Creator account linked to that Page if you want Instagram.",
+    "At developers.facebook.com create an app. Leave it in development mode, with you as the admin.",
+    "In the Graph API Explorer pick your app and generate a user token with the five read permissions listed here.",
+    "Exchange it for a long-lived user token, then ask /me/accounts for the Page token. A Page token made this way does not expire.",
+    "Copy the Page id from the same answer. For Instagram, ask the Page for its instagram_business_account to get the Instagram id.",
+    "Enter the token and the ids here and save each one. Then switch it on."
+  ],
+  "revoke": "On Facebook, open Settings, then Business Integrations, find your app and remove it. Then remove the fields here. You can also delete the app at developers.facebook.com.",
+  "tested": "Parsing tested against sample data only; not tested against the real service.",
+  "links": [
+    {
+      "label": "Pages API (Meta)",
+      "url": "https://developers.facebook.com/docs/pages-api/"
+    },
+    {
+      "label": "Instagram Platform (Meta)",
+      "url": "https://developers.facebook.com/docs/instagram-platform"
+    }
+  ]
+}

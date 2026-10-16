@@ -1,0 +1,51 @@
+{
+  "id": "threads",
+  "label": "Threads",
+  "what": "Your latest Threads posts and how they did.",
+  "module": "threads",
+  "snapshots": [
+    "threads"
+  ],
+  "minutes": 60,
+  "credentials": [
+    {
+      "key": "THREADS_ACCESS_TOKEN",
+      "label": "Threads access token",
+      "secret": true,
+      "help": "A long-lived user access token from Meta for Developers.",
+      "looks": "A long string of letters and numbers"
+    }
+  ],
+  "reads": [
+    "Your own latest posts: text, time and link.",
+    "Where Meta allows it, the counts for each: views, likes, replies, reposts and quotes."
+  ],
+  "not_reads": [
+    "Other people's posts.",
+    "Your followers, your messages and your account settings."
+  ],
+  "scopes": [
+    "threads_basic",
+    "threads_manage_insights (for the counts; without it posts show without numbers)"
+  ],
+  "steps": [
+    "At developers.facebook.com create an app and add the Threads use case.",
+    "Add your own Threads account as a tester of the app and accept the invitation in Threads.",
+    "Generate a user access token for your account with threads_basic and threads_manage_insights.",
+    "Exchange the short-lived token for a long-lived one. A long-lived token lasts about 60 days and can be refreshed before it ends.",
+    "Enter the token here and save it. Then switch Threads on.",
+    "Come back before it expires and enter a new one. The page says when the token has expired."
+  ],
+  "revoke": "In Threads open Settings, then Account, then Website permissions, and remove the app. Then remove the token here.",
+  "tested": "Parsing tested against sample data only. The shape of the counts answer is not confirmed. Not tested against the real service.",
+  "links": [
+    {
+      "label": "Threads API (Meta)",
+      "url": "https://developers.facebook.com/docs/threads"
+    },
+    {
+      "label": "Get started with Threads (Meta)",
+      "url": "https://developers.facebook.com/docs/threads/get-started"
+    }
+  ]
+}

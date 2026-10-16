@@ -1,0 +1,35 @@
+{
+  "id": "calendar",
+  "label": "Calendar and reminders",
+  "what": "Today's events and what is due, read on this Mac by a small helper app.",
+  "module": "",
+  "snapshots": [
+    "calendar",
+    "reminders"
+  ],
+  "minutes": 0,
+  "local": true,
+  "credentials": [],
+  "reads": [
+    "Event titles, start and end times and which calendar, for today and the next days.",
+    "Reminder titles and due dates."
+  ],
+  "not_reads": [
+    "Event notes, attendees and links.",
+    "Anything beyond what the dashboard shows."
+  ],
+  "scopes": [
+    "macOS Calendars and Reminders access. macOS names the level Full Access, but the helper only reads."
+  ],
+  "steps": [
+    "You need the Xcode command line tools. If you do not have them, run: xcode-select --install",
+    "In a terminal in the Quarterdeck folder run: bash tools/agenda/build.sh",
+    "It builds the helper app at ~/Applications/QuarterdeckAgenda.app and signs it with its own identity.",
+    "Open the dashboard and let it refresh. macOS asks to allow Calendars and then Reminders for QuarterdeckAgenda. Choose Allow for both.",
+    "If you chose Don't Allow, open System Settings, then Privacy and Security, and turn QuarterdeckAgenda on under Calendars and under Reminders.",
+    "The helper writes its snapshot on this Mac. Nothing is sent anywhere."
+  ],
+  "revoke": "Open System Settings, then Privacy and Security, and turn QuarterdeckAgenda off under Calendars and Reminders. You can also delete ~/Applications/QuarterdeckAgenda.app.",
+  "tested": "Parsing tested against sample data only; not tested against the real service.",
+  "links": []
+}

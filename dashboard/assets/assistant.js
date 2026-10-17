@@ -211,7 +211,7 @@ export const HELP = "Try: what is on today, my reminders, what is running, what 
 
 // Calendar and Reminders arrive as snapshots {title, sub, at}; these only read them.
 const dayKey = d => d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate();
-const clock = iso => new Date(iso).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", hour12: false});
+const clock = iso => new Date(iso).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", hourCycle: "h23"});
 
 // The same event on two calendars is one event: same normalised title, same start, same all-day-ness.
 // (The server merges these too; this keeps Helm from reading one twice if an old snapshot slips through.)

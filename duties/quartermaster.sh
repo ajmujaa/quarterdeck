@@ -81,7 +81,6 @@ if why=$(fork_refuse "$meta"); then
 fi
 title=$(jq -r .title <<<"$meta" | python3 "$QUARTERDECK_DIR/bin/outscan.py" --redact); sha=$(jq -r '.headRefOid // ""' <<<"$meta")
 stated="$title $(jq -r '[.labels[]?.name] | join(" ")' <<<"$meta")"        # the claim: title and labels only (a bot's body carries someone else's notes)
-changed=$(guard 60 "$GH" pr diff "$PR" -R "$REPO" --name-only 2>>"$LOG_FILE") || die "cannot read the files $REPO#$PR changes"
 working_on "PR #$PR — $title"
 say "quarterdeck: quartermaster on $REPO#$PR — $title"
 
@@ -110,7 +109,15 @@ FOOT="<sub>Quarterdeck quartermaster. The harness gathered every fact and ran th
 guard 120 "${SAFE_GIT[@]}" -C "$SOURCE_REPO_DIR" fetch -q origin "$BASE" 2>>"$LOG_FILE" || log "fetch failed; using local $BASE"
 guard 180 "${SAFE_GIT[@]}" -C "$SOURCE_REPO_DIR" fetch -q origin "pull/$PR/head" 2>>"$LOG_FILE" || die "could not fetch pull/$PR/head"
 HEADREF=$(safe_git -C "$SOURCE_REPO_DIR" rev-parse FETCH_HEAD)
+# What was fetched must be what the pull request metadata named: a head that moved between the two reads, or an answer that
+# cannot be told, is refused before any worktree, install or model.
+if [ -z "$sha" ] || [ "$HEADREF" != "$sha" ]; then
+  why="the fetched head ${HEADREF:0:12} is not the head ${sha:0:12} the pull request metadata reported, so what would be installed is not what was described"
+  say "quarterdeck: REFUSED — $why"; record_run "$PROJECT" quartermaster REFUSED "#$PR — $why"; exit 0
+fi
 BASEREF="origin/$BASE"; safe_git -C "$SOURCE_REPO_DIR" rev-parse -q --verify "$BASEREF" >/dev/null || BASEREF="$BASE"
+# The changed files come from the fetched tree itself (against the merge base), never from GitHub's listing; --no-renames lists both ends.
+changed=$(safe_git -C "$SOURCE_REPO_DIR" -c core.quotepath=false diff --no-ext-diff --no-textconv --no-renames --name-only "$BASEREF...$HEADREF") || die "cannot read the files $REPO#$PR changes"
 printf '%s\n' "$changed" > "$TMP/files"
 facts=$(python3 "$QM" bumps --repo "$SOURCE_REPO_DIR" --base "$BASEREF" --head "$HEADREF" --files "$TMP/files") || die "quartermaster: could not read the manifests"
 jq -e '.bumps' <<<"$facts" >/dev/null 2>&1 || die "quartermaster: the manifests did not parse"
@@ -213,15 +220,26 @@ fi
 inst_note="no install step for this project"; inst_rc=0
 # "Scripts disabled" does not cover the package manager's own hooks: a .pnpmfile.cjs, a yarnPath or plugin in .yarnrc*/.yarn/, or an .npmrc
 # that points elsewhere all run or redirect at install time. A pull request that changes one is not installed.
-hooks=$(grep -iE '(^|/)(\.pnpmfile\.cjs|\.yarnrc[^/]*|\.npmrc)$|(^|/)\.yarn/' <<<"$changed" | head -5 | tr '\n' ' ' | sed 's/ $//')
-if [ -n "$INSTALL" ] && [ -n "$hooks" ]; then
-  inst_note="not run: the pull request changes the package manager's own hook or settings file(s) $hooks"
-  addhold "the install was not run because the pull request changes $hooks, which the package manager loads and runs even with scripts disabled"
+# Also held: pnpm-workspace.yaml, bunfig.toml and any .pnpmfile.* (settings and hooks of the package manager), and a package.json whose packageManager or
+# devEngines changed, because corepack can fetch a package manager from a URL named there.
+hooks=$(grep -iE '(^|/)(\.pnpmfile\.[^/]*|pnpm-workspace\.yaml|bunfig\.toml|\.yarnrc[^/]*|\.npmrc)$|(^|/)\.yarn/' <<<"$changed" | head -5 | tr '\n' ' ' | sed 's/ $//')
+while IFS= read -r pj; do
+  [ -n "$pj" ] || continue
+  pmq='[.packageManager, .devEngines]'
+  a=$(safe_git -C "$SOURCE_REPO_DIR" show "$BASEREF:$pj" 2>/dev/null | jq -c "$pmq" 2>/dev/null || echo null)
+  b=$(safe_git -C "$SOURCE_REPO_DIR" show "$HEADREF:$pj" 2>/dev/null | jq -c "$pmq" 2>/dev/null || echo null)
+  [ "$a" = "$b" ] && continue
+  hooks="${hooks:+$hooks }$pj(packageManager/devEngines)"
+done < <(grep -E '(^|/)package\.json$' <<<"$changed")
+if [ -n "$hooks" ]; then
+  addhold "the install was not run because the pull request changes $hooks, which the package manager loads, or fetches a package manager from, even with scripts disabled"
+  [ -z "$INSTALL" ] || inst_note="not run: the pull request changes the package manager's own hook or settings file(s) $hooks"
   INSTALL=""
 fi
 if [ -n "$INSTALL" ]; then
   say "  installing, scripts disabled: $INSTALL"
-  project_exec install "${QUARTERDECK_CHECK_TIMEOUT:-900}" "$WT" "$INSTALL"; inst_rc=$?; out=$EXEC_OUT
+  # COREPACK_ENABLE_NETWORK=0 is corepack's documented switch to refuse every download; the lockfile install needs no package manager fetch.
+  project_exec install "${QUARTERDECK_CHECK_TIMEOUT:-900}" "$WT" "export COREPACK_ENABLE_NETWORK=0; $INSTALL"; inst_rc=$?; out=$EXEC_OUT
   inst_note="\`$INSTALL\` exited $inst_rc"
   [ "$inst_rc" = 0 ] || addhold "the install failed ($INSTALL exited $inst_rc): $(tail -3 <<<"$out" | tr '\n' ' ' | cut -c1-200)"
 fi

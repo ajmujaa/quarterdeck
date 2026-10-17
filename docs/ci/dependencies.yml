@@ -1,0 +1,27 @@
+# PROPOSAL: move to .github/workflows/dependencies.yml. Not active while it lives under docs/ci/.
+name: dependencies
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  vendor-pins:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # TODO(pin): replace the tag with the verified commit sha for actions/checkout v4
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # TODO(pin): replace the tag with the verified commit sha for actions/setup-python v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Reads only dashboard/assets/vendor/ and compares sha256 against HASHES.json. No package manager, no network.
+      - name: Verify vendored files against their pinned hashes
+        run: python3 bin/vendor-verify.py

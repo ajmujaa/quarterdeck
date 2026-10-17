@@ -196,9 +196,13 @@ def worktree_secrets(root, max_files=200_000, max_secs=60.0):
         for d, dirs, files in os.walk(top):
             keep = []
             for x in dirs:
-                if x == ".git":
-                    continue
                 lp = os.path.join(d, x)
+                if x == ".git" and not os.path.islink(lp):
+                    # a repository's own folder (the project's or a nested one): never read inside the object store, but its config can hold a
+                    # credential (a remote URL with a token), so that one file is screened
+                    if os.path.isfile(os.path.join(lp, "config")):
+                        look(lp, "config")
+                    continue
                 if os.path.islink(lp):                   # not walked; one that leads out of the worktree is denied whole
                     t = os.path.realpath(lp)
                     if not t.startswith(root + os.sep) and not (lp == os.path.join(root, "node_modules") and os.readlink(lp) == borrowed):

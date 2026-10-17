@@ -3830,6 +3830,11 @@ _wd = Path(_tf0.mkdtemp(prefix="qd-wtscreen-"))
 (_wd / "sub").mkdir(); (_wd / "sub" / "cfg.txt").write_text("x=AKIA" + "Q" * 16 + "\n"); (_wd / "plain.txt").write_text("hello\n"); (_wd / ".git").mkdir(); (_wd / ".git" / "k").write_text("AKIA" + "Q" * 16)
 check("#85 the worktree screen finds a credential by content under any name, in a subfolder, and skips clean files and .git", _gu2.worktree_secrets(_wd) == (["sub/cfg.txt"], [], True))
 
+_wn = Path(_tf0.mkdtemp(prefix="qd-wtnested-"))
+(_wn / "inner" / ".git" / "objects").mkdir(parents=True); (_wn / "inner" / "src.txt").write_text("k=AKIA" + "Q" * 16 + "\n")
+(_wn / "inner" / ".git" / "config").write_text("[remote]\n\turl = https://x:ghp_" + "a" * 36 + "@example.com/r.git\n"); (_wn / "inner" / ".git" / "objects" / "o").write_text("AKIA" + "Q" * 16)
+check("#85b the worktree screen reads the files of a nested repository and its .git/config, never the rest of its .git", _gu2.worktree_secrets(_wn) == (["inner/.git/config", "inner/src.txt"], [], True), _gu2.worktree_secrets(_wn))
+
 # ---- B1 (round 5): the privacy-limit scan is not beaten by splitting a name, building it at run time, or naming the file selftest* ------------------
 import forbidden_signals as _fsig
 _FSAMPLES = {   # each value is on bin/forbidden_signals.py's allow-list for this file, exactly as written here, and nowhere else
@@ -3850,7 +3855,41 @@ for _fn, _fbody in _FSAMPLES.items():
 check("B1 the privacy scan flags a forbidden name split, concatenated, bracketed, joined or reversed at run time, in a selftest-named file, and a read of another app's data" + (f" — MISSED: {_fmiss}" if _fmiss else ""), not _fmiss)
 _fd = Path(_tf0.mkdtemp(prefix="qd-fsig-")); (_fd / "ok.py").write_text('x = "screen" + "shot_count"\nprint(read_text())\n')
 check("B1 and ordinary code that merely shares a word is not flagged", _fsig.scan(_fd) == [], _fsig.scan(_fd))
+_fk = Path(_tf0.mkdtemp(prefix="qd-fsig-")); _fbad = "x = pb" + "paste\n"
+for _rel, _body in {"bin/tool": "#!/bin/sh\n" + _fbad, "src/a.ts": _fbad, "docs/ex.py": _fbad, "a/docs/b/ex.sh": _fbad}.items():
+    (_fk / _rel).parent.mkdir(parents=True, exist_ok=True); (_fk / _rel).write_text(_body)
+for _rel in ("vendor/v.py", "node_modules/n.js", ".git/g.py", ".claude/c.py", "state/s.py", "logs/l.py"):
+    (_fk / _rel).parent.mkdir(parents=True, exist_ok=True); (_fk / _rel).write_text(_fbad)
+(_fk / "NOTICE").write_text(_fbad)
+check("B1b the privacy scan reads an extensionless script, a .ts file and a docs folder, and still skips vendor, node_modules, .git, .claude, state and logs",
+      sorted({h[1] for h in _fsig.scan(_fk) if h[0] == "clipboard"}) == ["a/docs/b/ex.sh", "bin/tool", "docs/ex.py", "src/a.ts"], _fsig.scan(_fk))
 check("B1 the repository itself passes, selftest files included, with only the exact allow-listed strings exempt", _fsig.scan() == [], _fsig.scan()[:5])
+
+# CI proposals under docs/ci/: minimal line checks, no YAML library
+_ci_dir = ROOT / "docs" / "ci"
+_ci_files = sorted(_ci_dir.glob("*.yml"))
+check("CI proposals exist under docs/ci/ (ci, secret-scan, dependencies)", {f.name for f in _ci_files} >= {"ci.yml", "secret-scan.yml", "dependencies.yml"})
+_ci_bad = []
+for _cf in _ci_files:
+    _cl = _cf.read_text().splitlines()
+    if not any(_re0.fullmatch(r"permissions:\s*", l) for l in _cl) or not any(_re0.fullmatch(r"\s+contents:\s*read\s*", l) for l in _cl):
+        _ci_bad.append(f"{_cf.name}: no contents: read permission block")
+    for _i, _l in enumerate(_cl):
+        _code = _l.split("#", 1)[0]
+        if _re0.search(r"^\s*[\w-]+:\s*write(-all)?\s*$", _code) or _re0.search(r"^\s*permissions:\s*write-all", _code):
+            _ci_bad.append(f"{_cf.name}:{_i + 1}: requests write permission")
+        _m = _re0.match(r"\s*-?\s*uses:\s*(\S+)", _code)
+        if _m and not _m.group(1).startswith("./"):
+            _ref = _m.group(1).partition("@")[2]
+            _prev = _cl[_i - 1] if _i else ""
+            if not _re0.fullmatch(r"[0-9a-f]{40}", _ref) and "TODO(pin)" not in _prev:
+                _ci_bad.append(f"{_cf.name}:{_i + 1}: unpinned action {_m.group(1)} without a TODO(pin) marker")
+check("CI proposals request no write permission, declare contents: read, and pin every third-party action by sha or mark it TODO(pin)" + (f": {_ci_bad}" if _ci_bad else ""), not _ci_bad)
+_ci_t = Path(_tf0.mkdtemp(prefix="qd-ci-")) / "w.yml"
+_ci_t.write_text("permissions:\n  contents: write\njobs:\n  a:\n    steps:\n      - uses: actions/checkout@v4\n")
+_ci_tl = _ci_t.read_text().splitlines()
+check("CI guard sanity: the same line checks would flag a write permission and a bare tag", any(_re0.search(r"^\s*[\w-]+:\s*write\s*$", l) for l in _ci_tl) and "TODO(pin)" not in _ci_tl[-2])
+
 
 print()
 if FAILS:

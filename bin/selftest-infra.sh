@@ -3,7 +3,7 @@
 # repository of invented files: no cloud, no credentials, no network. Every cloud tool is stubbed on PATH to fail loudly, and none may ever be called.
 source "$(dirname "${BASH_SOURCE[0]}")/selftest-lib.sh"
 st_init infra
-cp "$REAL"/bin/scan.py "$REAL"/bin/packs.py "$REAL"/bin/home.py "$T/bin/"; cp -R "$REAL/packs" "$T/packs"
+cp "$REAL"/bin/scan.py "$REAL"/bin/cloudcmd.py "$REAL"/bin/packs.py "$REAL"/bin/home.py "$T/bin/"; cp -R "$REAL/packs" "$T/packs"
 st_repo
 
 # every cloud tool, stubbed to fail loudly and leave a mark
@@ -109,6 +109,21 @@ ck "  a command anywhere in the reply, not only in the contract, is refused too"
 reply "[$(jq -nc '{resource:"aws_iam_role.x",change:"widens the AWS IAM role",risk:"medium",why:"the terraform state is not in these files; the aws provider is pinned",blast_radius:"the Lambda in one stage",rollback:"revert the commit",needs_human:false}')]" "REVIEWED 1"
 st_duty infra --pr 2 --apply
 ck "  ordinary prose that names the tools (Terraform state, the aws provider, AWS IAM) is not a command and passes" '[ "$(last_verdict)" = REVIEWED ] && [ -f "$T/workspace/tp-infra-pr2.md" ]'
+# the bypasses: an option before the verb, a line break between words, a zero-width space inside a word, and the newer tools
+ZW=$(printf '\342\200\213')
+for cmd in 'terraform -chdir=prod destroy' 'terraform -chdir prod apply -auto-approve' 'tofu -chdir=x destroy' 'terraform state rm aws_s3_bucket.a' 'terraform import aws_s3_bucket.a b' 'pulumi up' 'pulumi destroy --yes' 'pulumi --cwd infra up' 'cdk destroy --all' 'sam deploy' 'serverless remove' 'wrangler delete' 'fly destroy app1' 'supabase db reset' 'supabase db push' 'vercel --prod' 'aws --profile prod s3 rm s3://b' 'gcloud --project p run deploy x' "terraform
+destroy" "terraform   -chdir=prod
+   destroy" "terra${ZW}form destroy" "pul${ZW}umi up" "aws s3${ZW}rm s3://b" "terraform$(printf '\t')destroy"; do
+  bad=$(jq -nc --arg c "$cmd" '{resource:"r",change:"c",risk:"high",why:"w",blast_radius:"b",rollback:$c,needs_human:true}')
+  reply "[$bad]" "REVIEWED 1"; : > "$T/claude-calls"; rm -f "$T"/workspace/*infra*.md
+  st_duty infra --pr 2 --apply
+  ck "R7 a rollback saying $(printf '%s' "$cmd" | tr '\n' '~') is refused: ERROR, nothing written" '[ "$(last_verdict)" = ERROR ] && grep -q "cloud command" <<<"$OUT" && [ -z "$(docs)" ]'
+done
+for prose in 'widens the AWS IAM role' 'the terraform state is not in these files' 'the pulumi stack is not in the files' 'uses the aws provider and the az region names' 'Terraform plans are made in CI' 'the supabase project and the pulumi stack are named in the config'; do
+  reply "[$(jq -nc --arg p "$prose" '{resource:"r",change:$p,risk:"low",why:"w",blast_radius:"b",rollback:"revert the commit",needs_human:false}')]" "REVIEWED 1"; rm -f "$T"/workspace/*infra*.md
+  st_duty infra --pr 2 --apply
+  ck "R7 descriptive prose '$prose' is not a command and passes" '[ "$(last_verdict)" = REVIEWED ]'
+done
 
 # ---- a contract that does not hold is an ERROR that writes nothing -------------------------------------------------------------
 rm -f "$T"/workspace/*infra*.md

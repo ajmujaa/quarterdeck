@@ -1,0 +1,57 @@
+# PROPOSAL: move to .github/workflows/ci.yml. Not active while it lives under docs/ci/.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  selftest:
+    name: selftest (${{ matrix.os }}, python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+        python: ["3.10", "3.12"]
+    steps:
+      # TODO(pin): replace the tag with the verified commit sha for actions/checkout v4
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # TODO(pin): replace the tag with the verified commit sha for actions/setup-python v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      # TODO(pin): replace the tag with the verified commit sha for actions/setup-node v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install jq (macOS)
+        if: runner.os == 'macOS'
+        run: brew install jq
+      - name: Install jq and bubblewrap (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y jq bubblewrap
+      - name: Note on Linux sandbox tests
+        if: runner.os == 'Linux'
+        run: |
+          # bubblewrap needs unprivileged user namespaces. Ubuntu 24.04 runners may restrict them
+          # (kernel.apparmor_restrict_unprivileged_userns), in which case sandbox tests skip or fail here.
+          bwrap --unshare-user --ro-bind / / true && echo "user namespaces: available" || echo "user namespaces: NOT available"
+      - name: Self-test
+        run: python3 bin/selftest.py
+      - name: Doctor (informational, runners have no claude or gh)
+        continue-on-error: true
+        run: bin/quarterdeck doctor
+      - name: Check
+        run: bin/quarterdeck check

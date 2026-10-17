@@ -133,6 +133,35 @@ done
 ck "H1 the default pnpm install never loads a pnpmfile" 'grep -q "pnpm install --frozen-lockfile --ignore-scripts --ignore-pnpmfile" "$REAL/duties/quartermaster.sh"'
 st_registry '["quartermaster"]' '{"verify":"grep -q OK check.txt","quartermaster":{"install":"true"}}'
 
+# ---- the package manager fetches and loads things of its own: hold, take the file list from the fetched tree, check the sha ----------------------
+st_registry '["quartermaster"]' "$(jq -nc --arg i "touch $T/installed.flag" '{verify:"grep -q OK check.txt", quartermaster:{install:$i}}')"
+pmjson() { jq -n --arg pm "$1" '{name:"app", packageManager:$pm, dependencies:{"left-pad":"^1.2.4"}}'; }
+git -C "$T/work" checkout -q main
+PR_TITLE="Bump left-pad from 1.2.3 to 1.2.4" st_pr 30 dep-pm-url package.json "$(pmjson 'pnpm@https://example.com/pnpm.tgz')" package-lock.json "$(lock 1.2.4)"
+rm -f "$T/installed.flag"; fresh; st_reply default "$MERGE_REPLY"; st_duty quartermaster --pr 30
+ck "P1 a pull request that changes packageManager to a URL is HOLD and the install never runs" '[ ! -e "$T/installed.flag" ] && grep -q "HOLD" <<<"$OUT" && grep -q "packageManager" <<<"$OUT"'
+PR_TITLE="Bump left-pad from 1.2.3 to 1.2.4" st_pr 31 dep-devengines package.json "$(jq -n '{name:"app", devEngines:{packageManager:{name:"pnpm", version:"9.0.0"}}, dependencies:{"left-pad":"^1.2.4"}}')" package-lock.json "$(lock 1.2.4)"
+rm -f "$T/installed.flag"; fresh; st_reply default "$MERGE_REPLY"; st_duty quartermaster --pr 31
+ck "P1 a pull request that changes devEngines is HOLD and the install never runs" '[ ! -e "$T/installed.flag" ] && grep -q "HOLD" <<<"$OUT" && grep -q "devEngines" <<<"$OUT"'
+for pf in pnpm-workspace.yaml bunfig.toml .pnpmfile.mjs sub/.pnpmfile.cjs; do
+  hn=$((hn+1)); git -C "$T/work" checkout -q main
+  bump "$hn" "dep-pmf-$hn" "Bump left-pad from 1.2.3 to 1.2.4" 1.2.4 '{}' "$pf" $'packages: []\n'
+  rm -f "$T/installed.flag"; fresh; st_reply default "$MERGE_REPLY"; st_duty quartermaster --pr "$hn"
+  ck "P1 a pull request that changes $pf is HOLD and the install never runs" '[ ! -e "$T/installed.flag" ] && grep -q "HOLD" <<<"$OUT" && grep -qF "$pf" <<<"$OUT"'
+done
+git -C "$T/work" checkout -q main
+bump 32 dep-liar "Bump left-pad from 1.2.3 to 1.2.4" 1.2.4 '{}' pnpm-workspace.yaml $'packages: []\n'
+: > "$T/ghdata/diff-32.names"
+rm -f "$T/installed.flag"; fresh; st_reply default "$MERGE_REPLY"; st_duty quartermaster --pr 32
+ck "P2 the changed files come from the fetched tree: a GitHub listing that hides pnpm-workspace.yaml does not hide it" '[ ! -e "$T/installed.flag" ] && grep -q "HOLD" <<<"$OUT" && grep -q "pnpm-workspace.yaml" <<<"$OUT"'
+git -C "$T/work" checkout -q main
+bump 33 dep-sha "Bump left-pad from 1.2.3 to 1.2.4" 1.2.4 '{}'
+jq '.headRefOid = "0123456789abcdef0123456789abcdef01234567"' "$T/ghdata/pr-33.json" > "$T/pr33.tmp" && cp "$T/pr33.tmp" "$T/ghdata/pr-33.json"
+rm -f "$T/installed.flag"; fresh; st_reply default "$MERGE_REPLY"; st_duty quartermaster --pr 33 --apply
+ck "P3 a fetched head that is not the sha the metadata reported is REFUSED: no install, no model, nothing posted" '[ "$(last_verdict)" = REFUSED ] && [ ! -e "$T/installed.flag" ] && [ ! -s "$T/claude-calls" ] && no_gh_writes'
+st_registry '["quartermaster"]' "$(jq -nc --arg i "echo net=\$COREPACK_ENABLE_NETWORK > $T/corepack.flag" '{verify:"grep -q OK check.txt", quartermaster:{install:$i}}')"
+st_registry '["quartermaster"]' '{"verify":"grep -q OK check.txt","quartermaster":{"install":"true"}}'
+
 # ---- unparseable replies write nothing; the cap; no bump -----------------------------------------------------------------------------------------
 fresh; st_reply default 'Looks safe to me.'; st_duty quartermaster --pr 1 --apply
 ck "an unparseable reply is an ERROR run that writes nothing to GitHub" '[ "$(last_verdict)" = ERROR ] && no_gh_writes && ! grep -q "add-label" "$T/gh-calls"'

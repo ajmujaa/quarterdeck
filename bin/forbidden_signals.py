@@ -2,7 +2,7 @@
 """The owner's hard privacy limit, enforced. Quarterdeck must NEVER collect: keystrokes, screenshots or screen contents,
 which apps or websites he uses, the clipboard, his location, or any file outside his registered projects and its own
 state/ folder (the few approved exceptions are listed in docs/cloud-tasks/README.md and are timestamps/metadata only).
-This scans code, selftests included (not docs), for the APIs that would do those things and fails if it finds one. It puts split and
+This scans code and docs folders, selftests included, for the APIs that would do those things and fails if it finds one. It puts split and
 concatenated string pieces back together first. It is a net for mistakes and casual hiding, not proof: the run-time sandbox is the enforcement.
 
     python3 bin/forbidden_signals.py [root]      # exit 1 and a list of hits if anything crosses the line
@@ -12,8 +12,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-CODE = {".py", ".js", ".mjs", ".swift", ".sh", ".html"}
-SKIP_DIRS = {".claude", "vendor", "node_modules", ".git", "docs", "state", "logs", "workspace", "__pycache__"}
+CODE = {".py", ".js", ".mjs", ".ts", ".tsx", ".swift", ".sh", ".html"}   # and any extensionless file that starts with a #! line
+SKIP_DIRS = {".claude", "vendor", "node_modules", ".git", "state", "logs", "workspace", "__pycache__"}
 SKIP_FILES = {"forbidden_signals.py"}          # this file names the patterns on purpose
 # The only exemptions: exact strings, in one named file each, that must exist because they DENY or TEST these things. Everything else in those files,
 # selftests included, is scanned. An entry whose string is no longer in its file is reported, so the list cannot quietly outlive its reason.
@@ -40,6 +40,7 @@ ALLOW = {
         """'tool = "".join(["pb", "paste"])'""",
         """'tool = "etsapbp"[::-1]'""",
         """'open(os.path.expanduser("~/Library/Messages/chat.db"))'""",
+        '_fbad = "x = pb" + "paste\\n"',                                           # the B1b sample file body, written to a temp folder
     ],
 }
 RULES = {
@@ -81,15 +82,28 @@ def normalise(text):
     return _BRACKET.sub(r".\1", text).replace('"', "").replace("'", "")
 
 
+def _is_script(p):
+    """An extensionless file is code when it starts with a #! line (a symbolic link is not followed)."""
+    try:
+        if p.is_symlink():
+            return False
+        with open(p, "rb") as fh:
+            return fh.read(2) == b"#!"
+    except OSError:
+        return False
+
+
 def scan(root=ROOT):
     # ponytail: a net for honest mistakes and casual hiding, not proof; hex, base64 or chr() spelling still gets through. The sandbox is the enforcement.
     root = Path(root)
     hits = []
     for p in sorted(root.rglob("*")):
-        if p.suffix not in CODE or not p.is_file() or p.name in SKIP_FILES:
+        if (p.suffix and p.suffix not in CODE) or not p.is_file() or p.name in SKIP_FILES:
             continue
         rel = p.relative_to(root)
         if any(part in SKIP_DIRS for part in rel.parts):
+            continue
+        if not p.suffix and not _is_script(p):
             continue
         try:
             text = p.read_text(errors="replace")

@@ -1,0 +1,63 @@
+name: ci
+
+# The same steps `bin/check.py` runs, minus the live dashboard health call.
+# Every step uses a throwaway HOME, so the tests start from a clean data folder.
+# Nothing here needs a secret, a private denylist or a real data folder.
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "17 5 * * 1"      # weekly, Monday 05:17 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install jq (Linux only; the macOS runner has it)
+        if: runner.os == 'Linux'
+        run: command -v jq || sudo apt-get install -y jq
+      - name: Use a clean home folder
+        run: |
+          mkdir -p "$RUNNER_TEMP/home"
+          echo "HOME=$RUNNER_TEMP/home" >> "$GITHUB_ENV"
+      - name: Selftest
+        run: python3 bin/selftest.py
+      - name: Secrets guard (no denylist, credentials only)
+        run: python3 bin/guard.py
+      - name: Privacy limit
+        run: python3 bin/forbidden_signals.py
+      - name: Assistant page logic (node)
+        run: |
+          if command -v node >/dev/null; then node --no-warnings bin/selftest-assistant.mjs; else echo "node not installed, skipped"; fi
+      - name: Shell selftests
+        run: |
+          for t in bin/selftest.sh bin/selftest-fix.sh bin/selftest-harbourmaster.sh bin/selftest-panel.sh bin/selftest-purser.sh bin/selftest-planner.sh bin/selftest-untrusted.sh bin/selftest-packs.sh bin/selftest-portable.sh bin/selftest-pilot.sh bin/selftest-lookout.sh bin/selftest-marshal.sh bin/selftest-caulker.sh bin/selftest-assayer.sh bin/selftest-logkeeper.sh bin/selftest-quartermaster.sh bin/selftest-bosun.sh bin/selftest-cycle.sh bin/selftest-infra.sh bin/selftest-brief.sh bin/selftest-mockup.sh; do
+            echo "== $t"
+            bash "$t"
+          done
+      - name: Smoke test
+        run: python3 bin/smoke.py
+      - name: Rehearsal
+        run: python3 bin/rehearse.py
+
+# Dependencies: there are none to audit. Quarterdeck is Python standard library and
+# bash only (jq, git and gh are tools it calls, not packages it installs); node is
+# used by the tests alone. The weekly run above catches a runner image or tool
+# version that quietly breaks the tests. If a package manager is ever added, add a
+# dependency audit job here at the same time.

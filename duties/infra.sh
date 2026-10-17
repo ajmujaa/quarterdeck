@@ -223,27 +223,10 @@ result=$(claude_run "$WT" "$prompt" "Read,Grep,Glob" "$DENY"); rc=$?
 [ $rc = 0 ] && [ -n "$result" ] || { record_run "$PROJECT" infra ERROR "$KEY run failed"; die "infra run failed"; }
 
 # A reply that tells anyone to run a cloud command is refused whole. The harness is files only; nothing in a reply is ever run.
-CLOUD_CMD='(^|[^[:alnum:]_./-])((terraform|tofu|terragrunt|pulumi)[[:space:]]+(plan|apply|destroy|import|taint|untaint|force-unlock)|(cdk|sam|sls|serverless|vercel|supabase)[[:space:]]+(deploy|destroy|diff|synth|bootstrap|remove|invoke|logs|login|link|push|pull|migrate|db|functions|secrets|env|--prod|--force|--stage|--profile|-)|aws[[:space:]]+(s3api|s3|iam|ec2|rds|lambda|cloudformation|sts|ssm|secretsmanager|kms|dynamodb|sqs|sns|route53|logs|ecr|ecs|eks|apigateway|configure|--)|wrangler[[:space:]]+(deploy|publish|dev|secret|d1|kv|r2|delete|login|tail|rollback|versions|pages|types|whoami)|(flyctl|fly)[[:space:]]+(deploy|launch|secrets|scale|volumes?|ssh|apps?|machines?|postgres|proxy|console|destroy|auth|logs|status|ips|certs|releases|regions|redeploy|restart)|gcloud[[:space:]]+(run|compute|iam|projects|storage|sql|functions|app|secrets|auth|config|services|container|builds|deploy|kms|logging|pubsub|artifacts|organizations|alpha|beta)|gsutil[[:space:]]+(cp|mv|rm|iam|acl|ls|mb|rb|rsync|defacl)|bq[[:space:]]+(query|mk|rm|load|extract|update)|azd[[:space:]]+(up|deploy|provision|down|auth|env|init|pipeline)|az[[:space:]]+(login|account|group|deployment|storage|keyvault|role|webapp|functionapp|resource|vm|network|sql|cosmosdb|monitor|ad|acr|bicep|containerapp|--))'
-# Matched on the reply as a reader would see it once decoded (round 5: "terraform destroy" inside the JSON passed the raw text): escapes
-# ( , \t, \x20, &nbsp;) decoded, every unicode space, control and invisible character made a plain space, quotes and backslashes dropped
-# ("terra\"form\""), letter case folded.
-plain=$(python3 -c '
-import html, re, sys, unicodedata
-t = sys.stdin.read()
-for _ in range(2):
-    t = re.sub(r"\\u([0-9a-fA-F]{4})", lambda m: chr(int(m.group(1), 16)), t)
-    t = re.sub(r"\\x([0-9a-fA-F]{2})", lambda m: chr(int(m.group(1), 16)), t)
-    t = re.sub(r"\\[tnrfv]", " ", t)
-    t = html.unescape(t)
-t = unicodedata.normalize("NFKC", t)
-t = "".join(" " if unicodedata.category(c)[0] in "ZC" and c != "\n" else c for c in t)
-# ponytail: an all-capitals AWS or AZ is the cloud named in prose ("the AWS IAM role"), not the command, so it is kept apart before folding case
-t = re.sub(r"\b(AWS|AZ|AZD)\b", r"\1_", t)
-t = re.sub(r"[\"'"'"'`\\]", "", t).casefold()
-print(re.sub(r"[ ]+", " ", t))' <<<"$result") || plain="$result"
-if grep -Eq "$CLOUD_CMD" <<<"$result"$'\n'"$plain"; then
-  say "  refused: the reply tells someone to run a cloud command: $(grep -Eo "$CLOUD_CMD" <<<"$result
-$plain" | head -1 | sed 's/^[^[:alnum:]]//')"
+# Matched on the reply as a reader would see it (decoded, invisible characters dealt with, line breaks and options before the verb allowed): bin/cloudcmd.py.
+found=$(python3 "$QUARTERDECK_DIR/bin/cloudcmd.py" <<<"$result"); rc=$?
+if [ $rc != 0 ]; then       # 1 = a command was found; anything else = the check itself failed, which is refused too (never open on a crash)
+  say "  refused: the reply tells someone to run a cloud command: ${found:-(the check could not run)}"
   record_run "$PROJECT" infra ERROR "$KEY the reply suggested running a cloud command"
   die "infra: the reply suggested running a cloud command — refused, nothing written (see logs/runs/$QUARTERDECK_RUN_ID.json)"
 fi

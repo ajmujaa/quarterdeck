@@ -10,7 +10,7 @@
 //
 // Rules: name (every control has an accessible name), ids (unique), headings (one h1, no skipped level), landmarks, img-alt, aria (valid
 // roles, attributes and references; nothing focusable inside aria-hidden), tabindex (none positive), contrast (text >= 4.5:1, large 3:1),
-// focus (a visible indicator on every tab stop; the ring colour is >= 3:1 on every surface), skip, dialogs, brain-esc.
+// select-popup (every sl-select list opens at its control, inside the viewport, clear of the nav rail), focus (a visible indicator on every tab stop; the ring colour is >= 3:1 on every surface), skip, dialogs, brain-esc.
 // Exit 0 clean, 1 findings, 3 no Playwright or no browser (the JSON says so; selftest treats that as a skip, never a pass).
 import {createRequire} from "node:module";
 import {spawn, spawnSync} from "node:child_process";
@@ -283,6 +283,7 @@ for (const theme of THEMES) for (const calm of CALMS) {
     }
     if (process.env.QD_VERBOSE) console.log(view, theme, calm ? "calm" : "normal", "text checked for contrast:", await page.evaluate(() => window.__ctN));
     await axNames(c);
+    await selectPopups(c);
     if (FOCUS) {                                                                       // the 3 second poll is paused for the walk, so the page does not redraw under the pixel comparison
       await page.evaluate(() => { window.__tick = window.tick; window.tick = async () => {}; });
       stats.stops += await focusWalk(c, view === "brain" ? 60 : 90);
@@ -290,6 +291,27 @@ for (const theme of THEMES) for (const calm of CALMS) {
     }
     stats.views++;
   }
+}
+
+// select popups: open every visible sl-select; its list must start at the control's left edge (a few px), sit inside the viewport and clear of the nav rail
+async function selectPopups(ctxo) {
+  const n = await page.evaluate(() => [...document.querySelectorAll("sl-select")].filter(e => e.checkVisibility() && e.getBoundingClientRect().width && !e.closest("sl-dialog,sl-drawer")).length);
+  for (let i = 0; i < n; i++) {
+    const r = await page.evaluate(async i => {
+      const e = [...document.querySelectorAll("sl-select")].filter(e => e.checkVisibility() && e.getBoundingClientRect().width && !e.closest("sl-dialog,sl-drawer"))[i];
+      if (!e) return null;
+      e.scrollIntoView({block: "center"}); await new Promise(r => setTimeout(r, 50));
+      await e.show(); await new Promise(r => setTimeout(r, 250));
+      const lb = e.shadowRoot.querySelector("[part~=listbox]"), c = e.getBoundingClientRect(), l = lb.getBoundingClientRect();
+      const rail = document.querySelector(".rail"), rr = rail && getComputedStyle(rail).display !== "none" ? rail.getBoundingClientRect().right : 0;
+      await e.hide();
+      return {id: e.id || e.getAttribute("label") || "#" + i, cl: c.left, ll: l.left, lr: l.right, rail: rr, vw: innerWidth};
+    }, i);
+    if (!r) continue;
+    const bad = r.ll < -0.5 ? "starts off screen" : r.lr > r.vw + 0.5 ? "runs off the right edge" : r.ll < r.rail - 0.5 ? `starts under the nav rail (list ${Math.round(r.ll)}, rail ends ${Math.round(r.rail)})` : Math.abs(r.ll - r.cl) > 4 && r.cl >= r.rail ? `list at x ${Math.round(r.ll)} but control at x ${Math.round(r.cl)}` : "";
+    if (bad) add("select-popup", r.id, bad, ctxo);
+  }
+  await page.evaluate(() => window.scrollTo(0, 0));
 }
 
 // focus ring contrast: the one token against every surface, both themes

@@ -238,7 +238,7 @@ svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.7;stroke
 .sl-toast-stack sl-alert::part(close-button__base){min-width:40px;min-height:40px}
 /* Top bar: wide, everything inline. When the main column is under 940px (a tablet, or a laptop with the Helm panel open) the switches
    and pills fold into one More menu at the right, so row 1 is always the project choice and the search. Phones use the Menu drawer. */
-.main{container:main/inline-size}
+.main{container:main/inline-size;contain:layout}   /* container-type already contains layout, so a position:fixed popup (a hoisted sl-select list) is placed against .main, not the viewport; saying contain:layout lets Shoelace's positioning library see it and correct for it (bin/a11y-check.mjs, select-popup) */
 .tb-more{display:none;margin-left:auto}
 .k-all{display:none}
 @media (pointer:coarse),(max-width:760px){.k-key{display:none}.k-all{display:inline}}
@@ -701,7 +701,7 @@ body.brain-mode .page{padding:0;max-width:none;margin:0;display:flex;flex-direct
 body.brain-mode #lost{margin:var(--s2) 20px 0}
 body.brain-mode #view{flex:1;min-height:0;display:flex;flex-direction:column}
 body.brain-mode .rh{flex:1;min-height:0;overflow:auto;margin:var(--s3) var(--s4)}
-.brain-bar{container:bbar/inline-size}
+.brain-bar{container:bbar/inline-size;contain:layout}
 .bb-row{display:flex;align-items:center;gap:var(--s3);flex-wrap:nowrap;min-width:0}
 .bb-grp{display:flex;align-items:center;gap:var(--s2);flex:none;min-width:0}
 .bb-grp+.bb-grp{padding-left:var(--s3);border-left:1px solid var(--line-2)}

@@ -5151,6 +5151,13 @@ def make_server(port):
             finally:
                 slots.release()
     sessions_revoke()               # a process that held this port while the dashboard was down may have the old cookie and token: they stop working. The owner pairs again with `quarterdeck dashboard link`
+    # and the pending pairing links (audit 7, L2): an impostor holding the port served the page a link opened and read its #pair= code; once the
+    # real server bound, that code was still good for five minutes. bin/quarterdeck mints the link it prints only after this server answers.
+    for f in (STATE / "pair").glob("*"):
+        try:
+            f.unlink()
+        except OSError:
+            pass
     return Server(("127.0.0.1", port), Handler)
 
 

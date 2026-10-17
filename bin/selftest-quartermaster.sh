@@ -82,6 +82,10 @@ ck "a licence change: HOLD, naming the package and both licences" 'grep -q "lice
 st_registry '["quartermaster"]' '{"verify":"grep -q OK check.txt","quartermaster":{"install":"false"}}'
 fresh; st_reply default "$MERGE_REPLY"; st_duty quartermaster --pr 1
 ck "an install that fails: HOLD, whatever the model says" 'grep -q "the install failed" <<<"$OUT" && grep -q "HOLD" <<<"$OUT"'
+# audit 7 (Info): with COREPACK_ENABLE_NETWORK=0 a machine whose corepack cache lacks the pinned version fails every install; the hold says why
+st_registry '["quartermaster"]' '{"verify":"grep -q OK check.txt","quartermaster":{"install":"echo \"Usage Error: Network access disabled by the environment; cannot reach npm repository\" >&2; exit 1"}}'
+fresh; st_reply default "$MERGE_REPLY"; st_duty quartermaster --pr 1
+ck "I7 an install corepack could not fetch for is a HOLD that names corepack's cache and the one command that fills it" 'grep -q "HOLD" <<<"$OUT" && grep -q "corepack install" <<<"$OUT"'
 st_registry '["quartermaster"]' '{"verify":"grep -q NEVER check.txt","quartermaster":{"install":"true"}}'
 fresh; st_reply default "$MERGE_REPLY"; st_duty quartermaster --pr 1
 ck "the project's own check failing on the head: HOLD, naming the check" 'grep -q "the project.s own checks fail on the head: verify" <<<"$OUT" && grep -q "HOLD" <<<"$OUT"'

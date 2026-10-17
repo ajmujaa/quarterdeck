@@ -97,7 +97,7 @@ forbidden_hit() {
   local p="$1" f
   while read -r f; do
     [ -n "$f" ] || continue
-    F="$f" awk -v p="$p" 'BEGIN { exit !(index(tolower(p), tolower(ENVIRON["F"])) == 1) }' && { printf '%s' "$f"; return 0; }
+    fp_hit "$p" "$f" && { printf '%s' "$f"; return 0; }
   done < <(jq -r --arg p "$PROJECT" '(.[$p].forbidden_paths // [])[]' "$PROJECTS_FILE")
   return 1
 }

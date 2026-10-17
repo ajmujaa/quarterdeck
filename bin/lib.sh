@@ -122,7 +122,8 @@ guard() { # guard <seconds> <cmd...>
 # guard_group <seconds> <cmd...> — guard, for project code: the command runs as the leader of its own process group, and when it ends (or the time
 # is up) the whole group is killed. A child it left running (detached, stdout closed) would otherwise outlive the check and could change the
 # worktree after a gate had looked at it (round 6, H1). A command that left anything running fails (exit 125) even if it exited 0.
-# A child that moved itself to another group or session (setsid) is not reached; the gates do not depend on this kill (post_checks_gate stages first).
+# A child that moved itself to another group or session (setsid) is not reached. The gates do not depend on this kill: a check runs in a
+# throwaway clone of the worktree and cannot write the worktree at all (project_exec, audit 7 M1), and post_checks_gate stages first.
 guard_group() {
   local secs=$1; shift
   perl -e '
@@ -132,10 +133,13 @@ guard_group() {
     my $to = 0; local $SIG{ALRM} = sub { $to = 1; kill "KILL", -$pid };
     alarm $s; waitpid($pid, 0); my $st = $?; alarm 0;
     select(undef, undef, undef, 0.05);
-    my $left = kill 0, -$pid; kill "KILL", -$pid;
+    my $left = kill 0, -$pid; my %n;
+    if ($left) { for (`ps -A -o pgid= -o comm= 2>/dev/null`) { $n{(split m{/}, $2)[-1]} = 1 if /^\s*(\d+)\s+(.*?)\s*$/ && $1 == $pid } }
+    kill "KILL", -$pid;
     if ($to) { print STDERR "\n[quarterdeck] timed out after ${s}s; the process group was killed\n"; exit 142 }
     my $rc = ($st & 127) ? 128 + ($st & 127) : $st >> 8;
-    if ($left) { print STDERR "\n[quarterdeck] the command left a process running; it was killed, and the command counts as failed\n"; exit($rc || 125) }
+    # (audit 7, Info) the name of what was left: a build daemon (turbo, the gradle daemon) fails every check this way, base and after alike
+    if ($left) { my $w = join(", ", sort keys %n) || "unknown"; print STDERR "\n[quarterdeck] the command left a process running ($w); it was killed, and the command counts as failed. A build tool that starts a daemon does this: run it without one in the check command (TURBO_DAEMON=false, gradle --no-daemon)\n"; exit($rc || 125) }
     exit $rc;' "$secs" "$@"
 }
 
@@ -325,6 +329,9 @@ gh_post() {
 # No duty may hardcode a repo, a path, or a guardrail.
 
 project_names() { jq -r 'keys[]' "$PROJECTS_FILE"; }
+# fp_hit <path> <forbidden-entry> — 0 when a registry forbidden_paths entry covers the path: a literal prefix in any letter case (through the
+# environment, so awk reads no backslash escapes), and an entry "X/" also covers the bare name X (a folder replaced by a symlink, audit 7 M2)
+fp_hit() { P="$1" F="$2" awk 'BEGIN { p = tolower(ENVIRON["P"]); f = tolower(ENVIRON["F"]); g = f; sub(/\/+$/, "", g); exit !(f != "" && (index(p, f) == 1 || (g != f && p == g))) }'; }
 project_exists() { jq -e --arg p "$1" 'has($p)' "$PROJECTS_FILE" >/dev/null 2>&1; }
 project_get() { # project_get <name> <jq-path-without-leading-dot> [default]
   local v
@@ -857,10 +864,40 @@ worktree_at() { # worktree_at <source-repo> <path> <ref>
 }
 worktree_nm_borrow() { # worktree_nm_borrow <source-repo> <worktree> — links and records the source checkout's node_modules (see worktree_at)
   local src=$1 wt=$2 p; p=$(cd "$wt" && pwd -P) || return 1; rm -f "$p.nmlink"
+  src=$(cd "$src" 2>/dev/null && pwd -P) || return 0      # the real path: a seatbelt rule matches the resolved path, never /var for /private/var
   if [ -d "$src/node_modules" ] && [ ! -e "$wt/node_modules" ] && [ ! -L "$wt/node_modules" ]; then
     ln -s "$src/node_modules" "$wt/node_modules" 2>/dev/null && { printf '%s' "$src/node_modules" > "$p.nmlink"; chmod 600 "$p.nmlink"; }
   fi
   return 0
+}
+# _qd_nm_spread <borrowed-node_modules> <clone> — in a check's throwaway clone (audit 7, L6): node_modules becomes a folder of links into the borrowed
+# one, except that a workspace package's link (node_modules/@s/lib -> ../../packages/lib, which leads into the main checkout, closed to a check)
+# points at the clone's own copy of that package. Nothing outside the clone changes, and the main checkout stays closed.
+# ponytail: top level and @scope/ entries only; a workspace link deeper down (pnpm's .pnpm/*/node_modules, a .bin script of a workspace package,
+# a package's own node_modules) still leads into the main checkout and is refused; walk those too if a real monorepo needs it.
+_qd_nm_spread() {
+  [ -n "$1" ] && [ -L "$2/node_modules" ] || return 0
+  python3 - "$1" "$2" <<'PY' 2>/dev/null || { rm -rf "$2/node_modules"; ln -s "$1" "$2/node_modules"; }
+import os, sys
+nm, run = sys.argv[1], sys.argv[2]
+src, nmr, out = os.path.realpath(os.path.dirname(nm)), os.path.realpath(nm), os.path.join(run, "node_modules")
+os.unlink(out); os.mkdir(out)
+def one(e, dest):
+    t = os.path.realpath(e)
+    if os.path.islink(e) and t.startswith(src + os.sep) and not t.startswith(nmr + os.sep):
+        own = os.path.join(run, os.path.relpath(t, src))
+        if os.path.exists(own):
+            return os.symlink(own, dest)
+    os.symlink(e, dest)
+for n in os.listdir(nm):
+    e = os.path.join(nm, n)
+    if n.startswith("@") and os.path.isdir(e) and not os.path.islink(e):
+        os.mkdir(os.path.join(out, n))
+        for m in os.listdir(e):
+            one(os.path.join(e, m), os.path.join(out, n, m))
+    else:
+        one(e, os.path.join(out, n))
+PY
 }
 _qd_nm_borrowed() { # _qd_nm_borrowed <physical-worktree> — the node_modules target worktree_at linked, if the link is still exactly that; else nothing
   local rec t; rec=$(cat "$1.nmlink" 2>/dev/null) || return 0
@@ -891,7 +928,8 @@ pr_diff_text() { # pr_diff_text <owner/repo> <number> — a pull request's diff 
 # They are run here with:
 #   env -i       PATH, a scratch HOME and TMPDIR, LANG and TERM and nothing else: not what ~/.config/quarterdeck/env exports, not GH_TOKEN
 #   seatbelt     on macOS, inside sandbox-exec: it may read everything except the private list (the same one the models are denied),
-#                write only in the worktree, a scratch folder and the temp folders, and reach only this machine on the network
+#                write only in its run folder (a check: a throwaway clone of the worktree; an install: the worktree), a scratch folder and
+#                the temp folders (never the worktree itself, for a check), and reach only this machine on the network
 #                (an install may reach the network, for the package manager, and keep its cache in ~/.npm)
 #   a timeout    guard, as before
 # sandbox-exec is deprecated by Apple but ships with macOS and is what Claude Code's own sandbox is built on. Where it is missing
@@ -926,8 +964,8 @@ _qd_sb_allow_read() { # _qd_sb_allow_read <folder> — lets a folder back in aft
   case "$1" in ''|*'"'*|*'\'*) return 0 ;; esac
   printf '(allow file-read* file-read-data (subpath "%s"))\n' "$1"
 }
-_qd_sb_profile() { # _qd_sb_profile <check|install> <worktree> <scratch>
-  local mode=$1 wt=$2 scratch=$3 p w q h nm d prev=""
+_qd_sb_profile() { # _qd_sb_profile <check|install|serve> <worktree> <scratch> [run-folder] — the run folder (default: the worktree) is where the command runs and may write
+  local mode=$1 wt=$2 scratch=$3 run=${4:-$2} p w q h nm d prev=""
   local -a pe
   printf '(version 1)\n(allow default)\n'
   if [ "$mode" != install ]; then
@@ -969,7 +1007,7 @@ _qd_sb_profile() { # _qd_sb_profile <check|install> <worktree> <scratch>
   # (…/.git/worktrees/<name>) lets anything in: "gitdir: $HOME" lets in nothing.
   if [ -f "${wt%/}.gitpin" ]; then q=$(head -1 "${wt%/}.gitpin"); else q=$(sed -n 's/^gitdir: //p' "$wt/.git" 2>/dev/null | head -1); fi
   case "$q" in */.git/worktrees/*) q=${q%/worktrees/*} ;; *) q="" ;; esac
-  for p in "$wt" "$scratch" "$(_qd_nm_borrowed "$wt")" "$q"; do [ -n "$p" ] && _qd_sb_allow_read "$p"; done
+  for p in "$run" "$scratch" "$(_qd_nm_borrowed "$wt")" "$q"; do [ -n "$p" ] && _qd_sb_allow_read "$p"; done
   # Round 6 (L1): of the main checkout's .git, git in the worktree needs the objects, refs and its own worktrees/<name>; not the stash (work the
   # owner set aside), the reflogs, or the main checkout's index (what the owner staged). Its config is still readable: git refuses to run without
   # it, and a credential written into a remote URL there is readable to a check (stated in SECURITY.md).
@@ -997,14 +1035,18 @@ _qd_sb_profile() { # _qd_sb_profile <check|install> <worktree> <scratch>
     done
     [ "$QUARTERDECK_HOME" = "$QUARTERDECK_DIR" ] && break
   done
-  w="(subpath \"$wt\") (subpath \"$scratch\") (subpath \"/private/tmp\") (subpath \"/private/var/folders\") (literal \"/dev/null\") (literal \"/dev/zero\") (literal \"/dev/tty\") (literal \"/dev/dtracehelper\") (regex #\"^/dev/ttys[0-9]+$\")"
+  w="(subpath \"$run\") (subpath \"$scratch\") (subpath \"/private/tmp\") (subpath \"/private/var/folders\") (literal \"/dev/null\") (literal \"/dev/zero\") (literal \"/dev/tty\") (literal \"/dev/dtracehelper\") (regex #\"^/dev/ttys[0-9]+$\")"
   [ "$mode" = install ] && w="$w (subpath \"$HOME/.npm\") (subpath \"$HOME/.cache\") (subpath \"$HOME/Library/Caches\") (subpath \"$HOME/.pnpm-store\") (subpath \"$HOME/.yarn\")"
   printf '(deny file-write* (require-not (require-any %s)))\n' "$w"
   # Round 6 (L3): /private/tmp stays writable (G14), but not Claude Code's own session folders there (task output of other sessions).
   # (the worktree and scratch folder win over it, should the data folder itself sit there)
-  printf '(deny file-read* file-write* (regex #"^/private/tmp/claude-"))\n(allow file-read* file-write* (subpath "%s") (subpath "%s"))\n' "$wt" "$scratch"
+  # (audit 7: and the same under the per-user temp folder, $TMPDIR = /private/var/folders/<xx>/<id>/T/claude-*)
+  printf '(deny file-read* file-write* (regex #"^/private/tmp/claude-") (regex #"^/private/var/folders/[^/]+/[^/]+/T/claude-"))\n(allow file-read* file-write* (subpath "%s") (subpath "%s"))\n' "$run" "$scratch"
+  # Audit 7 (M1): when the command runs in a throwaway clone, the worktree itself (which is gated and committed) is not writable at all, even where
+  # it sits under a folder that is (/private/tmp, /private/var/folders): a child that outlived the check could otherwise edit it before the first gate.
+  [ "$run" != "$wt" ] && case "$wt" in *'"'*|*'\'*) ;; *) printf '(deny file-write* (subpath "%s"))\n' "$wt" ;; esac
   # The worktree's .git file (round-5 A2), as the model's own sandbox already has it: rewritten, it would point git somewhere else.
-  case "$wt" in *'"'*|*'\'*) ;; *) printf '(deny file-write* (subpath "%s/.git"))\n' "$wt" ;; esac
+  case "$run" in *'"'*|*'\'*) ;; *) printf '(deny file-write* (subpath "%s/.git"))\n' "$run" ;; esac
 }
 
 # ---- Linux: the same promises with bubblewrap (issue #84, gap G5). NOT RUN ON REAL LINUX: written on a Mac, tested only as an argument list and
@@ -1017,9 +1059,11 @@ _qd_sb_profile() { # _qd_sb_profile <check|install> <worktree> <scratch>
 # (no TIOCSTI), no capabilities, --die-with-parent. Differences from the Mac profile, stated in SECURITY.md: /etc is readable (resolv.conf, ssl,
 # passwd); a unix socket of the host is not reachable only because nothing outside the list is mounted.
 # serve: the check sandbox with the host network shared, for the app a browser run starts (see qd_app_net_refused).
-# _qd_bwrap_argv <check|install|serve> <worktree> <scratch> [node_modules-target] — prints the bwrap words, one per line, ending with "--". Pure: no probing.
+# _qd_bwrap_argv <check|install|serve> <worktree> <scratch> [node_modules-target] [run-folder] — prints the bwrap words, one per line, ending with "--". Pure: no probing.
+# The run folder (default: the worktree) is the one bound writable and run in; a clone inside the scratch folder leaves the worktree unmounted.
 _qd_bwrap_argv() {
   local mode=$1 wt=$2 scratch=$3 nm=${4:-} a p e k bad
+  [ -n "${5:-}" ] && wt=$5
   local -a a_=() pe hm
   for a in "$wt" "$scratch" "$nm" "$HOME"; do case "$a" in *$'\n'*) return 1 ;; esac; done
   a_=(--die-with-parent --new-session --cap-drop ALL --unshare-all)
@@ -1102,19 +1146,34 @@ qd_sandbox_status() {
 # keeps running): PX_ENV (the env -i words: PATH, a scratch HOME and TMPDIR, LANG, TERM), PX_PRE (the sandbox-exec words, empty where there is none),
 # PX_SCRATCH (the caller removes it), RUN_SANDBOX. Returns 126 on a Mac where the sandbox cannot be applied: nothing is to be run then.
 #   env -i "${PX_ENV[@]}" ${PX_PRE[@]+"${PX_PRE[@]}"} bash -c "$cmd"
+# px_prepare <check|install|serve> <worktree> [clone] — with "clone" the worktree is copied into the scratch folder first (PX_RUN, an APFS clone where it
+# can be), and the sandbox lets the command write only that copy: project code never has write access to the tree that is gated and committed
+# (audit 7, M1: a child that left the session with setsid outlived guard_group and edited the worktree before the first gate). Else PX_RUN is the worktree.
+# The pilot and lookout call it without "clone" for both their build and their app start: the app must run on what was built, and those duties
+# review a pull request and never commit, so the M1 race (an edit landing in a commit) does not exist there.
 px_prepare() {
   local mode=$1 wt home
-  RUN_SANDBOX=none; PX_PRE=(); PX_SCRATCH=""; PX_WHY=""
+  RUN_SANDBOX=none; PX_PRE=(); PX_SCRATCH=""; PX_WHY=""; PX_RUN=""
   if [ "$mode" = serve ] && PX_WHY=$(qd_app_net_refused); then log "px_prepare: $PX_WHY"; return 126; fi
   PX_WHY=""
   wt=$(cd "$2" 2>/dev/null && pwd -P) || return 127
+  # what a killed run left behind (a scratch folder, now holding a clone, is otherwise removed by its caller)
+  find "$QUARTERDECK_HOME/workspace" -maxdepth 1 -name 'exec.*' -type d -mmin +720 -exec rm -rf {} + 2>/dev/null
   PX_SCRATCH=$(mktemp -d "$QUARTERDECK_HOME/workspace/exec.XXXXXX") || return 127
   PX_SCRATCH=$(cd "$PX_SCRATCH" && pwd -P); mkdir -p "$PX_SCRATCH/home" "$PX_SCRATCH/tmp"
+  PX_RUN=$wt
+  if [ "${3:-}" = clone ]; then
+    PX_RUN="$PX_SCRATCH/wt"
+    # -c: clonefile(2) on APFS (no data copied); GNU cp: a reflink where the file system has them. Links are copied as links, never followed.
+    cp -cR "$wt" "$PX_RUN" 2>/dev/null || { rm -rf "$PX_RUN"; cp -R --reflink=auto "$wt" "$PX_RUN" 2>/dev/null; } \
+      || { rm -rf "$PX_RUN"; cp -R "$wt" "$PX_RUN" 2>/dev/null; } || { rm -rf "$PX_SCRATCH"; PX_SCRATCH=""; return 127; }
+    _qd_nm_spread "$(_qd_nm_borrowed "$wt")" "$PX_RUN"
+  fi
   home="$PX_SCRATCH/home"; [ "$mode" = install ] && home="$HOME"
   PX_ENV=("PATH=$PATH" "HOME=$home" "TMPDIR=$PX_SCRATCH/tmp" "LANG=${LANG:-C}" "TERM=dumb")
   if [ "${QUARTERDECK_CHECK_SANDBOX:-on}" = on ] && [ "$(uname -s)" = Darwin ]; then
     if [ -x /usr/bin/sandbox-exec ] && /usr/bin/sandbox-exec -p '(version 1)(allow default)' /usr/bin/true >/dev/null 2>&1; then
-      _qd_sb_profile "$mode" "$wt" "$PX_SCRATCH" > "$PX_SCRATCH/profile.sb" && { PX_PRE=(/usr/bin/sandbox-exec -f "$PX_SCRATCH/profile.sb"); RUN_SANDBOX=seatbelt; }
+      _qd_sb_profile "$mode" "$wt" "$PX_SCRATCH" "$PX_RUN" > "$PX_SCRATCH/profile.sb" && { PX_PRE=(/usr/bin/sandbox-exec -f "$PX_SCRATCH/profile.sb"); RUN_SANDBOX=seatbelt; }
     fi
     if [ "$RUN_SANDBOX" != seatbelt ]; then
       log "px_prepare: no usable sandbox-exec here; a project command is not run unsandboxed (QUARTERDECK_CHECK_SANDBOX=off accepts that)"
@@ -1129,7 +1188,7 @@ px_prepare() {
       nmt=$(_qd_nm_borrowed "$wt")
       if _qd_bwrap_usable; then
         PX_PRE=("$bw")
-        while IFS= read -r w; do PX_PRE+=("$w"); done < <(_qd_bwrap_argv "$mode" "$wt" "$PX_SCRATCH" "$nmt") && RUN_SANDBOX=bwrap
+        while IFS= read -r w; do PX_PRE+=("$w"); done < <(_qd_bwrap_argv "$mode" "$wt" "$PX_SCRATCH" "$nmt" "$PX_RUN") && RUN_SANDBOX=bwrap
       fi
       if [ "$RUN_SANDBOX" != bwrap ]; then
         PX_WHY="bubblewrap (bwrap) is missing or cannot make namespaces here, and a project command is never run without a file sandbox on Linux by default (install bubblewrap, or set QUARTERDECK_CHECK_SANDBOX=off to accept that)"
@@ -1140,17 +1199,28 @@ px_prepare() {
   fi
   return 0
 }
+# A check runs in a throwaway clone of the worktree (px_prepare ... clone); what it writes goes away with the clone, and the clone's path in its
+# output is put back as the worktree's. An install runs in the worktree itself: what it installs is what the checks after it need, and the one duty
+# that installs (the quartermaster) never commits.
 project_exec() {
-  local mode=$1 secs=$2 cmd=$4 wt rc=0 pr=0
-  EXEC_OUT=""
+  local mode=$1 secs=$2 cmd=$4 wt rc=0 pr=0 how=clone
+  EXEC_OUT=""; RUN_SANDBOX_DENIED=""
   wt=$(cd "$3" 2>/dev/null && pwd -P) || { EXEC_OUT="no such folder: $3"; RUN_SANDBOX=none; return 127; }
-  px_prepare "$mode" "$wt" || pr=$?
+  [ "$mode" = install ] && how=""
+  px_prepare "$mode" "$wt" $how || pr=$?
   if [ "$pr" = 126 ]; then
     EXEC_OUT="not run: ${PX_WHY:-the macOS sandbox could not be applied, and a project command is never run unsandboxed on a Mac by default}"
     return 126
   elif [ "$pr" != 0 ]; then EXEC_OUT="cannot make a scratch folder"; return 127; fi
-  EXEC_OUT=$(cd "$wt" && guard_group "$secs" env -i "${PX_ENV[@]}" ${PX_PRE[@]+"${PX_PRE[@]}"} bash -c "$cmd" 2>&1) || rc=$?
+  EXEC_OUT=$(cd "$PX_RUN" && guard_group "$secs" env -i "${PX_ENV[@]}" ${PX_PRE[@]+"${PX_PRE[@]}"} bash -c "$cmd" 2>&1) || rc=$?
+  [ "$PX_RUN" != "$wt" ] && EXEC_OUT=${EXEC_OUT//"$PX_RUN"/"$wt"}
   rm -rf "$PX_SCRATCH"
+  # audit 7 (L6): a failure the sandbox caused reads like any other, and pushed owners to turn the sandbox off. It is named as what it is.
+  if [ "$rc" != 0 ] && [ "$RUN_SANDBOX" = seatbelt ] && grep -q "Operation not permitted" <<<"$EXEC_OUT"; then
+    EXEC_OUT="$EXEC_OUT
+[quarterdeck] the sandbox refused a read or write here (\"Operation not permitted\" above), so this failure may say nothing about the code. A check may read only the worktree, the borrowed node_modules and the toolchain on PATH, never your other checkouts or credentials. If it needs a file outside those, that is the thing to change (see SECURITY.md, \"What is protected\"); the code was not judged."
+    RUN_SANDBOX_DENIED=1
+  fi
   return $rc
 }
 # fork_refuse <pr-json> — returns 0 (and says why on stdout) unless the pull request's head is a branch of the repository itself. A fork's head is a
@@ -1192,6 +1262,7 @@ model_diff_gate() {
   while IFS= read -r a; do [ -n "$a" ] && args+=(--allow "$a"); done < <(jq -r --arg p "$proj" '(.[$p].protected_allow // [])[]' "$PROJECTS_FILE" 2>/dev/null)
   while IFS= read -r a; do [ -n "$a" ] && args+=(--extra "$a"); done < <(jq -r --arg p "$proj" '(.[$p].protected_paths // [])[]' "$PROJECTS_FILE" 2>/dev/null)
   [ -n "$plan" ] && [ -f "$plan" ] && args+=(--plan "$plan")
+  args+=(--root "$wt")       # a symlink in the change that leaves the worktree or points at a protected place is refused too (audit 7, M2)
   list=$(cat)
   hits=$( { printf '%s\n' "$list"; wt_ignored_new "$wt"; } | python3 "$QUARTERDECK_DIR/bin/protect.py" check ${args[@]+"${args[@]}"}); rc=$?
   if [ $rc != 0 ]; then
@@ -1299,10 +1370,10 @@ run_checks() { # run_checks <project> <workdir> -> one JSON object per check
     say "    $name: $cmd"
     project_exec check "${QUARTERDECK_CHECK_TIMEOUT:-900}" "$wdir" "$cmd"; rc=$?; out=$EXEC_OUT
     errs=$(grep -ciE '(^|[^[:alnum:]])error' <<<"$out" || true)
-    say "      exit $rc, $errs error line(s) [sandbox: $RUN_SANDBOX]"
+    say "      exit $rc, $errs error line(s) [sandbox: $RUN_SANDBOX]${RUN_SANDBOX_DENIED:+ (the sandbox refused a read or write: see the last line of the output)}"
     jq -nc --arg n "$name" --arg c "$cmd" --argjson rc "${rc:-1}" --arg sb "$RUN_SANDBOX" \
-           --argjson e "${errs:-0}" --arg t "$(tail -25 <<<"$out")" \
-       '{name:$n, cmd:$c, rc:$rc, errors:$e, tail:$t, sandbox:$sb}'
+           --argjson e "${errs:-0}" --arg t "$(tail -25 <<<"$out")" --arg dn "${RUN_SANDBOX_DENIED:-}" \
+       '{name:$n, cmd:$c, rc:$rc, errors:$e, tail:$t, sandbox:$sb} + (if $dn != "" then {sandbox_denied:true} else {} end)'
   done
 }
 
@@ -1326,7 +1397,8 @@ check_regressions() { # check_regressions <before-json-lines> <after-json-lines>
 # One line per check, for a pull request body that states what was actually run.
 checks_summary() { # checks_summary <after-json-lines>
   jq -rs 'if length == 0 then "No local checks are configured for this project."
-          else map("- `\(.cmd)` — exit `\(.rc)`" + (if .errors > 0 then ", \(.errors) error line(s)" else "" end))
+          else map("- `\(.cmd)` — exit `\(.rc)`" + (if .errors > 0 then ", \(.errors) error line(s)" else "" end)
+                   + (if .sandbox_denied then " (the sandbox refused a read or write it needed, so this exit says nothing about the code)" else "" end))
                | join("\n") end
           + (if any(.[]?; .sandbox == "none") then "\n\nThese checks ran without an operating-system sandbox (none is available on that machine); they ran with a minimal environment and no secrets." else "" end)' <<<"$1"
 }

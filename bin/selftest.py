@@ -3836,7 +3836,8 @@ check("#85 the worktree screen finds a credential by content under any name, in 
 _wn = Path(_tf0.mkdtemp(prefix="qd-wtnested-"))
 (_wn / "inner" / ".git" / "objects").mkdir(parents=True); (_wn / "inner" / "src.txt").write_text("k=AKIA" + "Q" * 16 + "\n")
 (_wn / "inner" / ".git" / "config").write_text("[remote]\n\turl = https://x:ghp_" + "a" * 36 + "@example.com/r.git\n"); (_wn / "inner" / ".git" / "objects" / "o").write_text("AKIA" + "Q" * 16)
-check("#85b the worktree screen reads the files of a nested repository and its .git/config, never the rest of its .git", _gu2.worktree_secrets(_wn) == (["inner/.git/config", "inner/src.txt"], [], True), _gu2.worktree_secrets(_wn))
+# audit 7 (L4): the nested .git is denied whole now (its config with the token in it too), instead of only its config being screened
+check("#85b the worktree screen reads the files of a nested repository and denies its .git whole", _gu2.worktree_secrets(_wn) == (["inner/src.txt"], ["inner/.git"], True), _gu2.worktree_secrets(_wn))
 
 # ---- B1 (round 5): the privacy-limit scan is not beaten by splitting a name, building it at run time, or naming the file selftest* ------------------
 import forbidden_signals as _fsig
@@ -3866,6 +3867,14 @@ for _rel in ("vendor/v.py", "node_modules/n.js", ".git/g.py", ".claude/c.py", "s
 (_fk / "NOTICE").write_text(_fbad)
 check("B1b the privacy scan reads an extensionless script, a .ts file and a docs folder, and still skips vendor, node_modules, .git, .claude, state and logs",
       sorted({h[1] for h in _fsig.scan(_fk) if h[0] == "clipboard"}) == ["a/docs/b/ex.sh", "bin/tool", "docs/ex.py", "src/a.ts"], _fsig.scan(_fk))
+# audit 7 (L5): the skipped folders matched at any depth (bin/state/, bin/vendor/ were skipped) and .cjs .mts .cts .jsx .zsh .bash were not scanned
+_fl5 = Path(_tf0.mkdtemp(prefix="qd-fsig-"))
+_l5want = ["app/t.cts", "app/s.bash", "app/u.zsh", "app/v.jsx", "app/w.mts", "app/z.cjs", "bin/state/x.py", "bin/vendor/y.py"]
+for _rel in _l5want + ["node_modules/n.js", "pkg/node_modules/m.js"]:
+    (_fl5 / _rel).parent.mkdir(parents=True, exist_ok=True); (_fl5 / _rel).write_text(_fbad)
+_l5got = sorted({h[1] for h in _fsig.scan(_fl5)})
+check("L5 the privacy scan skips folders only at the root (bin/state/, bin/vendor/ are read; node_modules anywhere is not) and reads .cjs .mts .cts .jsx .zsh .bash",
+      _l5got == sorted(_l5want), _l5got)
 check("B1 the repository itself passes, selftest files included, with only the exact allow-listed strings exempt", _fsig.scan() == [], _fsig.scan()[:5])
 
 # CI proposals under docs/ci/: minimal line checks, no YAML library
@@ -3892,6 +3901,12 @@ _ci_t = Path(_tf0.mkdtemp(prefix="qd-ci-")) / "w.yml"
 _ci_t.write_text("permissions:\n  contents: write\njobs:\n  a:\n    steps:\n      - uses: actions/checkout@v4\n")
 _ci_tl = _ci_t.read_text().splitlines()
 check("CI guard sanity: the same line checks would flag a write permission and a bare tag", any(_re0.search(r"^\s*[\w-]+:\s*write\s*$", l) for l in _ci_tl) and "TODO(pin)" not in _ci_tl[-2])
+
+# audit 7 (L2): an impostor that held the port read a #pair= fragment from the owner's browser; once the real server bound, the nonce was still
+# good for five minutes. The server's start now empties state/pair/ as well as the sessions (bin/quarterdeck mints the link after the health check).
+_l2n = d.pair_mint()
+_l2s = d.make_server(0); _l2s.server_close()
+check("L2 a pairing nonce minted before the dashboard started is no longer good once it has started", d.pair_redeem(_l2n) is False and not any((d.STATE / "pair").iterdir()))
 
 
 print()

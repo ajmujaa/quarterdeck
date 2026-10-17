@@ -191,9 +191,9 @@ changed=$(wt_changed "$WT") || { record_run "$PROJECT" shipwright REFUSED "#$ISS
 # here, because a prompt is a request and this is a rule.
 while read -r forbidden; do
   [ -n "$forbidden" ] || continue
-  # A literal prefix, not a regex: a '.' or '[' in a path must mean itself.
-  # Passed through the environment: awk -v would read backslashes as escapes.
-  if F="$forbidden" awk 'index(tolower($0), tolower(ENVIRON["F"])) == 1 { hit = 1 } END { exit !hit }' <<<"$changed"; then
+  # A literal prefix, not a regex: a '.' or '[' in a path must mean itself (fp_hit, which also matches "X/" against the bare name X).
+  hit=""; while IFS= read -r f; do [ -n "$f" ] && fp_hit "$f" "$forbidden" && { hit=1; break; }; done <<<"$changed"
+  if [ -n "$hit" ]; then
     say "  REFUSED: touched a forbidden path ($forbidden)"
     record_run "$PROJECT" shipwright REFUSED "#$ISSUE touched $forbidden"
     die "refused: the change touches $forbidden"

@@ -2,8 +2,9 @@
 """protect: paths a model-made change may not touch, and the files a project's verify command is built from.
 
     bin/protect.py list                         the default protected paths, one per line
-    bin/protect.py check [--allow P]... [--plan FILE] [--extra GLOB]...
-                                                changed paths on stdin; prints each protected one that is not allowed, exits 1 if any
+    bin/protect.py check [--allow P]... [--plan FILE] [--extra GLOB]... [--root WORKTREE]
+                                                changed paths on stdin; prints each protected one that is not allowed, exits 1 if any;
+                                                with --root, also each one that is a symlink out of the worktree or to a protected place
     bin/protect.py inputs WORKTREE              a digest of what the verify/test/build commands are made of: every package.json
                                                 "scripts" block and every Makefile; print it before the model runs and after
 
@@ -13,11 +14,13 @@ execution on this machine, or into a workflow that runs with the repository's se
 check runs. A path is allowed only when the project's registry lists it in "protected_allow" or the plan the duty was given (a dev panel's
 ruling, not the issue text anyone can write) names it. Even then, a changed scripts block or Makefile is refused (see `inputs`).
 A pattern with no slash matches the file name at any depth; a pattern with a slash matches from the repository root; ** crosses folders.
+A trailing /** also matches the bare name: `.claude/**` matches `.claude`, which is what git records for a folder replaced by a symlink (audit 7, M2).
 Standard library only.
 """
 import fnmatch
 import hashlib
 import json
+import os
 import re
 import sys
 import unicodedata
@@ -58,6 +61,8 @@ def _rx(pat):
     out, i = "", 0
     while i < len(pat):
         c = pat[i]
+        if pat[i:] == "/**":
+            out += "(?:/.*)?"; break
         if pat[i:i + 3] == "**/":
             out += "(?:.*/)?"; i += 3; continue
         if pat[i:i + 2] == "**":
@@ -134,6 +139,23 @@ def violations(paths, allow=(), plan_text="", extra=()):
     return [p for p in paths if p.strip() and matches(p, list(DEFAULT) + list(extra)) and not allowed_by(p.strip(), allow, plan_text)]
 
 
+def link_violations(paths, root, allow=(), extra=()):
+    """The changed paths that are symlinks and resolve outside the worktree, to the worktree itself, into its .git, or to a protected place
+    (audit 7, M2: `.claude -> docs/agent` made an unprotected folder the agent settings). A link the project's protected_allow names is let through."""
+    rootr = os.path.realpath(root)
+    pats = list(DEFAULT) + list(extra)
+    out = []
+    for p in paths:
+        p = p.strip()
+        full = os.path.join(root, p)
+        if not p or not os.path.islink(full) or matches(p, [a for a in allow if a]):
+            continue
+        rel = os.path.relpath(os.path.realpath(full), rootr)
+        if rel in (".", "..") or rel.startswith("../") or rel.split("/")[0] == ".git" or matches(rel, pats):
+            out.append(p + " (a symlink out of the worktree or to a protected place)")
+    return out
+
+
 def inputs_digest(worktree):
     """sha256 over every package.json "scripts" block and every Makefile under the worktree (node_modules and .git left out)."""
     root = Path(worktree)
@@ -165,13 +187,15 @@ def main(argv):
         print(inputs_digest(argv[1]))
         return 0
     if cmd == "check":
-        allow, extra, plan, a = [], [], "", argv[1:]
+        allow, extra, plan, root, a = [], [], "", "", argv[1:]
         while a:
             f = a.pop(0)
             if f == "--allow" and a:
                 allow.append(a.pop(0))
             elif f == "--extra" and a:
                 extra.append(a.pop(0))
+            elif f == "--root" and a:
+                root = a.pop(0)
             elif f == "--plan" and a:
                 try:
                     plan = Path(a.pop(0)).read_text(errors="replace")
@@ -180,7 +204,10 @@ def main(argv):
             else:
                 print(__doc__)
                 return 2
-        bad = violations(sys.stdin.read().splitlines(), allow, plan, extra)
+        paths = sys.stdin.read().splitlines()
+        bad = violations(paths, allow, plan, extra)
+        if root:
+            bad += [b for b in link_violations(paths, root, allow, extra) if b.split(" (", 1)[0] not in bad]
         print("\n".join(bad))
         return 1 if bad else 0
     print(__doc__)

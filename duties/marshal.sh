@@ -86,7 +86,7 @@ while read -r forbidden; do
   # A literal prefix, not a regex; through the environment so awk does not read backslashes as escapes.
   while read -r f; do
     [ -n "$f" ] || continue
-    F="$forbidden" awk -v f="$f" 'BEGIN { exit !(index(tolower(f), tolower(ENVIRON["F"])) == 1) }' && hits="${hits:+$hits, }$f ($forbidden)"
+    fp_hit "$f" "$forbidden" && hits="${hits:+$hits, }$f ($forbidden)"
   done <<<"$changed"
 done < <(jq -r --arg p "$PROJECT" '(.[$p].forbidden_paths // [])[]' "$PROJECTS_FILE")
 if [ -n "$hits" ]; then

@@ -198,8 +198,13 @@ def worktree_secrets(root, max_files=200_000, max_secs=60.0):
             for x in dirs:
                 lp = os.path.join(d, x)
                 if x == ".git" and not os.path.islink(lp):
-                    # a repository's own folder (the project's or a nested one): never read inside the object store, but its config can hold a
-                    # credential (a remote URL with a token), so that one file is screened
+                    if d != root:
+                        # a nested one (audit 7, L4): anything can sit in it, and only its config was screened (a key a check wrote to
+                        # sub/.git/k was readable), so it is denied whole
+                        outlinks.append(os.path.relpath(lp, root))
+                        continue
+                    # the project's own: never read inside the object store, but its config can hold a credential (a remote URL with a
+                    # token), so that one file is screened
                     if os.path.isfile(os.path.join(lp, "config")):
                         look(lp, "config")
                     continue
@@ -266,7 +271,7 @@ def main(argv):
         if z:
             sys.stdout.write("".join(f"F{h}\0" for h in hits) + "".join(f"D{d}\0" for d in dirs))
         else:
-            print("\n".join(hits + [f"(not finished, denied whole) {d}/" for d in dirs]))
+            print("\n".join(hits + [f"(denied whole) {d}/" for d in dirs]))
         return 0 if complete else 3
     while args:
         a = args.pop(0)

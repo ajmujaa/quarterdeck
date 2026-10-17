@@ -8,7 +8,7 @@ st_repo
 
 # every cloud tool, stubbed to fail loudly and leave a mark
 mkdir -p "$T/cloudbin"
-for b in aws terraform tofu cdk sam sls serverless vercel supabase pulumi gcloud gsutil bq az azd bicep wrangler fly flyctl; do
+for b in aws terraform tofu cdk sam sls serverless vercel supabase pulumi gcloud gsutil bq az azd bicep wrangler fly flyctl kubectl helm firebase netlify heroku doctl eksctl docker; do
   printf '#!/bin/bash\necho "%s $*" >> "%s/cloud-calls"\nexit 99\n' "$b" "$T" > "$T/cloudbin/$b"; chmod +x "$T/cloudbin/$b"
 done
 export PATH="$T/cloudbin:$PATH"
@@ -124,6 +124,28 @@ for prose in 'widens the AWS IAM role' 'the terraform state is not in these file
   st_duty infra --pr 2 --apply
   ck "R7 descriptive prose '$prose' is not a command and passes" '[ "$(last_verdict)" = REVIEWED ]'
 done
+# audit 7 (L3): the report is Markdown, so what it renders is what counts (emphasis, a link, an HTML tag or comment inside the command); a tool named
+# by its path; the tools that were missing. And the other way: an ordinary review sentence that names a tool and a subcommand is not an instruction.
+l3=$(python3 - "$REAL/bin" <<'PY'
+import sys; sys.path.insert(0, sys.argv[1]); import cloudcmd as c
+must = ["terraform **destroy**", "terraform <b>destroy</b>", "terra<!-- -->form destroy", "terraform [destroy](x)", "./terraform destroy",
+        "/usr/local/bin/terraform destroy", "node_modules/.bin/cdk deploy", "kubectl delete ns prod", "helm uninstall prod", "firebase deploy",
+        "netlify deploy --prod", "heroku apps:destroy x", "gh workflow run deploy.yml",
+        "doctl compute droplet delete web-1", "eksctl delete cluster prod", "docker push org/app:latest", "docker rm -f db",
+        "Then run `kubectl apply -f k8s/`.", "```\nterraform apply\n```", "$ helm upgrade prod ./chart", "- firebase deploy --only hosting"]
+prose = ["The new terraform import block adopts the bucket.", "The terraform workspace name is hardcoded.", "Nothing needs a terraform plan.",
+         "The cdk diff would show the role replaced.", "Ask Sam - he owns this stack.", "Supabase db migrations live in supabase/migrations.",
+         "Vercel env variables for preview are separate.", "the bucket is reached with aws s3 in CI",
+         "The docker push in CI uses the registry token.", "The helm chart pins the image tag."]
+print("MISS: " + " | ".join(s for s in must if not c.find(s)))
+print("FP: " + " | ".join(s for s in prose if c.find(s)))
+PY
+)
+ck "L3 a command the Markdown report would render (emphasis, link, tag, comment), one named by its path, and kubectl/helm/firebase/netlify/heroku/gh/doctl/eksctl/docker are found ($(sed -n 's/^MISS: //p' <<<"$l3"))" 'grep -qx "MISS: " <<<"$l3"'
+ck "L3 an ordinary review sentence that names a tool (terraform import block, cdk diff, Ask Sam - he, Supabase db migrations, Vercel env variables, aws s3 in CI) is not refused ($(sed -n 's/^FP: //p' <<<"$l3"))" 'grep -qx "FP: " <<<"$l3"'
+reply "[$(jq -nc '{resource:"r",change:"<img src=x onerror=alert(1)>",risk:"low",why:"w",blast_radius:"b",rollback:"revert the commit",needs_human:false}')]" "REVIEWED 1"; rm -f "$T"/workspace/*infra*.md
+st_duty infra --pr 2 --apply
+ck "L3 a model field is written into the report escaped: no raw HTML" '[ "$(last_verdict)" = REVIEWED ] && ! grep -q "<img" "$T/workspace/tp-infra-pr2.md" && grep -q "&lt;img" "$T/workspace/tp-infra-pr2.md"'
 
 # ---- a contract that does not hold is an ERROR that writes nothing -------------------------------------------------------------
 rm -f "$T"/workspace/*infra*.md

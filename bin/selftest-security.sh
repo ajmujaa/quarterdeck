@@ -437,6 +437,11 @@ cr "Edit,Write"; c=$(last)
 ck "G11 a call that cannot read (Edit and Write only) is not screened" '! jq -r .deny <<<"$c" | grep -qF "deploy-notes.txt"'
 gs=$(python3 "$T/bin/guard.py" --worktree-secrets "$T/work")
 ck "G11 guard.py --worktree-secrets lists the file by relative path and not the clean one" 'grep -qx "deploy-notes.txt" <<<"$gs" && ! grep -q "readme-notes" <<<"$gs"'
+# audit 7 (L4): inside a NESTED .git folder only its config was screened, so a key a check wrote to sub/.git/k was readable to the model
+mkdir -p "$T/work/sub/.git"; printf 'k=%s\n' "$FAKEKEY" > "$T/work/sub/.git/k"
+gz=$(python3 "$T/bin/guard.py" --worktree-secrets -z "$T/work" | tr '\0' '\n')
+ck "L4 a nested .git folder is screened or denied whole: a key in sub/.git/k is in the -z output" 'grep -qxE "Fsub/.git/k|Dsub/.git" <<<"$gz"'
+rm -rf "$T/work/sub"
 rm -f "$T/work/deploy-notes.txt" "$T/work/readme-notes.txt" "$T/work/odd,name.txt" "$T/work/link.txt"
 
 # ---- F11: nothing about a call is in the process arguments --------------------------------------------------------
@@ -566,6 +571,10 @@ if [ "$(uname -s)" = Darwin ] && /usr/bin/sandbox-exec -p '(version 1)(allow def
   [ "$(s5rd "$T/s5c.sb" "$L3D/task.output")" = denied ] || r6="$r6 L3:read"
   s5 "$T/s5c.sb" bash -c "echo x > '$L3D/w.txt'" 2>/dev/null; [ -e "$L3D/w.txt" ] && r6="$r6 L3:write"
   rm -rf "$L3D"
+  # audit 7 (Info): the same folders under the per-user temp folder ($TMPDIR, /private/var/folders/../T/claude-*) were still readable
+  L3T=$(getconf DARWIN_USER_TEMP_DIR); L3T=$(cd "$L3T" && pwd -P); L3T=$(mktemp -d "$L3T/claude-qd7.XXXXXX"); echo QDDECOY-tmpdir > "$L3T/x"
+  [ "$(s5rd "$T/s5c.sb" "$L3T/x")" = denied ] || r6="$r6 I7:tmpdir-claude"
+  rm -rf "$L3T"
   mkdir -p "$T/l7wt"; echo "gitdir: $S5F" > "$T/l7wt/.git"
   ( export HOME="$S5F" QUARTERDECK_HOME="$S5D"; source "$T/bin/lib.sh"; _qd_sb_profile check "$T/l7wt" "$S5S" ) > "$T/l7.sb"; grep -qF "(allow file-read* file-read-data (subpath \"$S5F\"))" "$T/l7.sb" && r6="$r6 L7:home-let-in"; [ -s "$T/l7.sb" ] || r6="$r6 L7:no-profile"
   ck "R6 a check cannot read another worktree in the workspace, the main checkout's stash or reflogs, the checkout around a PATH folder, or /private/tmp/claude-*; a .git file naming the home folder lets nothing in${r6:+ (FAILED:$r6)}" '[ -z "$r6" ]'

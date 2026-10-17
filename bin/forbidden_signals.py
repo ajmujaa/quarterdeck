@@ -12,8 +12,9 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-CODE = {".py", ".js", ".mjs", ".ts", ".tsx", ".swift", ".sh", ".html"}   # and any extensionless file that starts with a #! line
-SKIP_DIRS = {".claude", "vendor", "node_modules", ".git", "state", "logs", "workspace", "__pycache__"}
+CODE = {".py", ".js", ".mjs", ".cjs", ".ts", ".mts", ".cts", ".tsx", ".jsx", ".swift", ".sh", ".bash", ".zsh", ".html"}   # and any extensionless file that starts with a #! line
+SKIP_DIRS = {".claude", "vendor", "state", "logs", "workspace"}        # only at the root (audit 7, L5: bin/state/ and bin/vendor/ were skipped too)
+SKIP_ANY = {"node_modules", ".git", "__pycache__"}                     # at any depth: other people's code, git's own store, compiled files
 SKIP_FILES = {"forbidden_signals.py"}          # this file names the patterns on purpose
 # The only exemptions: exact strings, in one named file each, that must exist because they DENY or TEST these things. Everything else in those files,
 # selftests included, is scanned. An entry whose string is no longer in its file is reported, so the list cannot quietly outlive its reason.
@@ -101,7 +102,7 @@ def scan(root=ROOT):
         if (p.suffix and p.suffix not in CODE) or not p.is_file() or p.name in SKIP_FILES:
             continue
         rel = p.relative_to(root)
-        if any(part in SKIP_DIRS for part in rel.parts):
+        if rel.parts[0] in SKIP_DIRS or any(part in SKIP_ANY for part in rel.parts[:-1]):
             continue
         if not p.suffix and not _is_script(p):
             continue

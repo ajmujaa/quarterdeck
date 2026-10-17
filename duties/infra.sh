@@ -242,7 +242,9 @@ if ! jq -e "$valid" <<<"$raw" >/dev/null 2>&1 || [ -z "$vline" ]; then
   record_run "$PROJECT" infra ERROR "$KEY unparseable contract"
   die "contract did not parse — nothing written (see logs/runs/$QUARTERDECK_RUN_ID.json)"
 fi
-items=$(jq -c --argjson n "$PER_RUN" '[.[0:$n][] | {resource, change, risk, why, blast_radius, rollback, needs_human: (.needs_human or .risk == "high")}]
+# every model field is HTML-escaped (audit 7, L3): the report is Markdown, and a raw tag in it would render (or hide text from the cloud-command check)
+items=$(jq -c --argjson n "$PER_RUN" '[.[0:$n][] | {resource, change, risk, why, blast_radius, rollback, needs_human: (.needs_human or .risk == "high")}
+  | with_entries(if (.value | type) == "string" then .value |= (gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;")) else . end)]
   | sort_by({high:0, medium:1, low:2}[.risk])' <<<"$raw")
 nraw=$(jq length <<<"$raw"); n=$(jq length <<<"$items"); high=$(jq '[.[] | select(.risk == "high")] | length' <<<"$items"); human=$(jq '[.[] | select(.needs_human)] | length' <<<"$items")
 if { [ "$n" = 0 ] && [[ "$vline" != *CLEAN* ]]; } || { [ "$n" != 0 ] && [[ "$vline" != *REVIEWED* ]]; }; then

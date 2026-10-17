@@ -119,6 +119,24 @@ ship $'mkdir -p DOCS; echo x > DOCS/y.js' '{"forbidden_paths":["docs/"]}'
 ck "R3 a registry forbidden_paths prefix matches in any letter case (DOCS/y.js against docs/)" '[ "$(last_verdict)" = REFUSED ] && [ "$(nchecks)" = 1 ] && grep -qi "touched docs/" <<<"$(last_detail)"'
 ship "$SRC_EDIT"
 ck "R3 control: an ordinary source edit is still not refused, and the symlinked node_modules / build output a base check left do not count as the model's" '[ "$(last_verdict)" = DRY-RUN ] && [ "$(nchecks)" = 2 ]'
+# audit 7 (M2): a protected FOLDER added as a symlink is one 120000 entry with the bare name (.claude), which `.claude/**` and the prefix `.claude/` missed
+bad=$(python3 - "$REAL/bin" <<'PY'
+import sys; sys.path.insert(0, sys.argv[1]); import protect as p
+print(" ".join(n for n in [".claude", ".github", "scripts", ".husky", "a/scripts", ".cargo"] if not p.violations([n])))
+PY
+)
+ck "M2 protect.py: the bare names .claude, .github, scripts, .husky, a/scripts and .cargo are protected like the folders${bad:+ (NOT: $bad)}" '[ -z "$bad" ]'
+M2LINK=$'mkdir -p docs/agent/workflows; ln -s docs/agent .claude; ln -s docs/agent .github; printf "{\\"hooks\\":{}}\\n" > docs/agent/settings.json; printf "on: push\\n" > docs/agent/workflows/x.yml\n'"$SRC_EDIT"
+ship "$M2LINK" '{"forbidden_paths":[".github/",".claude/"],"protected_allow":[".claude",".github"]}'
+ck "M2 a registry forbidden_paths entry \".claude/\" also refuses the bare name: .claude -> docs/agent is REFUSED before any check" '[ "$(last_verdict)" = REFUSED ] && [ "$(nchecks)" = 1 ] && grep -q "touched \.\(claude\|github\)/" <<<"$(last_detail)"'
+ship "$M2LINK"
+ck "M2 the dirlink case (.claude and .github as links to docs/agent) is REFUSED by the protected-path gate before any check" '[ "$(last_verdict)" = REFUSED ] && [ "$(nchecks)" = 1 ] && grep -q "protected path" <<<"$(last_detail)" && grep -q "\.claude" <<<"$(last_detail)"'
+ship "ln -s ../../../.. src/up; ln -s /etc src/etc; $SRC_EDIT"
+ck "M2 a symlink a model adds that leaves the worktree (relative or absolute) is REFUSED before any check" '[ "$(last_verdict)" = REFUSED ] && [ "$(nchecks)" = 1 ] && grep -q "src/up" <<<"$(last_detail)" && grep -q "src/etc" <<<"$(last_detail)"'
+ship "mkdir -p src/x; ln -s ../../package.json src/x/p.json; ln -s .. src/root; $SRC_EDIT"
+ck "M2 so is one that points at a protected place, or at the worktree's root (which holds them all)" '[ "$(last_verdict)" = REFUSED ] && [ "$(nchecks)" = 1 ] && grep -q "src/x/p.json" <<<"$(last_detail)" && grep -q "src/root" <<<"$(last_detail)"'
+ship "ln -s app.js src/alias.js; $SRC_EDIT"
+ck "M2 control: a symlink that stays inside the worktree and points at ordinary source is not refused" '[ "$(last_verdict)" = DRY-RUN ] && [ "$(nchecks)" = 2 ]'
 # LOW: names compared the way APFS compares them (normalisation and case folding), and the protected list's later additions
 low=$(python3 - "$REAL/bin" <<'PY'
 import sys; sys.path.insert(0, sys.argv[1]); import protect as p
@@ -183,7 +201,10 @@ rm -rf "$T/workspace/wt-tp-7" "$T/workspace/wt-tp-7.gitpin" "$T/workspace/wt-tp-
 V_SAVE=$VERIFY
 VERIFY="if grep -q 'a + b' src/app.js; then mkdir -p .github/workflows; echo 'on: push' > .github/workflows/pwn.yml; sed 's/1.0.0/6.6.6/' package.json > p.t && mv p.t package.json; fi; echo run >> '$CHK'; true"
 ship "$SRC_EDIT" '' --apply
-ck "S1 a check that writes .github/workflows/pwn.yml and edits package.json after the gate is REFUSED, and nothing is pushed" '[ "$(last_verdict)" = REFUSED ] && [ -z "$(git -C "$T/origin.git" branch --list "fix/*")" ] && no_gh_writes && grep -qE "pwn.yml|package.json" <<<"$(last_detail)"'
+# audit 7 (M1): the checks now run in a throwaway clone, so what the check wrote never reaches the worktree: the commit is the model's edit alone
+s1br=$(git -C "$T/origin.git" branch --list 'fix/*' | head -1 | tr -d ' *')
+ck "S1 a check that writes .github/workflows/pwn.yml and edits package.json never gets either into the pushed commit (only src/app.js is)" '[ -n "$s1br" ] && [ "$(git -C "$T/origin.git" show --name-only --format= "$s1br")" = "src/app.js" ]'
+git -C "$T/origin.git" for-each-ref --format='%(refname)' 'refs/heads/fix/*' | while read -r r; do git -C "$T/origin.git" update-ref -d "$r"; done
 VERIFY="if grep -q 'a + b' src/app.js; then mkdir -p dist; echo built > dist/out.txt; echo scratch > leftover.tmp; fi; echo run >> '$CHK'; true"
 ship "$SRC_EDIT" '' --apply
 s1br=$(git -C "$T/origin.git" branch --list 'fix/*' | head -1 | tr -d ' *')
@@ -196,7 +217,7 @@ VERIFY="if grep -q 'a + b' src/app.js; then echo \"// \$(cat '$T/r5-private.txt'
 git -C "$T/origin.git" for-each-ref --format='%(refname)' 'refs/heads/fix/*' | while read -r r; do git -C "$T/origin.git" update-ref -d "$r"; done
 rm -f "$T/gh-calls"; ship "$SRC_EDIT" '' --apply
 r5br=$(git -C "$T/origin.git" branch --list 'fix/*' | head -1 | tr -d ' *')
-ck "R5 a check that rewrites a file that passed the gate is REFUSED, and what it wrote is never pushed" '[ "$(last_verdict)" = REFUSED ] && [ -z "$r5br" ] && no_gh_writes && grep -q "src/app.js" <<<"$(last_detail)"'
+ck "R5 a check that rewrites a file that passed the gate cannot get what it wrote pushed (it wrote a throwaway clone)" '{ [ -z "$r5br" ] || ! git -C "$T/origin.git" show "$r5br:src/app.js" | grep -q R5-PRIVATE; } && ! grep -rq R5-PRIVATE "$T"/body-* 2>/dev/null'
 # round 6 (H1): the same append, from a detached child the check leaves running, made after the harness rewrites <wt>.passed inside the second gate.
 # Before the fix the gate compared the files on disk and then staged them, so the append landed in between and was pushed.
 VERIFY="if grep -q 'a + b' src/app.js; then P=\"\$(pwd -P).passed\"; m0=\$(ls -l -T \"\$P\" 2>/dev/null); ( for i in \$(seq 1 3000); do m=\$(ls -l -T \"\$P\" 2>/dev/null); [ \"\$m\" != \"\$m0\" ] && { echo \"// \$(cat '$T/r5-private.txt')\" >> src/app.js; break; }; sleep 0.005; done ) </dev/null >/dev/null 2>&1 & fi; echo run >> '$CHK'; true"
@@ -205,10 +226,27 @@ rm -f "$T/gh-calls"; ship "$SRC_EDIT" '' --apply; sleep 1
 r6br=$(git -C "$T/origin.git" branch --list 'fix/*' | head -1 | tr -d ' *')
 ck "H1 a process a check leaves running cannot change a passed file after the second gate: REFUSED, nothing pushed" '[ "$(last_verdict)" = REFUSED ] && [ -z "$r6br" ] && no_gh_writes'
 # and a project command that leaves anything running fails, with nothing of its process group left behind
-h1=$(QUARTERDECK_HOME="$T" QUARTERDECK_CHECK_SANDBOX=off bash -c 'source "$1/bin/lib.sh"; mkdir -p "$2/h1wt"; project_exec check 20 "$2/h1wt" "(sleep 30.4321 </dev/null >/dev/null 2>&1 &) ; true"; echo "rc=$?"' _ "$REAL" "$T" 2>/dev/null | tail -1)
+h1=$(QUARTERDECK_HOME="$T" QUARTERDECK_CHECK_SANDBOX=off bash -c 'source "$1/bin/lib.sh"; mkdir -p "$2/h1wt"; project_exec check 20 "$2/h1wt" "(sleep 30.4321 </dev/null >/dev/null 2>&1 &) ; true"; r=$?; printf "%s\n" "$EXEC_OUT"; echo "rc=$r"' _ "$REAL" "$T" 2>/dev/null)
+h1out=$h1; h1=$(tail -1 <<<"$h1out")
 h1left=""; st_gone "^sleep 30.4321$" || h1left=yes
 ck "H1 project_exec kills the whole process group of a command and fails one that left a process running ($h1${h1left:+, survivor $h1left})" '[ "$h1" != "rc=0" ] && [ -z "$h1left" ]'
+ck "I7 and it names what was left running (sleep) and says how to run a build tool without its daemon" 'grep -q "left a process running (sleep)" <<<"$h1out" && grep -q "no-daemon" <<<"$h1out"'
 VERIFY=$V_SAVE
+# audit 7 (M1): a child that leaves the process group (setsid) outlives guard_group. Before the fix it then waited for the model's edit and
+# appended to it in the worktree, before the first gate looked. Project code now runs in a throwaway clone of the worktree, so it cannot write there.
+M1R="$T/m1repo"; mkdir -p "$M1R/src" "$T/m1data/workspace" "$T/m1data/logs"; (cd "$M1R" && git init -q && echo x > src/app.js && git add -A && git -c user.name=t -c user.email=t@e.invalid commit -q -m x)
+m1sb=on; [ "$(uname -s)" = Darwin ] || m1sb=off
+m1cmd='perl -MPOSIX -e '"'"'exit if fork; POSIX::setsid(); exit if fork; close STDIN; close STDOUT; close STDERR; for (1..60) { select(undef,undef,undef,0.1); if ((stat "src/app.js")[9] > $^T) { open my $f, ">>", "src/app.js"; print $f "R7-MARKER\n"; exit } }'"'"'; sleep 0.3; echo R7-DIRECT >> src/app.js; echo "R7-ABS" >> "$M1W/src/app.js" 2>/dev/null; echo "at $(pwd -P)/src/app.js"; true'
+m1out=$( ( export QUARTERDECK_HOME="$T/m1data" QUARTERDECK_CHECK_SANDBOX=$m1sb; source "$T/bin/lib.sh"; QUARTERDECK_HOME="$T/m1data"
+  W="$QUARTERDECK_HOME/workspace/wt-m1"; worktree_at "$M1R" "$W" HEAD >/dev/null 2>&1; W=$(cd "$W" && pwd -P)
+  project_exec check 20 "$W" "M1W='$W'; $m1cmd"; echo "rc=$?"; printf '%s\n' "$EXEC_OUT"
+  sleep 0.5; echo "model edit" >> "$W/src/app.js"; touch "$W/src/app.js"; sleep 2
+  echo "--- wt:"; cat "$W/src/app.js"; echo "--- want-at: at $W/src/app.js"; ls "$QUARTERDECK_HOME/workspace" ) 2>&1 )
+m1want=$(sed -n 's/^--- want-at: //p' <<<"$m1out")
+ck "M1 a check cannot write the worktree that is gated: a later append by a child that left its session, a direct write and an absolute-path write all miss it" \
+   '! sed -n "/^--- wt:/,\$p" <<<"$m1out" | grep -qE "R7-(MARKER|DIRECT|ABS)" && grep -q "^model edit" <<<"$m1out"'
+ck "M1 the check ran (rc=0), its output names the worktree's own paths, and its throwaway copy is gone" \
+   'grep -q "^rc=0" <<<"$m1out" && grep -qxF "$m1want" <<<"$m1out" && ! grep -q "^exec\." <<<"$m1out"'
 # round 6 (Info): the shipwright borrows node_modules through the same recorded link as worktree_at, so its checks can read it
 mkdir -p "$T/work/node_modules/dep"; echo i6 > "$T/work/node_modules/dep/i.js"
 ship "$SRC_EDIT"
@@ -327,7 +365,7 @@ lx_run() { ( export HOME="$LH/home" QUARTERDECK_HOME="$LH/data" PATH="$LH/fakebi
     source "$T/bin/lib.sh"; QUARTERDECK_HOME="$LH/data"; QUARTERDECK_DIR="$LH/prog"; uname() { echo Linux; }
     project_exec check 20 "$LH/wt" 'echo ran-$GH_TOKEN-x'; echo "rc=$? sandbox=$RUN_SANDBOX"; printf '%s\n' "$EXEC_OUT" ) 2>&1; }
 r_on=$(lx_run GH_TOKEN=leak-1)
-ck "L2 on Linux with bwrap, a project command runs through it (sandbox=bwrap), without GH_TOKEN, and bwrap saw the worktree bind" 'grep -q "rc=0 sandbox=bwrap" <<<"$r_on" && grep -q "ran--x" <<<"$r_on" && ! grep -q leak-1 <<<"$r_on" && grep -qxF "$(cd "$LH/wt" && pwd -P)" "$LH/bwrap.log"'
+ck "L2 on Linux with bwrap, a project command runs through it (sandbox=bwrap), without GH_TOKEN, and bwrap bound the throwaway clone, never the worktree" 'grep -q "rc=0 sandbox=bwrap" <<<"$r_on" && grep -q "ran--x" <<<"$r_on" && ! grep -q leak-1 <<<"$r_on" && grep -qE "/exec\.[A-Za-z0-9]+/wt$" "$LH/bwrap.log" && ! grep -qxF "$(cd "$LH/wt" && pwd -P)" "$LH/bwrap.log"'
 mv "$LH/fakebin/bwrap" "$LH/fakebin/bwrap.off"
 r_no=$(lx_run X=1)
 ck "L3 on Linux without bwrap the command is NOT run, and the message says why and how to opt out" 'grep -q "rc=126" <<<"$r_no" && grep -q "bubblewrap" <<<"$r_no" && grep -q "QUARTERDECK_CHECK_SANDBOX=off" <<<"$r_no" && ! grep -q "ran-" <<<"$r_no"'
@@ -385,6 +423,15 @@ if [ "$(uname -s)" = Darwin ] && /usr/bin/sandbox-exec -p '(version 1)(allow def
   ck "R5 seatbelt: a committed node_modules link to ~/Documents does not make ~/Documents readable to a check" 'grep -q "sandbox=seatbelt" <<<"$m_bad" && ! grep -q R5-DOC-SECRET <<<"$m_bad"'
   m_ok=$(mac5 "$T/r5src" ok "cat node_modules/dep/i.js")
   ck "R5 control: the node_modules the harness borrowed from the real checkout is still readable" 'grep -q R5-DEP-OK <<<"$m_ok"'
+  # audit 7 (L6): a monorepo's workspace link (node_modules/@s/lib -> ../../packages/lib) led into the main checkout, which a check may not read, so
+  # every check of such a project failed with "Operation not permitted". In the check's clone it now points at the clone's own packages/lib.
+  L6=$T/r5home/Projects/l6src; mkdir -p "$L6/packages/lib" "$L6/node_modules/dep" "$L6/node_modules/@s"; echo 'module.exports=1' > "$L6/node_modules/dep/index.js"
+  echo 'module.exports=2' > "$L6/packages/lib/index.js"; ln -s ../../packages/lib "$L6/node_modules/@s/lib"; echo L6-MAIN-ONLY > "$L6/notes.txt"
+  (cd "$L6" && printf 'node_modules\nnotes.txt\n' > .gitignore && git init -q && git add -A && git -c user.name=t -c user.email=t@e.invalid commit -q -m x)
+  m_ws=$(mac5 "$L6" l6 'cat node_modules/@s/lib/index.js; cat node_modules/dep/index.js')
+  ck "L6 a workspace package link in the borrowed node_modules reads the check's own copy of the package (module.exports=2), and a registry package still reads" 'grep -q "^rc=0" <<<"$m_ws" && grep -qx "module.exports=2" <<<"$m_ws" && grep -qx "module.exports=1" <<<"$m_ws"'
+  m_den=$(mac5 "$L6" l6b "cat '$L6/notes.txt'")
+  ck "L6 the main checkout stays closed, and a check the sandbox refused says so in words of its own (not a plain failure, and not 'turn the sandbox off')" '! grep -q L6-MAIN-ONLY <<<"$m_den" && grep -q "the sandbox refused" <<<"$m_den" && ! grep -qi "QUARTERDECK_CHECK_SANDBOX=off" <<<"$m_den"'
 else st_skip "R5 seatbelt node_modules link (macOS sandbox-exec only)"; fi
 
 st_done

@@ -134,7 +134,7 @@ while read -r fp; do
   [ -n "$fp" ] || continue
   while read -r f; do
     [ -n "$f" ] || continue
-    F="$fp" awk -v f="$f" 'BEGIN { exit !(index(tolower(f), tolower(ENVIRON["F"])) == 1) }' && reasons="${reasons:+$reasons; }touches the forbidden path $fp ($f)"
+    fp_hit "$f" "$fp" && reasons="${reasons:+$reasons; }touches the forbidden path $fp ($f)"
   done <<<"$changed"
 done < <(jq -r --arg p "$PROJECT" '(.[$p].forbidden_paths // [])[]' "$PROJECTS_FILE")
 while read -r pin; do
@@ -242,6 +242,10 @@ if [ -n "$INSTALL" ]; then
   project_exec install "${QUARTERDECK_CHECK_TIMEOUT:-900}" "$WT" "export COREPACK_ENABLE_NETWORK=0; $INSTALL"; inst_rc=$?; out=$EXEC_OUT
   inst_note="\`$INSTALL\` exited $inst_rc"
   [ "$inst_rc" = 0 ] || addhold "the install failed ($INSTALL exited $inst_rc): $(tail -3 <<<"$out" | tr '\n' ' ' | cut -c1-200)"
+  # audit 7 (Info): the network switch above also stops corepack fetching the package manager version the base pins, on a machine whose cache lacks it
+  if [ "$inst_rc" != 0 ] && grep -qiE "network access disabled|corepack" <<<"$out"; then
+    addhold "corepack could not fetch the package manager this project pins: its download is switched off for the install (COREPACK_ENABLE_NETWORK=0) and this machine's corepack cache does not hold that version. Run \`corepack install\` once in your own checkout of the base, then run the quartermaster again"
+  fi
 fi
 CHECK_ORDER="verify test"
 checks=$(run_checks "$PROJECT" "$WT")

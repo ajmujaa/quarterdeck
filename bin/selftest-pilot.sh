@@ -15,6 +15,8 @@ PR_TITLE="Show the total" PR_BODY="Fixes #7" st_pr 1 feat-total index.html "$APP
 MARK="pilot-selftest-$$"
 st_registry '["pilot"]' "$(jq -nc --arg m "$MARK" '{qa:{start:("python3 -m http.server \"$PORT\" --bind 127.0.0.1 # " + $m), ready:"/"}}')"
 export QUARTERDECK_QA_READY_WAIT=15 QUARTERDECK_QA_TIMEOUT=120
+# On real Linux the browser must reach the app the duty starts: the owner's opt-in (see the Linux checks below and SECURITY.md).
+[ "$(uname -s)" = Linux ] && export QUARTERDECK_APP_NET=share
 
 GOOD='PLAN_JSON: [{"title":"Add shows a total","touches":["index.html"],"steps":[{"op":"goto","path":"/"},{"op":"click","selector":"#go"},{"op":"expect_text","text":"Total 42.00"}]}]
 ADR: searched none
@@ -37,6 +39,34 @@ ck "an app that never answers its port is BLOCKED after the wait" '[ "$(last_ver
 ck "  and nothing it started is left running" 'st_gone "$MARK"'
 ck "  and no model was asked" '[ ! -s "$T/claude-calls" ]'
 st_registry '["pilot"]' "$(jq -nc --arg m "$MARK" '{qa:{start:("python3 -m http.server \"$PORT\" --bind 127.0.0.1 # " + $m), ready:"/"}}')"
+
+# ---- Linux: the app is started in its own network namespace unless the owner opted in (QUARTERDECK_APP_NET=share) -------------------------------
+# Faked on any machine: `uname` says Linux (exported to the duty) and bwrap is a stand-in that records each call and runs the command unconfined.
+mkdir -p "$T/lxbin"; cat > "$T/lxbin/bwrap" <<'BW'
+#!/bin/bash
+case "$*" in *" true") exit 0 ;; esac
+printf '%s\n' "$*" >> "$(dirname "$0")/bwrap.log"; while [ "$1" != -- ]; do shift; done; shift; exec "$@"
+BW
+chmod +x "$T/lxbin/bwrap"
+lxduty() { ( uname() { echo Linux; }; export -f uname; export QUARTERDECK_BWRAP="$T/lxbin/bwrap"; "$@" ) }
+rm -f "$T/lxbin/bwrap.log"; st_noreplies; st_reply default "$GOOD"
+( unset QUARTERDECK_APP_NET; lxduty st_duty pilot --pr 1; echo "$(last_verdict)|$(last_detail)" > "$T/lxout" )
+ck "on Linux without QUARTERDECK_APP_NET=share the app is not started: BLOCKED with the reason and the opt-in" 'grep -qF "BLOCKED|#1 — the Linux sandbox cannot let a browser reach an app without giving the app the network; set QUARTERDECK_APP_NET=share to allow it for this machine" "$T/lxout"'
+ck "  refused before anything ran: no build, no app, no model" '[ ! -e "$T/lxbin/bwrap.log" ] && st_gone "$MARK" && [ ! -s "$T/claude-calls" ]'
+# with the opt-in, the app is started through bwrap with the host network shared, and the stand-in driver reaches it
+PR_TITLE="Pages" st_pr 4 feat-lx app/page.tsx x
+st_noreplies; st_reply default 'PLAN_JSON: [{"title":"home","touches":["app/page.tsx"],"steps":[{"op":"goto","path":"/"},{"op":"expect_text","text":"x"}]}]
+ADR: searched none
+RESULT: PLAN 1 flow(s)'
+cat > "$T/lxbrowse.mjs" <<'JS'
+import fs from "node:fs";
+const [mode, file] = process.argv.slice(2);
+if (mode === "shoot") console.log(JSON.stringify({ shots: [] }));
+else { const p = JSON.parse(fs.readFileSync(file, "utf8")); console.log(JSON.stringify(mode === "check" ? { valid: p.flows, errors: [] } : { flows: p.flows.map(f => ({ ...f, ok: true })) })); }
+JS
+QUARTERDECK_APP_NET=share QUARTERDECK_BROWSE="$T/lxbrowse.mjs" lxduty st_duty pilot --pr 4 --apply
+ck "on Linux with QUARTERDECK_APP_NET=share the app is started through bwrap with --share-net, and the run goes on (PASSED)" '[ "$(last_verdict)" = PASSED ] && grep -- "--share-net" "$T/lxbin/bwrap.log" | grep -q "http.server" && grep -- "--unshare-all" "$T/lxbin/bwrap.log" | grep -q "http.server"'
+git -C "$T/work" checkout -q main
 
 # the plan format is checked by the harness before anything is driven
 printf '%s' '{"base":"http://127.0.0.1:1","flows":[

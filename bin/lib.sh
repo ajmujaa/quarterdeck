@@ -1016,13 +1016,15 @@ _qd_sb_profile() { # _qd_sb_profile <check|install> <worktree> <scratch>
 # package managers' settings read-only, their caches writable. Also: own pid namespace and /proc (no other processes), own IPC, --new-session
 # (no TIOCSTI), no capabilities, --die-with-parent. Differences from the Mac profile, stated in SECURITY.md: /etc is readable (resolv.conf, ssl,
 # passwd); a unix socket of the host is not reachable only because nothing outside the list is mounted.
-# _qd_bwrap_argv <check|install> <worktree> <scratch> [node_modules-target] — prints the bwrap words, one per line, ending with "--". Pure: no probing.
+# serve: the check sandbox with the host network shared, for the app a browser run starts (see qd_app_net_refused).
+# _qd_bwrap_argv <check|install|serve> <worktree> <scratch> [node_modules-target] — prints the bwrap words, one per line, ending with "--". Pure: no probing.
 _qd_bwrap_argv() {
   local mode=$1 wt=$2 scratch=$3 nm=${4:-} a p e k bad
   local -a a_=() pe hm
   for a in "$wt" "$scratch" "$nm" "$HOME"; do case "$a" in *$'\n'*) return 1 ;; esac; done
   a_=(--die-with-parent --new-session --cap-drop ALL --unshare-all)
-  [ "$mode" = install ] && a_+=(--share-net)
+  # serve (an app a browser outside the sandbox must reach): the check sandbox plus the host network; px_prepare gives it only on the owner's opt-in
+  case "$mode" in install|serve) a_+=(--share-net) ;; esac
   a_+=(--proc /proc --dev /dev)
   for p in /usr /bin /sbin /lib /lib32 /lib64 /etc /opt; do a_+=(--ro-bind-try "$p" "$p"); done
   a_+=(--tmpfs /tmp --tmpfs "$HOME")
@@ -1072,27 +1074,39 @@ _qd_bwrap_usable() {
   local b=${QUARTERDECK_BWRAP:-bwrap}
   command -v "$b" >/dev/null 2>&1 && "$b" --unshare-all --ro-bind / / --die-with-parent true >/dev/null 2>&1
 }
+# qd_app_net_refused — prints why, and returns 0, when an app may not be started for a browser run here. On Linux a bwrap network namespace is all or
+# nothing: the browser runs outside it, so it reaches the app only when the app shares the host network, and then the app can reach everything the
+# machine can. That is never done silently: QUARTERDECK_APP_NET=share is the owner's opt-in for this machine. On a Mac the seatbelt profile shares the
+# loopback only, so nothing is refused there.
+qd_app_net_refused() {
+  [ "$(uname -s)" = Linux ] && [ "${QUARTERDECK_CHECK_SANDBOX:-on}" = on ] && [ "${QUARTERDECK_APP_NET:-}" != share ] || return 1
+  echo "the Linux sandbox cannot let a browser reach an app without giving the app the network; set QUARTERDECK_APP_NET=share to allow it for this machine"
+}
 # qd_sandbox_status — one line for doctor: "ok <words>" or "no <words>"
 qd_sandbox_status() {
   case "$(uname -s)" in
     Darwin) if [ -x /usr/bin/sandbox-exec ] && /usr/bin/sandbox-exec -p '(version 1)(allow default)' /usr/bin/true >/dev/null 2>&1; then echo "ok seatbelt (sandbox-exec)"; else echo "no sandbox-exec cannot be applied: project commands are not run"; fi ;;
     Linux)  if [ "${QUARTERDECK_CHECK_SANDBOX:-on}" != on ]; then echo "no QUARTERDECK_CHECK_SANDBOX=off: project commands run with NO file sandbox (your explicit choice)"
-            elif _qd_bwrap_usable; then echo "ok bubblewrap (never run on real Linux by the author)"
+            elif _qd_bwrap_usable; then
+              if [ "${QUARTERDECK_APP_NET:-}" = share ]; then echo "ok bubblewrap (never run on real Linux by the author); QUARTERDECK_APP_NET=share: an app started for a browser run (pilot, lookout) has the host network"
+              else echo "ok bubblewrap (never run on real Linux by the author)"; fi
             else echo "no bubblewrap missing or unusable: project commands are not run. Install bwrap (apt install bubblewrap), or set QUARTERDECK_CHECK_SANDBOX=off to accept running them unsandboxed"; fi ;;
     *)      echo "ok no sandbox on this system (environment only)" ;;
   esac
 }
 
-# project_exec <check|install> <seconds> <worktree> <command> — runs the command as described above.
+# project_exec <check|install|serve> <seconds> <worktree> <command> — runs the command as described above.
 # Sets EXEC_OUT (stdout and stderr together), RUN_SANDBOX (seatbelt|bwrap|none), and returns the command's exit status.
 # Not meant for $(...): the variables would be lost with the subshell.
-# px_prepare <check|install> <worktree> — everything a project command is run with, for a caller that must build its own command line (a server that
+# px_prepare <check|install|serve> <worktree> — everything a project command is run with, for a caller that must build its own command line (a server that
 # keeps running): PX_ENV (the env -i words: PATH, a scratch HOME and TMPDIR, LANG, TERM), PX_PRE (the sandbox-exec words, empty where there is none),
 # PX_SCRATCH (the caller removes it), RUN_SANDBOX. Returns 126 on a Mac where the sandbox cannot be applied: nothing is to be run then.
 #   env -i "${PX_ENV[@]}" ${PX_PRE[@]+"${PX_PRE[@]}"} bash -c "$cmd"
 px_prepare() {
   local mode=$1 wt home
   RUN_SANDBOX=none; PX_PRE=(); PX_SCRATCH=""; PX_WHY=""
+  if [ "$mode" = serve ] && PX_WHY=$(qd_app_net_refused); then log "px_prepare: $PX_WHY"; return 126; fi
+  PX_WHY=""
   wt=$(cd "$2" 2>/dev/null && pwd -P) || return 127
   PX_SCRATCH=$(mktemp -d "$QUARTERDECK_HOME/workspace/exec.XXXXXX") || return 127
   PX_SCRATCH=$(cd "$PX_SCRATCH" && pwd -P); mkdir -p "$PX_SCRATCH/home" "$PX_SCRATCH/tmp"

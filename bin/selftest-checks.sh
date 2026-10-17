@@ -336,6 +336,20 @@ ck "L4 with QUARTERDECK_CHECK_SANDBOX=off it runs unsandboxed (sandbox=none) and
 ck "L5 doctor's status line: refuses when bwrap is missing, shows the opt-out when set" 'lx qd_sandbox_status | grep -q "^no bubblewrap" && (export QUARTERDECK_CHECK_SANDBOX=off; lx qd_sandbox_status | grep -q "^no QUARTERDECK_CHECK_SANDBOX=off")'
 mv "$LH/fakebin/bwrap.off" "$LH/fakebin/bwrap"
 ck "L5 and shows ok with bwrap present" 'lx qd_sandbox_status | grep -q "^ok bubblewrap"'
+# serve: the app a browser run starts. bwrap's network namespace is all or nothing, so a browser outside it cannot reach an app inside it: refused on
+# Linux unless the owner opted in with QUARTERDECK_APP_NET=share, and then the check sandbox plus the host network, nothing else.
+a_srv=$(QUARTERDECK_APP_NET=share lx _qd_bwrap_argv serve "$LH/wt" "$LH/data/workspace/exec.1")
+ck "L6 bwrap argv (serve): the check sandbox word for word, plus --share-net and nothing else (private home, read-only system, no package-manager places)" '[ "$(grep -vxF -- --share-net <<<"$a_srv")" = "$a_chk" ] && has "$a_srv" --share-net && has "$a_srv" --unshare-all'
+srv_px() { px_prepare serve "$LH/wt"; echo "rc=$? sandbox=$RUN_SANDBOX scratch=${PX_SCRATCH:-none}"; echo "why=$PX_WHY"; printf '%s\n' ${PX_PRE[@]+"${PX_PRE[@]}"}; [ -z "$PX_SCRATCH" ] || rm -rf "$PX_SCRATCH"; }
+rm -f "$LH/bwrap.log"
+s_no=$( (unset QUARTERDECK_APP_NET; lx srv_px) )
+ck "L6 on Linux an app start (serve) is refused without QUARTERDECK_APP_NET=share: 126, no scratch folder, the reason names the opt-in" 'grep -q "rc=126 sandbox=none scratch=none" <<<"$s_no" && grep -qF "why=the Linux sandbox cannot let a browser reach an app without giving the app the network; set QUARTERDECK_APP_NET=share to allow it for this machine" <<<"$s_no" && [ ! -e "$LH/bwrap.log" ]'
+s_ok=$(QUARTERDECK_APP_NET=share lx srv_px)
+ck "L6 with QUARTERDECK_APP_NET=share it runs through bwrap with --share-net" 'grep -q "rc=0 sandbox=bwrap" <<<"$s_ok" && grep -qxF -- --share-net <<<"$s_ok" && grep -qxF -- --unshare-all <<<"$s_ok"'
+ck "L6 a check is never given the network by the opt-in" '! (QUARTERDECK_APP_NET=share lx _qd_bwrap_argv check "$LH/wt" "$LH/s") | grep -qxF -- --share-net'
+ck "L6 doctor shows the opt-in when it is on, and not when it is off" '(QUARTERDECK_APP_NET=share lx qd_sandbox_status) | grep -q "^ok bubblewrap.*QUARTERDECK_APP_NET=share" && ! (unset QUARTERDECK_APP_NET; lx qd_sandbox_status) | grep -q QUARTERDECK_APP_NET'
+mac_sb() { ( export HOME="$LH/home" QUARTERDECK_HOME="$LH/data"; source "$T/bin/lib.sh"; QUARTERDECK_HOME="$LH/data"; _qd_sb_profile "$1" "$LH/wt" "$LH/s" ) 2>&1; }
+ck "L6 on a Mac the serve profile is the check profile byte for byte (seatbelt already lets a browser reach the app on loopback)" '[ "$(mac_sb serve | cksum)" = "$(mac_sb check | cksum)" ] && [ -n "$(mac_sb check)" ]'
 
 # ---- round 5: what a hostile checkout or a check can do to the sandbox and to the commit ---------------------------------------------------------
 # M: a toolchain folder on PATH (~/.cargo/bin, ~/.local/bin) bound read-only also bound the folder above it, which holds the credentials file.

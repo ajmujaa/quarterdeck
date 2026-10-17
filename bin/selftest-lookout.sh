@@ -14,6 +14,7 @@ PR_TITLE="Wider hero" PR_BODY=$'Makes the hero wider.\n\n![my screenshot](https:
 START='python3 -m http.server "$PORT" --bind 127.0.0.1'
 st_registry '["lookout"]' "$(jq -nc --arg s "$START # $MARK" '{qa:{start:$s}, lookout:{routes:["/"], notes:"docs/design.md"}}')"
 export QUARTERDECK_QA_READY_WAIT=15 QUARTERDECK_QA_TIMEOUT=120
+[ "$(uname -s)" = Linux ] && export QUARTERDECK_APP_NET=share   # on real Linux the browser must reach the app (SECURITY.md)
 EV="$T/state/lookout/tp-pr1"
 
 # ---- what needs no browser ----------------------------------------------------------------------------------------------

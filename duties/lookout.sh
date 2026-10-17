@@ -125,7 +125,7 @@ shoot_from() { # shoot_from <worktree> <prefix> -> fills $EVID/<prefix>/ ; retur
   for _ in 1 2 3 4 5 6 7 8; do p=$((20000 + RANDOM % 20000)); listening "$p" || { port=$p; break; }; done
   [ -n "$port" ] || return 1
   [ -z "${PX_SCRATCH:-}" ] || rm -rf "$PX_SCRATCH"
-  px_prepare check "$wt" || return 1                    # the sandbox's write rule is this worktree's own: head and base each get theirs
+  px_prepare serve "$wt" || return 1                   # the sandbox's write rule is this worktree's own: head and base each get theirs
   env -i "${PX_ENV[@]}" ${ENVA[@]+"${ENVA[@]}"} PORT="$port" perl -e "$RUN_GROUP" "$QA_TIMEOUT" ${PX_PRE[@]+"${PX_PRE[@]}"} bash -c 'cd "$1" && exec bash -c "$2"' _ "$wt" "$START" >>"$LOG_FILE" 2>&1 &
   SERVER=$!
   for _ in $(seq 1 "$READY_WAIT"); do kill -0 "$SERVER" 2>/dev/null || break; listening "$port" && { up=1; break; }; sleep 1; done
@@ -141,6 +141,7 @@ shoot_from() { # shoot_from <worktree> <prefix> -> fills $EVID/<prefix>/ ; retur
 rm -rf "$EVID"; mkdir -p "$EVID/head" "$EVID/base"
 guard 180 "${SAFE_GIT[@]}" -C "$SOURCE_REPO_DIR" fetch -q origin "pull/$PR/head" 2>>"$LOG_FILE" || blocked "could not fetch pull/$PR/head"
 worktree_at "$SOURCE_REPO_DIR" "$WT" FETCH_HEAD || blocked "could not create a worktree at $WT"
+why=$(qd_app_net_refused) && blocked "$why"            # on Linux the app is started only on the owner's opt-in: refused before anything is built
 px_prepare check "$WT" || blocked "${PX_WHY:-the macOS sandbox could not be applied}, and a pull request's code is never run without it"
 if [ -n "$BUILD" ]; then
   say "  building: $BUILD  [sandbox: $RUN_SANDBOX]"

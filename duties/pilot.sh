@@ -122,7 +122,9 @@ say "quarterdeck: pilot on $REPO#$PR — $title"
 guard 180 "${SAFE_GIT[@]}" -C "$SOURCE_REPO_DIR" fetch -q origin "pull/$PR/head" 2>>"$LOG_FILE" || blocked "could not fetch pull/$PR/head"
 worktree_at "$SOURCE_REPO_DIR" "$WT" FETCH_HEAD || blocked "could not create a worktree at $WT"
 # The pull request's own build and start commands run as every project command does: a scratch HOME, no secrets, and on a Mac inside the sandbox
-# (files private, writes in the worktree only, loopback network only).
+# (files private, writes in the worktree only, loopback network only). On Linux the app is started only on the owner's opt-in (qd_app_net_refused):
+# refused here, before anything is built.
+why=$(qd_app_net_refused) && blocked "$why"
 px_prepare check "$WT" || blocked "${PX_WHY:-the macOS sandbox could not be applied}, and a pull request's code is never run without it"
 if [ -n "$BUILD" ]; then
   say "  building: $BUILD  [sandbox: $RUN_SANDBOX]"
@@ -137,6 +139,7 @@ for _ in 1 2 3 4 5 6 7 8; do
 done
 [ -n "$PORT" ] || blocked "no free local port to start the app on"
 say "  starting the app on 127.0.0.1:$PORT"
+rm -rf "$PX_SCRATCH"; px_prepare serve "$WT" || blocked "${PX_WHY:-the macOS sandbox could not be applied, and the code of a pull request is never run without it}"
 env -i "${PX_ENV[@]}" ${ENVA[@]+"${ENVA[@]}"} PORT="$PORT" perl -e "$RUN_GROUP" "$QA_TIMEOUT" ${PX_PRE[@]+"${PX_PRE[@]}"} bash -c 'cd "$1" && exec bash -c "$2"' _ "$WT" "$START" >>"$LOG_FILE" 2>&1 &
 SERVER=$!
 up=0

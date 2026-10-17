@@ -385,6 +385,16 @@ cr; c=$(last)
 ck "G11 a file holding a credential shape gets its own Read deny rule, under any name" 'jq -e --arg r "Read(/$WP/deploy-notes.txt)" "(.deny | split(\",\")) | index(\$r) != null" <<<"$c" >/dev/null'
 ck "G11 and a file without one does not (no blanket denial of the folder)" '! jq -r .deny <<<"$c" | grep -qF "readme-notes.txt"'
 ck "R5 G11 a link inside the worktree to that file is denied by its own path too" 'jq -e --arg r "Read(/$WP/link.txt)" "(.deny | split(\",\")) | index(\$r) != null" <<<"$c" >/dev/null'
+# real CLI 2.1.293 on macOS: Grep with a case-variant folder path (SUB/DEEP for sub/deep) returned a denied file's content; Read did not. So no Grep then.
+ck "G11 when the screen denies a file, the call gets no Grep at all (the real CLI's Grep leaked a denied file through a case-variant path); Read and Glob stay" \
+   'jq -e ".tools == \"Read,Glob\"" <<<"$c" >/dev/null'
+# real CLI 2.1.293: a sandboxed `node -e readFileSync(...)` printed a screened file (the Read rule does not reach the shell). The sandbox must deny it too.
+cr "Read,Bash(npm run*)"; c=$(last)
+ck "G11 a call with a shell: the screened file is in the sandbox's denyRead as well, not only a Read rule" \
+   'jq -e --arg p "$WP/deploy-notes.txt" "(.settings | fromjson | .sandbox.filesystem.denyRead | index(\$p)) != null" <<<"$c" >/dev/null'
+cr "Edit,Bash(npm run*)"; c=$(last)
+ck "G11 and a shell call with no Read tool is screened too (its commands can read)" \
+   'jq -e --arg p "$WP/deploy-notes.txt" "(.settings | fromjson | .sandbox.filesystem.denyRead | index(\$p)) != null" <<<"$c" >/dev/null'
 # round 5: a secret-holding file whose name a rule cannot carry used to be left readable (logged only). The call is now refused instead.
 for odd in "odd,name.txt" "back\\slash.txt" "notes"$'\n'"creds.txt" "glob[1].txt" "brace{a}.txt"; do
   printf 'k=%s\n' "$FAKEKEY" > "$T/work/$odd"

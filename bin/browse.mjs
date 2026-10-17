@@ -12,6 +12,7 @@
 // Prints one JSON object on stdout. Exit 0 = it ran (read the JSON), 2 = bad input, 3 = no browser available.
 import {createRequire} from "node:module";
 import fs from "node:fs";
+import net from "node:net";
 import path from "node:path";
 import {fileURLToPath} from "node:url";
 
@@ -89,11 +90,25 @@ const slug = s => String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^
 async function launch(base) {
   let pw;
   try { pw = createRequire(import.meta.url)("playwright"); } catch { return {error: "playwright is not installed (run it where `npx playwright install chromium` has been done)"}; }
+  // #115 M4: route() and routeWebSocket() see only the page itself; workers, WebRTC and the browser's own lookups do not pass through
+  // them. So the whole browser is pointed at a dead proxy this process owns (it accepts and drops every connection), with only the
+  // app's host:port bypassing it (<-loopback> removes Chromium's implicit bypass for every loopback port), every name maps to
+  // NOTFOUND except the app's host so nothing is looked up, and WebRTC may not send UDP that does not go through the proxy.
+  const dead = net.createServer(s => s.destroy());
+  await new Promise((ok, no) => dead.once("error", no).listen(0, "127.0.0.1", ok));
+  const {host, hostname} = new URL(base);
+  const args = [
+    `--proxy-server=http://127.0.0.1:${dead.address().port}`, `--proxy-bypass-list=<-loopback>;${host}`,
+    `--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE ${hostname.replace(/^\[|\]$/g, "")}`,
+    "--webrtc-ip-handling-policy=disable_non_proxied_udp",
+  ];
+  if (process.env.QUARTERDECK_BROWSE_NETLOG) args.push(`--log-net-log=${process.env.QUARTERDECK_BROWSE_NETLOG}`);   // the selftest reads it to prove no name was looked up
   try {
     // the renderer keeps its own sandbox (Playwright turns it off by default): the page is a pull request's code
-    const browser = await pw.chromium.launch({executablePath: process.env.QUARTERDECK_CHROMIUM || undefined, chromiumSandbox: true});
+    const browser = await pw.chromium.launch({executablePath: process.env.QUARTERDECK_CHROMIUM || undefined, chromiumSandbox: true, args});
+    browser.on("disconnected", () => dead.close());
     return {browser};
-  } catch (e) { return {error: "no browser could be started: " + String(e.message).split("\n")[0]}; }
+  } catch (e) { dead.close(); return {error: "no browser could be started: " + String(e.message).split("\n")[0]}; }
 }
 
 // Only the app's own address is reachable. Everything else the page asks for is refused, so a build under

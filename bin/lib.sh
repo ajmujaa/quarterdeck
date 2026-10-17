@@ -516,11 +516,11 @@ private_read_rules() { # the same list as Read(...) deny rules, comma separated;
 # file names inside the working folder, no escape hatch for an unsandboxed command, no silent run without a sandbox (failIfUnavailable:
 # the CLI otherwise runs the shell unconfined where it cannot build one), the worktree's own .git file closed to writes, and nothing written
 # outside the working folder (the sandbox's own default). Both keys were checked against the real CLI (2.1.293) by hand: see docs/public/SECURITY.md.
-claude_sandbox_json() {
-  local wdir=$1 n
+claude_sandbox_json() { # claude_sandbox_json <workdir> [extra paths to deny, one per line: the secret screen's]
+  local wdir=$1 extra=${2:-} n
   local -a nm
   IFS=' ' read -ra nm <<<"$_QD_SECRET_NAMES"
-  { private_paths; for n in "${nm[@]}"; do printf '%s\n' "$wdir/$n" "$wdir/**/$n" "$HOME/**/$n"; done; _qd_broad_home "$wdir"; } \
+  { private_paths; for n in "${nm[@]}"; do printf '%s\n' "$wdir/$n" "$wdir/**/$n" "$HOME/**/$n"; done; _qd_broad_home "$wdir"; [ -z "$extra" ] || printf '%s\n' "$extra"; } \
     | jq -Rn --arg w "$wdir" '[inputs] as $d | {sandbox: {enabled: true, allowUnsandboxedCommands: false, failIfUnavailable: true, filesystem: {denyRead: $d, denyWrite: [($w + "/.git")]}}}' -c
 }
 
@@ -587,16 +587,17 @@ claude_run() { # claude_run <workdir> <prompt> [tools, comma separated] [deny-to
   [ -n "$allow" ] || allow="Read(/$wdir/**)"
   deny="$deny,Edit(/$wdir/.git),WebFetch,WebSearch,NotebookEdit,Bash(git*),Bash(gh*),Bash(curl*),Bash(wget*),Bash(ssh*),Bash(scp*),Bash(sudo*),Bash(security*),$(private_read_rules)${QUARTERDECK_PRIVATE_DENY:-}"
   # G11: a file in the working folder whose CONTENT is a credential is denied by path, whatever it is called, for any call that can read.
-  case ",$names," in *,Read,*|*,Grep,*)
+  case ",$names,${has_shell:+Bash,}" in *,Read,*|*,Grep,*|*,Bash,*)   # a shell can read too
     # Fail closed (round 5): a screen that fails or did not finish the project's own files, or a secret file whose name no rule can carry (a comma,
     # a bracket, a glob or escape character, a newline), stops the call. Names are read NUL-separated, so a newline in one cannot split it in two.
-    local sp rec sr="" skipped="" scr="$QUARTERDECK_HOME/logs/runs/${QUARTERDECK_RUN_ID:-run}.screen.txt" scrout src=0
+    local sp rec sr="" skipped="" sbdeny="" scr="$QUARTERDECK_HOME/logs/runs/${QUARTERDECK_RUN_ID:-run}.screen.txt" scrout src=0
     scrout=$(mktemp) || return 1
     python3 "$QUARTERDECK_DIR/bin/guard.py" --worktree-secrets -z "$wdir" > "$scrout" 2>/dev/null || src=$?
     while IFS= read -r -d '' rec; do
       sp=${rec#?}; [ -n "$sp" ] || continue
       case "$sp" in *,*|*"("*|*")"*|*"*"*|*"?"*|*"["*|*"]"*|*"{"*|*"}"*|*"!"*|*"#"*|*\\*|*[[:cntrl:]]*|" "*|*" ") skipped="$skipped${sp//$'\n'/\\n}"$'\n'; continue ;; esac
       case "$rec" in D*) deny="$deny,Read(/$wdir/$sp/**)"; sr="$sr$sp/ (not finished: denied whole)"$'\n' ;; *) deny="$deny,Read(/$wdir/$sp)"; sr="$sr$sp"$'\n' ;; esac
+      sbdeny="$sbdeny$wdir/$sp"$'\n'     # and for the shell: a Read rule does not reach `node -e readFileSync(...)` (measured, CLI 2.1.293)
     done < "$scrout"
     rm -f "$scrout"
     if [ -n "$sr$skipped" ] || [ "$src" != 0 ]; then
@@ -608,6 +609,14 @@ claude_run() { # claude_run <workdir> <prompt> [tools, comma separated] [deny-to
     fi
     if [ -n "$skipped" ] || [ "$src" != 0 ]; then
       log "claude_run: refusing: the secret screen of $wdir is not complete (see $scr)"; return 1
+    fi
+    # Measured on the real CLI (2.1.293, macOS): Read honours these rules under any spelling, but Grep given a case-variant folder path
+    # (SUB/DEEP for sub/deep) returned a denied file's content. A deny rule per spelling cannot be complete, so Grep goes when anything was denied.
+    if [ -n "$sr" ]; then
+      names=$(tr ',' '\n' <<<"$names" | grep -vx Grep | paste -sd, -)
+      allow=$(tr ',' '\n' <<<"$allow" | grep -v '^Grep(' | paste -sd, -)
+      [ -n "$allow" ] || allow="Read(/$wdir/**)"
+      log "secret screen: Grep removed from this call (a denied file could be reached through it)"
     fi ;;
   esac
   deny="${deny%,}"
@@ -637,7 +646,7 @@ claude_run() { # claude_run <workdir> <prompt> [tools, comma separated] [deny-to
   # (node, npm) cannot read the private files or write outside the working folder, which a Read rule alone cannot stop. Every call
   # that has a shell gets it: the models no longer run gh (which cannot reach GitHub from inside it), the harness does.
   local sandbox=""
-  if [ -n "$has_shell" ] && [ "${QUARTERDECK_SANDBOX:-on}" = on ]; then sandbox=$(claude_sandbox_json "$wdir"); fi
+  if [ -n "$has_shell" ] && [ "${QUARTERDECK_SANDBOX:-on}" = on ]; then sandbox=$(claude_sandbox_json "$wdir" "${sbdeny:-}"); fi
   local -a cenv=()
   if [ "${QUARTERDECK_CLAUDE_ENV:-clean}" != inherit ]; then _qd_claude_env; cenv=(env -i "${CLAUDE_ENV[@]}"); fi
   # Nothing about the call is put in the process arguments where any local user's `ps` shows it: the prompt (issue text, diffs, which

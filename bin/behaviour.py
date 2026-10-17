@@ -14,6 +14,7 @@ import sys
 ACTION = re.compile(r"\b(click|clicks|clicked|press|presses|tap|taps|type|types|enter|submit|submits|selects|hover|drag|focuses|toggles?|call|calls|"
                     r"invoke[sd]?|run|runs|send|sends|posts|requests|after|when|then|navigates?|within|equals?|is (?:empty|disabled|enabled|hidden|shown))\b", re.I)
 EXIST = re.compile(r"(\bgrep\b|\bexists?\b|\bis present\b|\bis defined\b|\bis in the (?:page|html|source|file)\b|\bcontains (?:the |a |an )?(?:string|text|selector|element|id|class|word|label)\b|"
+                   r"\bcontains (?:the |a |an )?\w+ with (?:the |an? )?(?:id|class|selector|text|label)\b|"
                    r"queryselector|getelementbyid|\bselector\b|\bis rendered\b|\bis visible on the page\b)", re.I)
 
 T_ACTION = re.compile(r"(\.click\(|\bclick\(|dispatchEvent|fireEvent|userEvent|\.press\(|\.type\(|\.fill\(|\.check\(|\.hover\(|\.focus\(|\.keyboard|\.submit\(|sendKeys|"

@@ -32,6 +32,12 @@ jobs:
       - name: Install jq (Linux only; the macOS runner has it)
         if: runner.os == 'Linux'
         run: command -v jq || sudo apt-get install -y jq
+      - name: Linux sandbox (bubblewrap needs unprivileged user namespaces, which Ubuntu 24.04 blocks by default)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --ro-bind / / --unshare-all --die-with-parent true && echo "bwrap works"
       - name: Use a clean home folder
         run: |
           mkdir -p "$RUNNER_TEMP/home"

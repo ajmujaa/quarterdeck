@@ -3823,6 +3823,9 @@ import behaviour as _bh
 check("#86 a check that greps for an id or says a string is on the page does not exercise behaviour; one that acts and observes does",
       not _bh.accept_exercises_behaviour('grep index.html for id="reset"; the element exists.') and not _bh.accept_exercises_behaviour("The page contains the string Reset.")
       and _bh.accept_exercises_behaviour("Type a name, click Reset: the field is empty again."))
+check("#86 'the page contains a button with id X' is existence-only too (missed before); 'click the button with id X: the count shows 0' still acts",
+      not _bh.accept_exercises_behaviour('index.html contains a button with id "reset"')
+      and _bh.accept_exercises_behaviour('Click the button with id "reset": #count shows 0.'))
 check("#86 a test that only reads a file and looks for text, or a selector, is existence-only; one that calls the code or clicks is not",
       not _bh.test_exercises_behaviour('src = open("a.py").read()\nassert "def f" in src\n') and not _bh.test_exercises_behaviour('expect(document.querySelector("#r")).not.toBeNull()')
       and _bh.test_exercises_behaviour("from a import f\nassert f(1) == 2\n") and _bh.test_exercises_behaviour('await page.click("#r"); expect(await page.inputValue("#n")).toBe("")'))

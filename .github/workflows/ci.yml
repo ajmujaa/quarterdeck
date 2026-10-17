@@ -23,7 +23,7 @@ jobs:
     timeout-minutes: 30
     env:
       # Linux only (ignored on macOS): the pilot and lookout tests start an app a browser must reach, which on Linux needs the owner's opt-in (SECURITY.md)
-      QUARTERDECK_APP_NET: ${{ runner.os == 'Linux' && 'share' || '' }}
+      QUARTERDECK_APP_NET: ${{ matrix.os == 'ubuntu-latest' && 'share' || '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

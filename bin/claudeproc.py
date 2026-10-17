@@ -25,6 +25,26 @@ MAX_REPLY_CHARS = 2500      # a reply longer than this is cut off (the persona a
 THINKING_ENV = {"MAX_THINKING_TOKENS": "0"}     # a voice answer does not need a thinking pass before the first word
 
 
+# What the process is given of the dashboard's environment: what claude needs to run and to sign in, nothing else (the same idea as _qd_claude_env in bin/lib.sh).
+_ENV_KEEP = ("HOME", "PATH", "TMPDIR", "USER", "LOGNAME", "SHELL", "LANG", "TERM", "TZ", "CLAUDE_CONFIG_DIR", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy",
+             "no_proxy", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "SSL_CERT_DIR", "CLAUDE_BIN")
+_ENV_PREFIX = ("LC_", "ANTHROPIC_", "CLAUDE_CODE_")
+_ENV_CLOUD = ("AWS_", "GOOGLE_", "CLOUD_ML_REGION", "VERTEX_", "GCLOUD_")
+
+
+def clean_env(environ=None):
+    """The environment for a claude process the dashboard starts: no GH_TOKEN, no QUARTERDECK_*, no tokens from the owner's env file, no cloud keys unless a
+    cloud provider is the one in use. CLAUDE_CODE_SUBPROCESS_ENV_SCRUB keeps the process's own children from inheriting even this."""
+    environ = os.environ if environ is None else environ
+    cloud = any(environ.get(k) for k in ("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"))
+    out = {}
+    for k, v in environ.items():
+        if k in _ENV_KEEP or k.startswith(_ENV_PREFIX) or (cloud and k.startswith(_ENV_CLOUD)):
+            out[k] = v
+    out["CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"] = "1"
+    return out
+
+
 class Busy(Exception):
     """Another reply is still being written."""
 
@@ -113,7 +133,7 @@ class Session:
         self.work = tempfile.mkdtemp(prefix="quarterdeck-helm-")        # an empty folder: it can see nothing of the project
         try:
             proc = self.popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1,
-                              cwd=self.work, env={**os.environ, **THINKING_ENV, **(env or {})})
+                              cwd=self.work, env={**clean_env(), **THINKING_ENV, **(env or {})})
         except OSError as e:
             shutil.rmtree(self.work, ignore_errors=True)
             self.work = None

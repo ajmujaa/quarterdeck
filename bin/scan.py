@@ -20,14 +20,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build", ".next", ".terraform", "target", "vendor", ".gradle", ".idea", ".cache"}
+SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build", ".next", ".terraform", "target", "vendor", ".gradle", ".idea", ".cache", "fixtures"}
 MAX_DEPTH = 4
 MAX_FILES = 20000
 MAX_MANIFEST = 400_000          # bytes: a manifest bigger than this is not read
 
 LANG_EXT = {".py": "Python", ".js": "JavaScript", ".jsx": "JavaScript", ".ts": "TypeScript", ".tsx": "TypeScript", ".go": "Go", ".rs": "Rust", ".java": "Java",
             ".kt": "Kotlin", ".rb": "Ruby", ".php": "PHP", ".cs": "C#", ".swift": "Swift", ".sh": "Shell", ".tf": "Terraform"}
-SECRET_NAME = re.compile(r"^(\.env(\..+)?|.*\.pem|.*\.p12|.*\.pfx|id_(rsa|ed25519|ecdsa)|credentials(\.json)?|.*\.keystore|secrets?\.(json|ya?ml|toml))$", re.I)
+SECRET_NAME = re.compile(r"^(\.env(\..+)?|\.dev\.vars(\..+)?|.*\.pem|.*\.p12|.*\.pfx|id_(rsa|ed25519|ecdsa)|credentials(\.json)?|.*\.keystore|secrets?\.(json|ya?ml|toml))$", re.I)
 SECRET_EXAMPLE = re.compile(r"(example|sample|template|dist)", re.I)
 SENSITIVE_DIRS = {"migrations": "database migrations", "migration": "database migrations", "secrets": "secrets", "crypto": "encryption", "encryption": "encryption", "auth": "authentication", "payments": "payments", "billing": "payments"}
 
@@ -193,8 +193,18 @@ def scan(path):
             add(prof, "deploy_targets", "Google Cloud App Engine", f)
         if b in ("firebase.json",):
             add(prof, "deploy_targets", "Firebase", f)
-        if b in ("wrangler.toml", "wrangler.json"):
+        if b in ("wrangler.toml", "wrangler.json", "wrangler.jsonc"):
             add(prof, "deploy_targets", "Cloudflare", f)
+        if f.endswith(".bicep"):
+            add(prof, "infrastructure", "Azure Bicep", f)
+            add(prof, "deploy_targets", "Azure", f)
+        if b in ("azure.yaml", "azure.yml"):
+            add(prof, "infrastructure", "Azure Developer CLI", f)
+            add(prof, "deploy_targets", "Azure", f)
+        if b == "host.json" and '"version"' in read_small(root, f)[:2000]:
+            add(prof, "deploy_targets", "Azure", f)
+        if b in ("cloudbuild.yaml", "cloudbuild.yml", "cloudbuild.json"):
+            add(prof, "deploy_targets", "Google Cloud Build", f)
         if b in ("render.yaml",):
             add(prof, "deploy_targets", "Render", f)
         if b in ("Procfile",):
@@ -218,7 +228,9 @@ def scan(path):
     # agent configuration already in the project
     for f in files:
         b = base(f)
-        if b in ("CLAUDE.md", "AGENTS.md", "GEMINI.md", ".cursorrules", "copilot-instructions.md") or f.startswith((".claude/", ".cursor/rules/")):
+        if b == ".mcp.json":
+            add(prof, "agent_config", "MCP servers (.mcp.json)", f)
+        elif b in ("CLAUDE.md", "AGENTS.md", "GEMINI.md", ".cursorrules", "copilot-instructions.md") or f.startswith((".claude/", ".cursor/rules/")):
             if f.startswith(".claude/agents/"):
                 add(prof, "agent_config", "Claude Code agents", f)
             elif f.startswith(".claude/commands/") or f.startswith(".claude/skills/"):
@@ -273,10 +285,28 @@ def infra_changed(root, paths):
             kind = "Supabase"
         elif b in ("samconfig.toml", "samconfig.yaml"):
             kind = "AWS CloudFormation / SAM"
+        elif rel.endswith((".bicep", ".bicepparam")):
+            kind = "Azure Bicep"
+        elif b == "host.json" and '"version"' in read_small(root, rel)[:2000]:
+            kind = "Azure Functions"
+        elif b in ("azure.yaml", "azure.yml"):
+            kind = "Azure Developer CLI"
+        elif b in ("wrangler.toml", "wrangler.json", "wrangler.jsonc"):
+            kind = "Cloudflare"
+        elif b == "fly.toml":
+            kind = "Fly.io"
+        elif b in ("cloudbuild.yaml", "cloudbuild.yml", "cloudbuild.json"):
+            kind = "Google Cloud Build"
+        elif b == "app.yaml" and "runtime:" in read_small(root, rel)[:2000]:
+            kind = "Google Cloud App Engine"
         elif rel.endswith((".yml", ".yaml", ".json", ".template")):
             head = read_small(root, rel)[:20000]
             if "AWSTemplateFormatVersion" in head or "AWS::Serverless" in head:
                 kind = "AWS CloudFormation / SAM"
+            elif "schema.management.azure.com" in head and "deploymentTemplate" in head:
+                kind = "Azure ARM template"
+            elif "serving.knative.dev" in head:
+                kind = "Google Cloud Run"
         elif rel.endswith(CODE_EXT):
             head = read_small(root, rel)[:20000]
             if any(m in head for m in CDK_MARKS):
@@ -296,8 +326,10 @@ def save(prof, name):
         raise ValueError("the name may hold letters, digits, dot, dash and underscore")
     d = profile_dir()
     d.mkdir(parents=True, exist_ok=True)
+    os.chmod(d, 0o700)
     out = d / f"{name}.json"
     out.write_text(json.dumps(prof, indent=2) + "\n")
+    os.chmod(out, 0o600)                                   # a map of a project's sensitive folders and secret file names: owner only
     return out
 
 

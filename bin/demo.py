@@ -29,14 +29,14 @@ SEED = 7
 
 PROJECTS = {
     "wayfarer-mobile": {"summary": "Trip planner for iOS and Android, offline first", "kind": "mobile app",
-                        "duties": ["surveyor", "foreman", "joiner", "shipwright", "panel", "inspector", "harbourmaster", "purser", "trials"],
+                        "duties": ["surveyor", "foreman", "joiner", "shipwright", "panel", "inspector", "harbourmaster", "purser", "trials", "planner", "logkeeper", "bosun"],
                         "verify": "npm test"},
     "wayfarer-web": {"summary": "Web companion to the trip planner", "kind": "web app",
-                     "duties": ["surveyor", "foreman", "shipwright", "panel", "inspector", "trials"], "verify": "npm run check"},
+                     "duties": ["surveyor", "foreman", "shipwright", "panel", "inspector", "trials", "lookout", "pilot", "assayer", "caulker", "brief", "mockup"], "verify": "npm run check"},
     "wayfarer-api": {"summary": "REST API behind both apps", "kind": "API",
-                     "duties": ["surveyor", "shipwright", "inspector", "purser", "trials"], "verify": "pytest -q"},
+                     "duties": ["surveyor", "shipwright", "inspector", "purser", "trials", "marshal", "quartermaster", "infra", "bosun"], "verify": "pytest -q"},
     "harvest-pipeline": {"summary": "Nightly data pipeline that turns raw bookings into reports", "kind": "data pipeline",
-                         "duties": ["surveyor", "purser", "trials"], "verify": "make test"},
+                         "duties": ["surveyor", "purser", "trials", "infra"], "verify": "make test"},
     "saltpan-blog": {"summary": "A food blog: recipes, travel notes, a weekly newsletter", "kind": "blog",
                      "duties": ["surveyor", "joiner"], "verify": ""},
 }
@@ -130,7 +130,20 @@ DUTIES = [("foreman", "Turns a findings document into deduplicated GitHub issues
           ("purser", "Turns a backlog issue into something a stranger could start from."),
           ("shipwright", "Takes one issue to a branch and a pull request."),
           ("surveyor", "Inspects a pull request and reports defects. Never approves, never merges."),
-          ("trials", "Runs the project's own verify command.")]
+          ("trials", "Runs the project's own verify command."),
+          ("assayer", "Writes tests from the issue alone and keeps the ones that prove something."),
+          ("bosun", "Walks the project and reports drift: stale branches and old to-dos."),
+          ("brief", "Turns an idea into a one-page design brief."),
+          ("caulker", "Fixes what the reviewers found on a pull request, and nothing else."),
+          ("infra", "Reads a change to infrastructure files and reports how risky it is."),
+          ("logkeeper", "Turns a panel's ruling into a numbered record in the docs."),
+          ("lookout", "Takes pictures of the running screens and judges them."),
+          ("marshal", "Reads a pull request for security problems."),
+          ("mockup", "Makes one static page per key screen from an approved brief."),
+          ("pilot", "Starts the app from a pull request and tries the main flows."),
+          ("planner", "Puts the backlog in order and sizes each issue."),
+          ("quartermaster", "Judges a dependency update: merge, hold or block.")]
+DRIVEN = {"surveyor", "foreman", "joiner", "shipwright", "panel", "inspector", "harbourmaster", "purser", "trials"}   # the duties the scripted history runs; the rest are enabled but have never run
 
 CREW = [("dockmaster", "design,dev,spec", "chair", "weighs the argument and rules"),
         ("shipwright", "dev", "builder", "prefers the smallest change that works"),
@@ -302,7 +315,7 @@ class World:
         for day in range(1, 7):                     # the week before: a few runs a day on every project, so the 7 day timeline has lanes
             for project, p in PROJECTS.items():
                 for _ in range(rng.randrange(2, 7)):
-                    duty = rng.choice([d for d in p["duties"] if d != "panel"])
+                    duty = rng.choice([d for d in p["duties"] if d != "panel" and d in DRIVEN])
                     verdict, detail = rng.choice([("PR", "#7 opened"), ("CLEAN", "0 finding(s)"), ("DRY-RUN", "0 finding(s)"), ("DRY-RUN", "0 finding(s)"),
                                                   ("PROVEN", "matches the issue"), ("ERROR", "verify failed"), ("SYNCED", "1 card(s) moved")])
                     base.append((day * 1440 + rng.randrange(0, 1380) - 700, project, duty, verdict, detail, ""))

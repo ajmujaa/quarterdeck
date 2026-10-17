@@ -21,6 +21,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from attention import sources
+from attention.sources import _sg
 
 FILE = "rhythm-tasks.json"
 VERSION = 1
@@ -66,8 +67,10 @@ def commit_subjects(path, email, since_day, run=subprocess.run):
     p = Path(str(path)).expanduser()
     if not (p / ".git").exists() or not sources.EMAIL.fullmatch(email or "") or not sources.DAY.fullmatch(since_day or ""):
         return []
+    if _sg.refusal(p):
+        return []
     try:
-        r = run(["git", "-c", "log.showSignature=false", "-c", "core.fsmonitor=false", "-C", str(p), "log", "--no-merges", "--fixed-strings", "--regexp-ignore-case",
+        r = run(["git", *_sg.flags(), "-c", "log.showSignature=false", "-C", str(p), "log", "--no-merges", "--fixed-strings", "--regexp-ignore-case",
                  "--author=" + email, "--invert-grep", "--grep=" + sources.AGENT_TRAILER, "--since=" + since_day,
                  "--date=format-local:%Y-%m-%dT%H:%M", "--pretty=format:%ad%x09%s"], capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.SubprocessError):
@@ -85,8 +88,10 @@ def checkouts(path, since_day, run=subprocess.run):
     p = Path(str(path)).expanduser()
     if not (p / ".git").exists() or not sources.DAY.fullmatch(since_day or ""):
         return []
+    if _sg.refusal(p):
+        return []
     try:
-        r = run(["git", "-c", "core.fsmonitor=false", "-C", str(p), "reflog", "show", "HEAD", "--date=format-local:%Y-%m-%dT%H:%M", "--format=%gd%x09%gs"],
+        r = run(["git", *_sg.flags(), "-C", str(p), "reflog", "show", "HEAD", "--date=format-local:%Y-%m-%dT%H:%M", "--format=%gd%x09%gs"],
                 capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.SubprocessError):
         return []

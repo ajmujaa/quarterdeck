@@ -1,0 +1,7 @@
+workers_dev = true	public workers.dev address	prompt
+*example.invalid/*	broad route pattern	prompt
+sk_live_FIXTUREvalue	secret in plain vars	prompt
+database_id = "11111111-2222-3333-4444-555555555555"	staging points at the production D1 database	prompt
+crons = ["* * * * *"]	cron every minute	prompt
+orders-uploads	R2 bucket with no access note	prompt
+hunter2-cf-held-back	.dev.vars committed, contents must never reach the model	held	.dev.vars

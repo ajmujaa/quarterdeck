@@ -1,0 +1,3 @@
+steps:
+  - name: gcr.io/cloud-builders/gcloud
+    args: ["run", "deploy", "shop-api", "--set-env-vars", "API_KEY=fixture-gcp-api-key"]

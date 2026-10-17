@@ -27,6 +27,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import home as _home
+import safegit as _safegit
 CONFIG = _home.resolve() / "config" / "fleet.local.json"
 SAFE_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,30}$")
 SYNC_ACTIONS = ("pause", "resume")
@@ -208,7 +209,9 @@ def read_commands(directory, agent_names):
 
 def _git(args, cwd, runner=subprocess.run):
     try:
-        r = runner(["git", "-c", "core.fsmonitor=false", "-c", "gc.auto=0", "-C", str(cwd)] + args, capture_output=True, text=True, timeout=6)
+        if _safegit.refusal(cwd):                  # a folder whose own git config makes git run programs is not asked anything
+            return ""
+        r = runner(["git"] + _safegit.flags() + ["-C", str(cwd)] + args, capture_output=True, text=True, timeout=6)
         return r.stdout.strip() if r.returncode == 0 else ""
     except (OSError, subprocess.SubprocessError):
         return ""

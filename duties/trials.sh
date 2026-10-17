@@ -42,7 +42,7 @@ APPLY=0 ISSUE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --apply) APPLY=1 ;;
-    --issue) ISSUE="${2:-}"; shift ;;
+    --issue) ISSUE="${2:-}"; need_num "--issue" "$ISSUE"; shift ;;
     *) die "trials: unknown argument '$1'" ;;
   esac
   shift
@@ -65,22 +65,24 @@ body=$(jq -r .body <<<"$meta")
 slug=$(tr '[:upper:]' '[:lower:]' <<<"$title" | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g' | cut -c1-40)
 BRANCH="test/${ISSUE}-${slug}"
 WT="$QUARTERDECK_HOME/workspace/wt-trials-${PROJECT}-${ISSUE}"
-cleanup_wt() { git -C "$SOURCE_REPO_DIR" worktree remove --force "$WT" >/dev/null 2>&1 || true; }
+cleanup_wt() { safe_git -C "$SOURCE_REPO_DIR" worktree remove --force "$WT" >/dev/null 2>&1 || true; }
 trap 'cleanup_wt' EXIT
 
 working_on "issue #$ISSUE — a test for: $title"
 say "quarterdeck: trials on $REPO#$ISSUE — $title"
 
-guard 120 git -C "$SOURCE_REPO_DIR" fetch -q origin "$BASE" 2>>"$LOG_FILE" || log "fetch failed; using local $BASE"
+guard 120 "${SAFE_GIT[@]}" -C "$SOURCE_REPO_DIR" fetch -q origin "$BASE" 2>>"$LOG_FILE" || log "fetch failed; using local $BASE"
 worktree_at "$SOURCE_REPO_DIR" "$WT" "origin/$BASE" \
   || worktree_at "$SOURCE_REPO_DIR" "$WT" "$BASE" \
   || die "could not create a worktree at $WT"
-git -C "$WT" checkout -q -B "$BRANCH" 2>>"$LOG_FILE" || die "could not create branch $BRANCH"
+safe_git -C "$WT" checkout -q -B "$BRANCH" 2>>"$LOG_FILE" || die "could not create branch $BRANCH"
 
 # What the suite does before anything is added. A repo with failing tests would
 # otherwise make every new test look like a successful reproduction.
 say "  baseline: $TEST_CMD"
-base_out=$(cd "$WT" && guard 900 bash -c "$TEST_CMD" 2>&1); base_rc=$?
+INPUTS_BEFORE="$(verify_inputs "$WT")"
+project_exec check 900 "$WT" "$TEST_CMD"; base_rc=$?; base_out=$EXEC_OUT
+wt_mark "$WT"
 say "  baseline exit $base_rc"
 
 prompt="$(preamble "$PROJECT")
@@ -125,7 +127,7 @@ RESULT: CANNOT_REPRODUCE <what you found instead>
 RESULT: NEEDS_HUMAN <what you need decided>"
 
 result=$(claude_run "$WT" "$prompt" \
-  "Read,Edit,Write,Grep,Glob,Bash(npx *),Bash(npm run*),Bash(node*),Bash(git diff*),Bash(git status*)" \
+  "Read,Edit,Write,Grep,Glob,Bash(npx *),Bash(npm run*),Bash(node*)" \
   "WebFetch,WebSearch,Bash(git push*),Bash(git commit*),Bash(git checkout*),Bash(git reset*),Bash(gh *),Bash(rm -rf*),Bash(curl*),Bash(ssh*),Bash(npm publish*),Bash(npm install*)")
 rc=$?
 [ $rc = 2 ] && { say "quarterdeck: usage limit reached — worktree discarded"; exit 0; }
@@ -146,7 +148,7 @@ fi
 # Final paths of everything changed, one per line. Not `status --porcelain`:
 # its second field is a rename's OLD name, so a file moved into a forbidden
 # path was checked under the name it left.
-changed=$( { git -C "$WT" diff --name-only HEAD; git -C "$WT" ls-files --others --exclude-standard; } | sort -u)
+changed=$(wt_changed "$WT") || { record_run "$PROJECT" trials REFUSED "#$ISSUE — the worktree's .git file was changed"; die "refused: the worktree's .git file was changed"; }
 [ -n "$changed" ] || { record_run "$PROJECT" trials ERROR "#$ISSUE — claimed a test but wrote nothing"
   die "it reported REPRODUCED and changed no files — nothing committed"; }
 
@@ -158,9 +160,22 @@ if [ -n "$offenders" ]; then
   die "a tester may only write tests — nothing committed"
 fi
 
+# A test may not smuggle in a change to CI, dependencies, tool config or the test command itself (it is about to be executed).
+if ! why=$(printf '%s\n' "$changed" | model_diff_gate "$PROJECT" "$WT" "$INPUTS_BEFORE"); then
+  say "  REFUSED: $why"
+  record_run "$PROJECT" trials REFUSED "#$ISSUE — $why"
+  die "refused: $why"
+fi
+
 say ""
 say "  running the new test: $TEST_CMD"
-new_out=$(cd "$WT" && guard 900 bash -c "$TEST_CMD" 2>&1); new_rc=$?
+project_exec check 900 "$WT" "$TEST_CMD"; new_rc=$?; new_out=$EXEC_OUT
+# The new test ran project code that may write in the worktree: the gate again, on what is there now (S1).
+if ! why=$(post_checks_gate "$PROJECT" "$WT" "$INPUTS_BEFORE" "$changed"); then
+  say "  REFUSED: $why"
+  record_run "$PROJECT" trials REFUSED "#$ISSUE — $why"
+  die "refused: $why"
+fi
 say "  exit $new_rc (baseline was $base_rc)"
 
 # The proof: the suite must be worse than it was. A new test that passes on
@@ -179,7 +194,7 @@ say "  red as required — $files"
 
 if [ "$APPLY" = 0 ]; then
   say ""
-  git -C "$WT" diff --stat | sed 's/^/    /' >&2
+  safe_git -C "$WT" diff --cached --stat | sed 's/^/    /' >&2
   say ""
   say "quarterdeck: report only — pass --apply to push the branch and open the pull request"
   say "  worktree kept for inspection: $WT"
@@ -188,16 +203,15 @@ if [ "$APPLY" = 0 ]; then
   exit 0
 fi
 
-git -C "$WT" add -A
+# post_checks_gate staged exactly what passed (and checked the staged blobs); nothing is staged again here
 # Commit as whoever this checkout is configured as — the same identity as
 # every other commit on the repository. A made-up "quarterdeck" address is not a
 # GitHub account, and Vercel refuses to deploy a preview for a commit it cannot
 # tie to one: both of Quarterdeck's first open pull requests were blocked for
 # exactly that, while every human one deployed. Quarterdeck stays credited in the
 # message and the pull request body.
-ident_email=$(git -C "$WT" config user.email || true)
-[ -n "$ident_email" ] || die "no git identity configured for $PROJECT — set user.name and user.email in $(project_path "$PROJECT") so commits can be tied to a GitHub account"
-git -C "$WT" commit -q -m "test: reproduce #$ISSUE — $title
+commit_identity "$PROJECT" "$WT" || die "no commit identity for $PROJECT: GitHub could not be asked for the account's no-reply address and the checkout has no user.email (set \"git\": {\"name\", \"email\"} in the registry)"
+safe_git -C "$WT" ${COMMIT_ID[@]+"${COMMIT_ID[@]}"} commit -q -m "test: reproduce #$ISSUE — $title
 
 $detail
 
@@ -206,10 +220,10 @@ This test fails on $BASE and should pass once #$ISSUE is fixed.
 Written by the Quarterdeck trials duty." 2>>"$LOG_FILE" \
   || { record_run "$PROJECT" trials ERROR "#$ISSUE — commit failed"; die "could not commit"; }
 
-guard 120 git -C "$WT" push -q -u origin "$BRANCH" --force-with-lease 2>>"$LOG_FILE" \
+safe_git_guard 120 -C "$WT" push -q -u origin "$BRANCH" --force-with-lease 2>>"$LOG_FILE" \
   || { record_run "$PROJECT" trials ERROR "#$ISSUE — push failed"; die "could not push $BRANCH"; }
 
-if url=$(guard 90 "$GH" pr create -R "$REPO" --base "$BASE" --head "$BRANCH" --draft \
+if url=$(gh_post 90 pr create -R "$REPO" --base "$BASE" --head "$BRANCH" --draft \
     --title "test: reproduce #$ISSUE — $title" \
     --body "Reproduces #$ISSUE.
 

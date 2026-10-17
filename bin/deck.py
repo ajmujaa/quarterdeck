@@ -20,6 +20,8 @@ import re
 import subprocess
 import sys
 
+import safegit as _safegit
+
 SKIP = {"node_modules", ".git", "vendor", "dist", "build", ".next", "__pycache__", "coverage", ".venv", "venv", "docs_build"}
 CODE = (".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".vue", ".svelte", ".py", ".sh", ".rb", ".go", ".rs", ".java", ".php")
 EXAMPLE_ENV = re.compile(r"^\.?env(\.|_)?(example|sample|template|dist)$|^(example|sample)\.env$|^\.env\.(example|sample|template|dist)$", re.I)
@@ -29,7 +31,12 @@ LIFECYCLE = {"start", "test", "build", "dev", "lint", "prepare", "preinstall", "
 
 
 def git(repo, *args, timeout=60):
-    r = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, timeout=timeout)
+    """git against the project's repository, through bin/safegit.py (no hooks, filters, textconv or signing; a repository whose own config defines
+    such things is not touched and gives nothing)."""
+    try:
+        r = _safegit.run(repo, *args, text=True, timeout=timeout)
+    except (_safegit.Untrusted, OSError, subprocess.SubprocessError):
+        return ""
     return r.stdout if r.returncode == 0 else ""
 
 
@@ -246,8 +253,8 @@ def issues(open_issues, prs):
 # ---- TODO and FIXME older than a season -----------------------------------------------------------------------------------------------------
 def todos(tree, repo, ref, days, now, cap=60):
     out, n = [], 0
-    r = subprocess.run(["git", "-C", repo, "grep", "-nIw", "-e", "TODO", "-e", "FIXME", ref, "--", "."], capture_output=True, text=True, timeout=120)
-    for line in r.stdout.splitlines():
+    out_text = git(repo, "grep", "-nIw", "-e", "TODO", "-e", "FIXME", ref, "--", ".", timeout=120)
+    for line in out_text.splitlines():
         m = re.match(r"^[^:]+:(.+?):(\d+):(.*)$", line)
         if not m:
             continue
@@ -257,8 +264,7 @@ def todos(tree, repo, ref, days, now, cap=60):
         if n >= cap:
             break
         n += 1
-        b = subprocess.run(["git", "-C", repo, "blame", "--line-porcelain", "-L", f"{ln},{ln}", ref, "--", path], capture_output=True, text=True, timeout=60)
-        mt = re.search(r"^author-time (\d+)", b.stdout, re.M)
+        mt = re.search(r"^author-time (\d+)", git(repo, "blame", "--line-porcelain", "-L", f"{ln},{ln}", ref, "--", path), re.M)
         if not mt:
             continue
         age = (now - int(mt.group(1))) // 86400

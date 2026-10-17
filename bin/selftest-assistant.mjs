@@ -997,7 +997,8 @@ T("card reading: hostile bodies never run and never load anything", () => {
   }
   assert.match(renderMarkdown("![pixel](https://evil.example/track.png)"), /<a href="https:\/\/evil\.example\/track\.png"[^>]*>image: pixel<\/a>/);   // a plain link, nothing loads
   assert.ok(!/<a /.test(renderMarkdown("[click](javascript:alert(1))")) && /click/.test(renderMarkdown("[click](javascript:alert(1))")));
-  assert.match(renderMarkdown("<script>alert(1)</script>"), /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+  assert.ok((renderMarkdown(">".repeat(4000) + " deep").match(/<blockquote>/g) || []).length <= 10, "quotes nest to a fixed depth, however many > come");
+  assert.match(renderMarkdown("<script>alert(1)</script>"),/&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
   assert.equal(safeUrl("javascript:alert(1)"), ""); assert.equal(safeUrl("data:text/html,x"), ""); assert.equal(safeUrl("https://a.example/x"), "https://a.example/x"); assert.equal(safeUrl("mailto:a@b.example"), "mailto:a@b.example"); assert.equal(safeUrl("https://a b"), ""); assert.equal(mdEsc(`<"'&\``), "&lt;&quot;&#39;&amp;&#96;");
 });
 T("card reading: very long lines and a 200 KB body are cut, finish quickly and stay safe", () => {

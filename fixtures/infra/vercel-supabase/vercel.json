@@ -1,0 +1,7 @@
+{
+  "env": { "SUPABASE_SERVICE_ROLE_KEY": "eyJFIXTUREservice_role" },
+  "headers": [{ "source": "/api/(.*)", "headers": [{ "key": "Access-Control-Allow-Origin", "value": "*" }] }],
+  "rewrites": [{ "source": "/proxy/:path*", "destination": "https://partner.example.invalid/:path*" }],
+  "redirects": [{ "source": "/go/:target*", "destination": "https://:target*" }],
+  "crons": [{ "path": "/api/cron/cleanup", "schedule": "* * * * *" }]
+}

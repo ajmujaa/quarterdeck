@@ -11,6 +11,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import safegit as _safegit
+
 GITIGNORE = ".env\n.env.*\n!.env.example\n*.pem\nnode_modules/\n__pycache__/\n.venv/\ndist/\nbuild/\n.DS_Store\n"
 
 
@@ -24,7 +27,7 @@ def create(name, parent=None, about=""):
         raise ValueError(f"{dest} already exists and is not empty")
     about = " ".join(str(about or "").split())[:300]
     dest.mkdir(parents=True, exist_ok=True)
-    r = subprocess.run(["git", "init", "-q", "-b", "main", str(dest)], capture_output=True, text=True)
+    r = subprocess.run(["git", *_safegit.flags(), "init", "-q", "-b", "main", str(dest)], capture_output=True, text=True)
     if r.returncode != 0:
         raise ValueError("git could not start a repository: " + (r.stderr.strip() or "unknown error")[:160])
     (dest / "README.md").write_text(f"# {name}\n\n{about or 'Say here, in a sentence, what this is for.'}\n")

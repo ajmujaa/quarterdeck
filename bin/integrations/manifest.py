@@ -13,7 +13,7 @@ import json
 import re
 from pathlib import Path
 
-from integrations import common
+from integrations import common, keychain
 
 BUILTIN = Path(__file__).resolve().parent / "services"
 SAFE_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,30}$")
@@ -71,7 +71,12 @@ def load_services(extra=None):
 
 
 def env_keys():
-    """The credential NAMES present in the store, never the values."""
+    """The credential NAMES present in the active store, never the values."""
+    if common.store_kind() == "keychain":
+        try:
+            return {k for k in known_keys() if keychain.has(k)}
+        except keychain.KeychainError:
+            return set()
     p = common.env_path()
     keys = set()
     try:
@@ -92,6 +97,7 @@ def status(services=None, cfg=None, have=None, recorded=None):
     cfg = common.load_config() if cfg is None else cfg
     have = env_keys() if have is None else have
     recorded = common.read_status() if recorded is None else recorded
+    kind = common.store_kind()
     rows = []
     for s in services:
         on = bool((cfg["sources"].get(s["id"]) or {}).get("enabled")) or s["local"]
@@ -118,7 +124,7 @@ def status(services=None, cfg=None, have=None, recorded=None):
             state = "ok" if last else "ready"
         rows.append({**{k: s[k] for k in ("id", "label", "what", "minutes", "local", "steps", "settings", "reads", "not_reads", "scopes", "revoke", "tested", "links")},
                      "verified": s["tested"].startswith(VERIFIED),
-                     "credentials": [{**c, "present": c["key"] in have} for c in s["credentials"]],
+                     "credentials": [{**c, "present": c["key"] in have, "stored": kind if c["key"] in have else None} for c in s["credentials"]],
                      "enabled": bool((cfg["sources"].get(s["id"]) or {}).get("enabled")), "state": state, "missing": missing,
                      "last_at": (last or {}).get("at"), "error": (bad or {}).get("error_short") or ""})
     return rows
@@ -138,6 +144,22 @@ def set_credential(key, value, services=None):
     value = str(value or "").strip()
     if "\n" in value or "\r" in value or len(value) > 4000:
         raise ValueError("a credential is one line of at most 4000 characters")
+    if value and common.store_kind() == "keychain" and not keychain.fits(key, value):
+        raise ValueError(f"the keychain takes at most about {keychain.MAX_CHARS:,} characters per credential. Move credentials back to the file to keep a longer one")
+    _write(common.store_kind(), key, value)
+    return bool(value)
+
+
+def store_info():
+    """Where credentials are kept and whether the keychain could be chosen. Facts only."""
+    return {"kind": common.store_kind(), "keychain_available": keychain.available()}
+
+
+def _write(kind, key, value):
+    """One credential into one named store; an empty value removes it."""
+    if kind == "keychain":
+        keychain.put(key, value) if value else keychain.delete(key)
+        return
     p = common.env_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     p.parent.chmod(0o700)
@@ -146,7 +168,52 @@ def set_credential(key, value, services=None):
     if value:
         keep.append(f"{key}={value}")
     common.write_private(p, "\n".join(keep) + ("\n" if keep else ""))
-    return bool(value)
+
+
+def move_store(to, services=None):
+    """Move every credential a service asks for to the other store, then make it the active one. The caller has the owner's confirm.
+    Copies first (the keychain reads each back); the old copies go only after the new store holds them all; a failure leaves the old store as it was."""
+    if to not in ("file", "keychain"):
+        raise ValueError("the store is the file or the keychain")
+    frm = common.store_kind()
+    if to == frm:
+        raise ValueError("credentials are already kept there")
+    if to == "keychain" and not keychain.available():
+        raise ValueError("the macOS Keychain is not available on this computer")
+    keys = known_keys(services)
+    try:
+        if frm == "keychain":
+            src = {k: v for k in sorted(keys) for v in [keychain.get(k)] if v}
+        else:
+            src = {k: v for k, v in (common.read_env_file() if common.env_path().is_file() else {}).items() if k in keys and v}
+    except common.IntegrationError as e:
+        raise ValueError(e.short)
+    if to == "keychain" and not all(keychain.fits(k, v) for k, v in src.items()):
+        raise ValueError(f"a credential is longer than the keychain takes (about {keychain.MAX_CHARS:,} characters), so nothing was moved")
+    done = []
+    try:
+        for k, v in src.items():
+            done.append(k)                      # before the write: a write that fails half way must be undone too
+            _write(to, k, v)
+    except Exception:
+        for k in done:
+            try:
+                _write(to, k, "")
+            except Exception:
+                pass
+        raise
+    p = common.HOME / "config" / "integrations.json"
+    try:
+        cur = json.loads(p.read_text())
+        cur = cur if isinstance(cur, dict) else {}
+    except (OSError, ValueError):
+        cur = {}
+    cur["credential_store"] = to
+    p.parent.mkdir(parents=True, exist_ok=True)
+    common.write_private(p, json.dumps(cur, indent=2) + "\n")
+    for k in src:
+        _write(frm, k, "")
+    return len(src)
 
 
 def set_enabled(service_id, on, services=None):

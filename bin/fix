@@ -55,7 +55,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --panel)     PANEL_ID="${2:-}"; shift ;;
     --item)      ITEM="${2:-}"; shift ;;
-    --issue)     ISSUE_ARG="${2:-}"; shift ;;
+    --issue)     ISSUE_ARG="${2:-}"; need_num "--issue" "$ISSUE_ARG"; shift ;;
     --apply)     APPLY=1 ;;
     --no-inspect) INSPECT=0 ;;
     *) die "fix: unknown argument '$1'" ;;

@@ -104,7 +104,9 @@ function stripComments(s) {
   return out + s.slice(at);
 }
 
-export function renderMarkdown(text) {
+const MAX_DEPTH = 8;   // quotes inside quotes: a few thousand > characters must not recurse that deep
+export const renderMarkdown = text => render(text, 0);
+function render(text, depth) {
   let src = String(text ?? "");
   let cut = false;
   if (src.length > MAX_CHARS) { src = src.slice(0, MAX_CHARS); cut = true; }
@@ -138,7 +140,7 @@ export function renderMarkdown(text) {
     if (/^ {0,3}>/.test(l)) {
       const buf = [];
       while (i < lines.length && /^ {0,3}>/.test(lines[i])) buf.push(lines[i++].replace(/^ {0,3}> ?/, ""));
-      out.push(`<blockquote>${renderMarkdown(buf.join("\n"))}</blockquote>`);
+      out.push(`<blockquote>${depth >= MAX_DEPTH ? `<p>${esc(buf.join("\n"))}</p>` : render(buf.join("\n"), depth + 1)}</blockquote>`);
       continue;
     }
     if (ITEM.test(l)) {

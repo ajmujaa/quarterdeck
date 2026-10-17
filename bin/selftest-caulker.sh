@@ -116,5 +116,5 @@ jq '.headRefName = "feat-bug"' "$T/ghdata/pr-1.json" > "$T/x" && mv "$T/x" "$T/g
 
 # ---- structure ------------------------------------------------------------------------------------------------------------------------------
 ck "the duty is read whole before it runs" 'grep -q "^# quarterdeck: read-whole-file$" "$REAL/duties/caulker.sh" && [ "$(tail -c 3 "$REAL/duties/caulker.sh" | tr -d "\n")" = "}" ]'
-ck "the only push in the duty is an explicit refspec to one branch, never forced" '[ "$(grep -c "git .* push" "$REAL/duties/caulker.sh" | tr -d " ")" -ge 1 ] && ! grep -E "push.*(--force|-f |--force-with-lease|\+HEAD)" "$REAL/duties/caulker.sh" | grep -v "^#" | grep -q . && grep -q "HEAD:refs/heads/\$BRANCH" "$REAL/duties/caulker.sh"'
+ck "the only push in the duty is an explicit refspec to one branch, never forced" '[ "$(grep -cE "(safe_git|SAFE_GIT).* push" "$REAL/duties/caulker.sh" | tr -d " ")" -ge 1 ] && ! grep -E "push.*(--force|-f |--force-with-lease|\+HEAD)" "$REAL/duties/caulker.sh" | grep -v "^#" | grep -q . && grep -q "HEAD:refs/heads/\$BRANCH" "$REAL/duties/caulker.sh"'
 st_done

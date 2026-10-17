@@ -113,6 +113,26 @@ fresh; st_reply default "$MERGE_REPLY"; st_duty quartermaster --pr 1 --apply
 ck "a pinned package is BLOCK, no model is asked, and --apply labels and comments once" '[ "$(last_verdict)" = BLOCK ] && grep -q "pinned" <<<"$(last_detail)" && [ ! -s "$T/claude-calls" ] && grep -q "add-label quartermaster:block" "$T/gh-calls" && [ "$(grep -c "^gh pr comment" "$T/gh-calls")" = 1 ]'
 st_registry '["quartermaster"]' '{"verify":"grep -q OK check.txt","quartermaster":{"install":"true"}}'
 
+# ---- round 5 H1: a fork's head is never installed, and a pull request that changes the package manager's hook files is not installed ----------------
+st_registry '["quartermaster"]' "$(jq -nc --arg i "touch $T/installed.flag" '{verify:"grep -q OK check.txt", quartermaster:{install:$i}}')"
+jq '.isCrossRepository = true' "$T/ghdata/pr-1.json" > "$T/pr1.tmp" && cp "$T/pr1.tmp" "$T/ghdata/pr-1.json"
+rm -f "$T/installed.flag"; fresh; st_reply default "$MERGE_REPLY"; st_duty quartermaster --pr 1 --apply
+ck "H1 a pull request from a fork is BLOCKED before any worktree, install, check or model, and nothing is posted" '[ "$(last_verdict)" = BLOCKED ] && grep -qi "fork" <<<"$(last_detail)" && [ ! -e "$T/installed.flag" ] && [ ! -s "$T/claude-calls" ] && no_gh_writes'
+ck "H1  the duty asks GitHub whether the head is on a fork" 'grep -q "isCrossRepository" "$T/gh-calls"'
+jq 'del(.isCrossRepository)' "$T/ghdata/pr-1.json" > "$T/pr1.tmp" && cp "$T/pr1.tmp" "$T/ghdata/pr-1.json"
+rm -f "$T/installed.flag"; fresh; st_reply default "$MERGE_REPLY"; st_duty quartermaster --pr 1
+ck "H1  and one whose origin cannot be told is treated as a fork" '[ "$(last_verdict)" = BLOCKED ] && [ ! -e "$T/installed.flag" ]'
+jq '.isCrossRepository = false' "$T/ghdata/pr-1.json" > "$T/pr1.tmp" && cp "$T/pr1.tmp" "$T/ghdata/pr-1.json"
+hn=20
+for hk in .pnpmfile.cjs .yarnrc.yml .npmrc .yarn/plugins/p.cjs; do
+  hn=$((hn+1)); git -C "$T/work" checkout -q main
+  bump "$hn" "dep-hook-$hn" "Bump left-pad from 1.2.3 to 1.2.4" 1.2.4 '{}' "$hk" "require('fs').writeFileSync('$T/hook-ran','x'); module.exports={hooks:{}};"
+  rm -f "$T/installed.flag"; fresh; st_reply default "$MERGE_REPLY"; st_duty quartermaster --pr "$hn"
+  ck "H1 a same-repo pull request that changes $hk is not installed: HOLD, naming the file" '[ ! -e "$T/installed.flag" ] && grep -q "HOLD" <<<"$OUT" && grep -qF "$hk" <<<"$OUT"'
+done
+ck "H1 the default pnpm install never loads a pnpmfile" 'grep -q "pnpm install --frozen-lockfile --ignore-scripts --ignore-pnpmfile" "$REAL/duties/quartermaster.sh"'
+st_registry '["quartermaster"]' '{"verify":"grep -q OK check.txt","quartermaster":{"install":"true"}}'
+
 # ---- unparseable replies write nothing; the cap; no bump -----------------------------------------------------------------------------------------
 fresh; st_reply default 'Looks safe to me.'; st_duty quartermaster --pr 1 --apply
 ck "an unparseable reply is an ERROR run that writes nothing to GitHub" '[ "$(last_verdict)" = ERROR ] && no_gh_writes && ! grep -q "add-label" "$T/gh-calls"'

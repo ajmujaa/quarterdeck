@@ -57,7 +57,7 @@ ck "the preamble tells the model it is data"  'grep -q "BEGIN UNTRUSTED and END 
 # Names that hold text written by someone else (or text derived from it by a
 # model) anywhere in the duties. A reference to one inside a prompt block must be
 # on a line that also calls `untrusted`.
-VARS='body|title|diff|comments|issue|claim|existing|BRIEF|BOARD|BOARD_TEXT|FLOOR|ARGUMENT|items|verify_out|CI_FAILING|CI_PENDING|filetext'
+VARS='body|title|diff|comments|issue|claim|existing|BRIEF|BOARD|BOARD_TEXT|FLOOR|ARGUMENT|items|verify_out|CI_FAILING|CI_PENDING|filetext|HOLD'
 raw_in_prompts() { # raw_in_prompts <file> -> file:line:text for each unwrapped reference
   awk -v re="[\$][{]?($VARS)([^A-Za-z0-9_]|\$)|cat \"[\$]FROM\"" -v f="$1" '
     /^[[:space:]]*(prompt|p|ruling_prompt)="/ { inp = 1 }
@@ -104,6 +104,7 @@ expect duties/infra.sh "changed infrastructure file names"
 expect duties/logkeeper.sh "decision panel ruling"
 expect duties/bosun.sh "findings quoting the repository's files"
 expect duties/quartermaster.sh "pull request title, lockfile names, check output and release notes"
+expect duties/quartermaster.sh "reasons the harness found, quoting the lockfile, the install output and the release notes"
 expect duties/brief.sh "the person's idea"
 expect duties/brief.sh "issue text"
 expect duties/brief.sh "the owner's notes"

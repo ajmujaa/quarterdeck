@@ -47,6 +47,7 @@ def init(path):
     path = Path(path).expanduser()
     for d in SUBDIRS:
         (path / d).mkdir(parents=True, exist_ok=True)
+        os.chmod(path / d, 0o700)
     os.chmod(path, 0o700)
     registry = path / "config" / "projects.json"
     if not registry.exists():
@@ -86,7 +87,7 @@ def plan(src, dst):
             rows.append((d + "/", "folder", n, size, "target already has files, they are kept and only missing ones are added" if (dst / d).is_dir() and any((dst / d).iterdir()) else ""))
     for f in MOVE_FILES:
         p = src / f
-        if p.is_file():
+        if p.is_file() and not p.is_symlink():
             clash = (dst / f).exists() and not ((dst / f).name == "projects.json" and (dst / f).read_text().strip() == "{}")
             rows.append((f, "file", 1, p.stat().st_size, "target already has this file: the copy is kept beside it as .from-program" if clash else ""))
     return rows
@@ -117,11 +118,14 @@ def _copy_tree(a, b):
     for root, dirs, files in os.walk(a):
         rel = Path(root).relative_to(a)
         (b / rel).mkdir(parents=True, exist_ok=True)
-        os.chmod(b / rel, os.stat(root).st_mode & 0o777)
+        os.chmod(b / rel, 0o700)                       # private whatever the old modes were
         for f in files:
             t = b / rel / f
+            if os.path.islink(Path(root) / f):
+                continue                               # a link could point at a secret anywhere on the disk: never followed, never copied
             if not t.exists():
                 shutil.copy2(Path(root) / f, t)
+                os.chmod(t, 0o600)
 
 
 def _digest(path):
@@ -160,7 +164,7 @@ def migrate(src, dst, apply=False, force=False):
             if (src / d).is_dir():
                 _copy_tree(src / d, dst / d)
         for f in MOVE_FILES:
-            if (src / f).is_file():
+            if (src / f).is_file() and not (src / f).is_symlink():
                 t = dst / f
                 t.parent.mkdir(parents=True, exist_ok=True)
                 if t.exists() and t.name == "projects.json" and t.read_text().strip() == "{}":
@@ -169,6 +173,9 @@ def migrate(src, dst, apply=False, force=False):
                     shutil.copy2(src / f, str(t) + ".from-program")
                 elif not t.exists():
                     shutil.copy2(src / f, t)
+                for q in (t, Path(str(t) + ".from-program")):
+                    if q.exists():
+                        os.chmod(q, 0o600)
     except OSError as e:
         return False, out + [f"  copy failed ({e}); nothing was switched and the originals are untouched"]
     bad = []
@@ -177,6 +184,8 @@ def migrate(src, dst, apply=False, force=False):
             for root, _d, files in os.walk(src / item.rstrip("/")):
                 for f in files:
                     a = Path(root) / f
+                    if a.is_symlink():
+                        continue
                     b = dst / a.relative_to(src)
                     if not b.exists() or b.stat().st_size != a.stat().st_size:
                         bad.append(str(a.relative_to(src)))

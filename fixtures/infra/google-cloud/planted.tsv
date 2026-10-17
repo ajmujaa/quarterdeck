@@ -1,0 +1,7 @@
+force_destroy = true	bucket and objects deleted together	prompt
+public_access_prevention = "inherited"	public access prevention not enforced	prompt
+member = "allUsers"	public bucket or Cloud Run invoker binding	prompt
+roles/owner	primitive owner role for CI	prompt
+deletion_protection = false	database without deletion protection, new name replaces it	prompt
+fixture-gcp-db-password	secret in app.yaml env_variables	prompt
+fixture-gcp-api-key	secret literal in cloudbuild args	prompt

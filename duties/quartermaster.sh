@@ -51,7 +51,7 @@ APPLY=0 PR=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --apply) APPLY=1 ;;
-    --pr)    PR="${2:-}"; shift ;;
+    --pr)    PR="${2:-}"; need_num "--pr" "$PR"; shift ;;
     *) die "quartermaster: unknown argument '$1'" ;;
   esac
   shift
@@ -69,13 +69,17 @@ WT="$QUARTERDECK_HOME/workspace/wt-qm-${PROJECT}-${PR}"
 TMP="$(mktemp -d)"
 cleanup() {
   [ "${BASH_SUBSHELL:-0}" = 0 ] || return 0
-  git -C "$SOURCE_REPO_DIR" worktree remove --force "$WT" >/dev/null 2>&1 || true
+  safe_git -C "$SOURCE_REPO_DIR" worktree remove --force "$WT" >/dev/null 2>&1 || true
   rm -rf "$TMP"
 }
 trap cleanup EXIT
 
-meta=$(guard 60 "$GH" pr view "$PR" -R "$REPO" --json number,title,body,state,headRefOid,labels 2>>"$LOG_FILE") || die "cannot read $REPO#$PR"
-title=$(jq -r .title <<<"$meta"); sha=$(jq -r '.headRefOid // ""' <<<"$meta")
+meta=$(guard 60 "$GH" pr view "$PR" -R "$REPO" --json number,title,body,state,headRefOid,labels,isCrossRepository 2>>"$LOG_FILE") || die "cannot read $REPO#$PR"
+# A fork's head is a stranger's code, and the install below runs with the network on: it is never checked out here at all.
+if why=$(fork_refuse "$meta"); then
+  say "quarterdeck: BLOCKED — $why"; record_run "$PROJECT" quartermaster BLOCKED "#$PR — $why"; exit 0
+fi
+title=$(jq -r .title <<<"$meta" | python3 "$QUARTERDECK_DIR/bin/outscan.py" --redact); sha=$(jq -r '.headRefOid // ""' <<<"$meta")
 stated="$title $(jq -r '[.labels[]?.name] | join(" ")' <<<"$meta")"        # the claim: title and labels only (a bot's body carries someone else's notes)
 changed=$(guard 60 "$GH" pr diff "$PR" -R "$REPO" --name-only 2>>"$LOG_FILE") || die "cannot read the files $REPO#$PR changes"
 working_on "PR #$PR — $title"
@@ -86,8 +90,8 @@ post_verdict() { # post_verdict <verdict token> <comment body>
   [ "$APPLY" = 1 ] || return 0
   local label="quartermaster:$(tr '[:upper:]' '[:lower:]' <<<"$1")"
   guard 60 "$GH" label create "$label" --description "Quarterdeck quartermaster: $1" --force >/dev/null 2>>"$LOG_FILE" || true
-  guard 60 "$GH" pr edit "$PR" -R "$REPO" --add-label "$label" >/dev/null 2>>"$LOG_FILE" || log "quartermaster #$PR: could not add the label"
-  guard 60 "$GH" pr comment "$PR" -R "$REPO" --body "$2" >/dev/null 2>>"$LOG_FILE" || { record_run "$PROJECT" quartermaster ERROR "could not comment on #$PR"; die "could not post"; }
+  gh_post 60 pr edit "$PR" -R "$REPO" --add-label "$label" >/dev/null 2>>"$LOG_FILE" || log "quartermaster #$PR: could not add the label"
+  gh_post 60 pr comment "$PR" -R "$REPO" --body "$2" >/dev/null 2>>"$LOG_FILE" || { record_run "$PROJECT" quartermaster ERROR "could not comment on #$PR"; die "could not post"; }
 }
 finish() { # finish <verdict-token> <detail> <comment-body>
   say ""; say "$3" >&2; say ""
@@ -103,10 +107,10 @@ finish() { # finish <verdict-token> <detail> <comment-body>
 FOOT="<sub>Quarterdeck quartermaster. The harness gathered every fact and ran the install with scripts disabled; the model only judged them. Nothing was merged.</sub>"
 
 # ---- what the pull request bumps, from git objects of the project -------------------------------------------------------------
-guard 120 git -C "$SOURCE_REPO_DIR" fetch -q origin "$BASE" 2>>"$LOG_FILE" || log "fetch failed; using local $BASE"
-guard 180 git -C "$SOURCE_REPO_DIR" fetch -q origin "pull/$PR/head" 2>>"$LOG_FILE" || die "could not fetch pull/$PR/head"
-HEADREF=$(git -C "$SOURCE_REPO_DIR" rev-parse FETCH_HEAD)
-BASEREF="origin/$BASE"; git -C "$SOURCE_REPO_DIR" rev-parse -q --verify "$BASEREF" >/dev/null || BASEREF="$BASE"
+guard 120 "${SAFE_GIT[@]}" -C "$SOURCE_REPO_DIR" fetch -q origin "$BASE" 2>>"$LOG_FILE" || log "fetch failed; using local $BASE"
+guard 180 "${SAFE_GIT[@]}" -C "$SOURCE_REPO_DIR" fetch -q origin "pull/$PR/head" 2>>"$LOG_FILE" || die "could not fetch pull/$PR/head"
+HEADREF=$(safe_git -C "$SOURCE_REPO_DIR" rev-parse FETCH_HEAD)
+BASEREF="origin/$BASE"; safe_git -C "$SOURCE_REPO_DIR" rev-parse -q --verify "$BASEREF" >/dev/null || BASEREF="$BASE"
 printf '%s\n' "$changed" > "$TMP/files"
 facts=$(python3 "$QM" bumps --repo "$SOURCE_REPO_DIR" --base "$BASEREF" --head "$HEADREF" --files "$TMP/files") || die "quartermaster: could not read the manifests"
 jq -e '.bumps' <<<"$facts" >/dev/null 2>&1 || die "quartermaster: the manifests did not parse"
@@ -123,7 +127,7 @@ while read -r fp; do
   [ -n "$fp" ] || continue
   while read -r f; do
     [ -n "$f" ] || continue
-    F="$fp" awk -v f="$f" 'BEGIN { exit !(index(f, ENVIRON["F"]) == 1) }' && reasons="${reasons:+$reasons; }touches the forbidden path $fp ($f)"
+    F="$fp" awk -v f="$f" 'BEGIN { exit !(index(tolower(f), tolower(ENVIRON["F"])) == 1) }' && reasons="${reasons:+$reasons; }touches the forbidden path $fp ($f)"
   done <<<"$changed"
 done < <(jq -r --arg p "$PROJECT" '(.[$p].forbidden_paths // [])[]' "$PROJECTS_FILE")
 while read -r pin; do
@@ -202,14 +206,22 @@ nnew=$(jq '.new_dependencies | length' <<<"$facts")
 INSTALL=$(project_get "$PROJECT" quartermaster.install)
 if [ -z "$INSTALL" ]; then
   if   [ -f "$WT/package-lock.json" ]; then INSTALL="npm ci --ignore-scripts"
-  elif [ -f "$WT/pnpm-lock.yaml" ];    then INSTALL="pnpm install --frozen-lockfile --ignore-scripts"
+  elif [ -f "$WT/pnpm-lock.yaml" ];    then INSTALL="pnpm install --frozen-lockfile --ignore-scripts --ignore-pnpmfile"
   elif [ -f "$WT/yarn.lock" ];         then INSTALL="yarn install --frozen-lockfile --ignore-scripts"
   fi
 fi
 inst_note="no install step for this project"; inst_rc=0
+# "Scripts disabled" does not cover the package manager's own hooks: a .pnpmfile.cjs, a yarnPath or plugin in .yarnrc*/.yarn/, or an .npmrc
+# that points elsewhere all run or redirect at install time. A pull request that changes one is not installed.
+hooks=$(grep -iE '(^|/)(\.pnpmfile\.cjs|\.yarnrc[^/]*|\.npmrc)$|(^|/)\.yarn/' <<<"$changed" | head -5 | tr '\n' ' ' | sed 's/ $//')
+if [ -n "$INSTALL" ] && [ -n "$hooks" ]; then
+  inst_note="not run: the pull request changes the package manager's own hook or settings file(s) $hooks"
+  addhold "the install was not run because the pull request changes $hooks, which the package manager loads and runs even with scripts disabled"
+  INSTALL=""
+fi
 if [ -n "$INSTALL" ]; then
   say "  installing, scripts disabled: $INSTALL"
-  out=$(cd "$WT" && guard "${QUARTERDECK_CHECK_TIMEOUT:-900}" bash -c "$INSTALL" 2>&1); inst_rc=$?
+  project_exec install "${QUARTERDECK_CHECK_TIMEOUT:-900}" "$WT" "$INSTALL"; inst_rc=$?; out=$EXEC_OUT
   inst_note="\`$INSTALL\` exited $inst_rc"
   [ "$inst_rc" = 0 ] || addhold "the install failed ($INSTALL exited $inst_rc): $(tail -3 <<<"$out" | tr '\n' ' ' | cut -c1-200)"
 fi
@@ -246,7 +258,9 @@ packages changed: $nb (examined: $(jq length "$TMP/pkgs.json"), not examined: $n
 install: $inst_note
 $(printf 'pull request title: %s\nwhat else arrived in the lockfile: new install scripts: %s; new dependencies: %s; licence changes: %s\nthe project'"'"'s own checks on the pull request'"'"'s head:\n%s\n%s\n' "$title" "${inst:-none}" "$nnew" "${lic:-none}" "$checks_note" "$pkgblock" | untrusted "pull request title, lockfile names, check output and release notes")
 
-THE HARNESS HAS ALREADY FOUND THESE, WHICH MAKE MERGE UNAVAILABLE: ${HOLD:-nothing}
+THE HARNESS HAS ALREADY FOUND THESE, WHICH MAKE MERGE UNAVAILABLE. Each is a fact it measured, but some quote text the pull request controls (new
+package names, licence text, install output, check names, phrases from the release notes), so they sit in a data block too:
+$(printf '%s\n' "${HOLD:-nothing}" | untrusted "reasons the harness found, quoting the lockfile, the install output and the release notes")
 ${ADR_BLOCK:-}
 Judge the whole bump. Say MERGE only if you would be content to see it merged unread, HOLD with what a person must look at, or
 BLOCK if it must not go in. You never merge anything; a person does.

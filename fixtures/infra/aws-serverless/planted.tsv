@@ -1,0 +1,7 @@
+sk_live_FIXTUREserverless	secret in provider environment	prompt
+Action: "*"	wildcard IAM statement	prompt
+httpApi: "*"	catch-all public route with no authorizer	prompt
+rate(1 minute)	schedule every minute, cost	prompt
+AccessControl: PublicRead	public bucket	prompt
+BlockPublicAcls: false	public access block turned off	prompt
+opt:stage, 'prod'	default stage is production	prompt

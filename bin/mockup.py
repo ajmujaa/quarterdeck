@@ -16,6 +16,7 @@ only ever shown in a sandboxed frame with a strict Content-Security-Policy (see 
   mockup.py rules                                                 -> the allowlist, as the sentences the prompt gives the model
   mockup.py page    <home> <brief-id> <name>                      -> the page, re-checked, or exit 1
 """
+import html
 import json
 import re
 import sys
@@ -119,6 +120,7 @@ class _Check(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.errors, self.css, self.tags, self.in_style = [], [], set(), False
         self.title_seen = self.body_seen = False
+        self.out = []                     # the page as the parser understood it, written out again (see serialize)
 
     def bad(self, msg):
         if msg not in self.errors and len(self.errors) < 8:
@@ -142,6 +144,7 @@ class _Check(HTMLParser):
         if tag not in TAGS:
             self.bad(f"<{tag}> is not allowed")
             return
+        self.out.append("<" + tag + "".join(f' {k.lower()}="{html.escape("" if v is None else v, quote=True)}"' if v is not None else f" {k.lower()}" for k, v in attrs) + ">")
         if tag == "style":
             self.in_style = True
         if tag == "title":
@@ -179,18 +182,32 @@ class _Check(HTMLParser):
 
     def handle_startendtag(self, tag, attrs):
         self.handle_starttag(tag, attrs)
+        if tag in TAGS and tag not in VOID:                  # "<div/>" opens a div in a browser; written out it is an empty one
+            self.handle_endtag(tag)
 
     def handle_endtag(self, tag):
         if tag == "style":
             self.in_style = False
+        if tag in TAGS and tag not in VOID:
+            self.out.append(f"</{tag}>")
 
     def handle_data(self, data):
         if self.in_style:
             self.css.append(data)
+            if "<" in data:
+                self.bad("a < inside the <style> block is not allowed")
+            self.out.append(data)
+        else:
+            self.out.append(html.escape(data, quote=False))
 
     def handle_decl(self, decl):
         if not re.fullmatch(r"(?i)doctype\s+html\s*", decl.strip()):
             self.bad("only <!doctype html> is allowed")
+        else:
+            self.out.append("<!doctype html>")
+
+    def handle_comment(self, data):
+        self.bad("a comment is not allowed")
 
     def handle_pi(self, data):
         self.bad("a processing instruction (<? ?>) is not allowed")
@@ -199,15 +216,25 @@ class _Check(HTMLParser):
         self.bad("a CDATA section is not allowed")
 
 
-def check_page(html):
+def check_page(page_html):
     """-> {"errors": [...], "css": str, "tags": set}. No error means the page is acceptable."""
-    if not isinstance(html, str) or not html.strip():
+    if not isinstance(page_html, str) or not page_html.strip():
         return {"errors": ["the page is empty"], "css": "", "tags": set()}
-    if len(html.encode()) > MAX_BYTES:
-        return {"errors": [f"the page is {len(html.encode()) // 1024} KB; the limit is {MAX_BYTES // 1024} KB"], "css": "", "tags": set()}
+    if len(page_html.encode()) > MAX_BYTES:
+        return {"errors": [f"the page is {len(page_html.encode()) // 1024} KB; the limit is {MAX_BYTES // 1024} KB"], "css": "", "tags": set()}
+    # What html.parser does not see the way a browser does: a comment ends at "--!>" in a browser and at "-->" here; a <style>, <title>, <textarea> or <script>
+    # ends at "</style x>" in a browser and only at "</style>" here; a NUL byte is dropped or replaced differently. Each gap hid a <meta http-equiv=refresh> that the
+    # check never saw and the browser obeyed. So none of these constructions is accepted at all (no comment, no odd end tag, no NUL), and the page that is
+    # saved is the parser's own re-serialisation (serialize), not the model's text.
+    if "\x00" in page_html:
+        return {"errors": ["a NUL byte is not allowed"], "css": "", "tags": set(), "out": ""}
+    if re.search(r"<!--|--!>|<![^dD]|<\?|<!\[", page_html):
+        return {"errors": ["a comment, CDATA section or processing instruction is not allowed"], "css": "", "tags": set(), "out": ""}
+    if re.search(r"(?i)</(style|title|textarea|script|xmp|iframe|noembed|noframes|noscript|plaintext)(?!>)", page_html):
+        return {"errors": ["an end tag of <style>, <title> or <textarea> must be exactly </style>, </title>, </textarea>"], "css": "", "tags": set(), "out": ""}
     p = _Check()
     try:
-        p.feed(html)
+        p.feed(page_html)
         p.close()
     except Exception as e:
         return {"errors": [f"the page could not be parsed: {type(e).__name__}"], "css": "", "tags": set()}
@@ -226,7 +253,18 @@ def check_page(html):
     r, _ = contrast_of(css)
     if r is not None and r < MIN_CONTRAST:
         p.bad(f"body text against its background is {r}:1; it must be at least {MIN_CONTRAST}:1")
-    return {"errors": p.errors, "css": css, "tags": p.tags}
+    return {"errors": p.errors, "css": css, "tags": p.tags, "out": "".join(p.out)}
+
+
+def serialize(page_html):
+    """The page as the checker parsed it, written out again: lower-case tags, quoted escaped attributes, escaped text, no comment, no stray end tag.
+    '' when the page does not pass. This is what is saved and served, so a browser reads what the checker read."""
+    got = check_page(page_html)
+    if got["errors"]:
+        return ""
+    out = got["out"]
+    again = check_page(out)
+    return out if not again["errors"] and again["out"] == out else ""
 
 
 # ---- the contract ------------------------------------------------------------------------------------------
@@ -260,8 +298,11 @@ def check(raw, brief):
         got = check_page(p.get("html"))
         if got["errors"]:
             raise MockupError(f"page '{name}' refused: " + "; ".join(got["errors"]))
+        clean = serialize(p["html"])
+        if not clean:
+            raise MockupError(f"page '{name}' refused: it does not survive being written out again")
         r, note = contrast_of(got["css"])
-        out.append({"name": name, "title": title, "html": p["html"], "contrast": r, "contrast_note": note})
+        out.append({"name": name, "title": title, "html": clean, "contrast": r, "contrast_note": note})
     return out
 
 

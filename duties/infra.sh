@@ -33,7 +33,7 @@ set -uo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)/lib.sh"
 
 # No credentials, ever: whatever the owner's shell holds for a cloud is dropped before any model or git command starts.
-for v in $(env | cut -d= -f1 | grep -E '^(AWS_|TF_|ARM_|VERCEL_|SUPABASE_|CDK_|SAM_|SERVERLESS_|PULUMI_|GOOGLE_|AZURE_|CLOUDFLARE_)[A-Za-z0-9_]*$'); do unset "$v"; done
+for v in $(env | cut -d= -f1 | grep -E '^(AWS_|TF_|ARM_|VERCEL_|SUPABASE_|CDK_|SAM_|SERVERLESS_|PULUMI_|GOOGLE_|AZURE_|CLOUDFLARE_|CF_|WRANGLER_|FLY_|CLOUDSDK_|GCLOUD_|GCP_|ARM_|AZD_)[A-Za-z0-9_]*$'); do unset "$v"; done
 
 PROJECT="${QUARTERDECK_PROJECT:?run me through: quarterdeck run <project> infra --pr <n>}"
 SOURCE_REPO_DIR="${QUARTERDECK_WORKDIR:?}"
@@ -48,7 +48,7 @@ APPLY=0 PR="" DBASE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --apply) APPLY=1 ;;
-    --pr)    PR="${2:-}"; shift ;;
+    --pr)    PR="${2:-}"; need_num "--pr" "$PR"; shift ;;
     --diff)  DBASE="${2:-}"; shift ;;
     *) die "infra: unknown argument '$1'" ;;
   esac
@@ -67,7 +67,7 @@ WT="$QUARTERDECK_HOME/workspace/wt-infra-${PROJECT}-${KEY}"
 TMP="$(mktemp -d)"
 cleanup() {
   [ "${BASH_SUBSHELL:-0}" = 0 ] || return 0
-  git -C "$SOURCE_REPO_DIR" worktree remove --force "$WT" >/dev/null 2>&1 || true
+  safe_git -C "$SOURCE_REPO_DIR" worktree remove --force "$WT" >/dev/null 2>&1 || true
   rm -rf "$TMP"
 }
 trap cleanup EXIT
@@ -79,23 +79,23 @@ if [ -n "$PR" ]; then
   meta=$(guard 60 "$GH" pr view "$PR" -R "$REPO" --json number,title,body,state,headRefOid 2>>"$LOG_FILE") || die "cannot read $REPO#$PR"
   title=$(jq -r .title <<<"$meta"); sha=$(jq -r '.headRefOid // ""' <<<"$meta"); body=$(jq -r '.body // ""' <<<"$meta")
   url="https://github.com/$REPO/pull/$PR"
-  guard 180 git -C "$SOURCE_REPO_DIR" fetch -q origin "pull/$PR/head" 2>>"$LOG_FILE" || blocked "could not fetch pull/$PR/head"
+  guard 180 "${SAFE_GIT[@]}" -C "$SOURCE_REPO_DIR" fetch -q origin "pull/$PR/head" 2>>"$LOG_FILE" || blocked "could not fetch pull/$PR/head"
   worktree_at "$SOURCE_REPO_DIR" "$WT" FETCH_HEAD || blocked "could not create a worktree at $WT"
-  guard 120 git -C "$SOURCE_REPO_DIR" fetch -q origin "$BASE" 2>>"$LOG_FILE" || true
-  baseref="origin/$BASE"; git -C "$SOURCE_REPO_DIR" rev-parse --verify -q "$baseref^{commit}" >/dev/null || baseref="$BASE"
+  guard 120 "${SAFE_GIT[@]}" -C "$SOURCE_REPO_DIR" fetch -q origin "$BASE" 2>>"$LOG_FILE" || true
+  baseref="origin/$BASE"; safe_git -C "$SOURCE_REPO_DIR" rev-parse --verify -q "$baseref^{commit}" >/dev/null || baseref="$BASE"
   subject="pull request #$PR"
   working_on "PR #$PR — $title"
 else
-  git -C "$SOURCE_REPO_DIR" rev-parse --verify -q "$DBASE^{commit}" >/dev/null || die "infra: no such branch or commit: $DBASE"
+  safe_git -C "$SOURCE_REPO_DIR" rev-parse --verify -q "$DBASE^{commit}" >/dev/null || die "infra: no such branch or commit: $DBASE"
   worktree_at "$SOURCE_REPO_DIR" "$WT" HEAD || blocked "could not create a worktree at $WT"
   baseref="$DBASE"; title="changes since $DBASE"; subject="the committed changes since $DBASE"
   working_on "infra — $subject"
 fi
-git -C "$WT" rev-parse --verify -q "$baseref^{commit}" >/dev/null || blocked "the base $baseref is not in this checkout"
+safe_git -C "$WT" rev-parse --verify -q "$baseref^{commit}" >/dev/null || blocked "the base $baseref is not in this checkout"
 say "quarterdeck: infra on $REPO — $subject"
 
 # ---- the infrastructure files, found by the harness ----------------------------------------------------------------------
-git -C "$WT" diff --no-ext-diff --no-renames --name-only -z "$baseref"...HEAD 2>>"$LOG_FILE" | tr '\0' '\n' > "$TMP/changed" || blocked "could not list the changed files"
+safe_git -C "$WT" diff --no-ext-diff --no-renames --name-only -z "$baseref"...HEAD 2>>"$LOG_FILE" | tr '\0' '\n' > "$TMP/changed" || blocked "could not list the changed files"
 python3 "$QUARTERDECK_DIR/bin/scan.py" --infra-files "$WT" < "$TMP/changed" > "$TMP/infra" 2>>"$LOG_FILE" || blocked "could not classify the changed files"
 SECRETS=$(awk -F'\t' '$1 == "secret" {print $2}' "$TMP/infra")
 awk -F'\t' '$1 != "secret" && NF == 2' "$TMP/infra" | head -n "$MAX_FILES" > "$TMP/list"
@@ -111,39 +111,59 @@ nfiles=${#FILES[@]}
 KINDS=$(cut -f1 "$TMP/list" | sort -u | tr '\n' ',' | sed 's/,$//; s/,/, /g')
 
 # the diff of those files only, bounded
-git -C "$WT" diff --no-ext-diff --no-textconv --no-renames --unified=6 "$baseref"...HEAD -- "${FILES[@]}" > "$TMP/diff.full" 2>>"$LOG_FILE" || blocked "could not build the diff"
+safe_git -C "$WT" diff --no-ext-diff --no-textconv --no-renames --unified=6 "$baseref"...HEAD -- "${FILES[@]}" > "$TMP/diff.full" 2>>"$LOG_FILE" || blocked "could not build the diff"
 diff=$(head -c "$MAX_DIFF" "$TMP/diff.full")
 DIFFNOTE=""; [ "$(wc -c < "$TMP/diff.full" | tr -d ' ')" -gt "$MAX_DIFF" ] && DIFFNOTE="The diff was cut at $MAX_DIFF bytes. Say what you could not see."
 # the files as they are at the head, bounded in total
-: > "$TMP/text"; used=0; LEFT=""
+: > "$TMP/text"; used=0; LEFT=""; mkdir -p "$TMP/head"; i=0
 for f in "${FILES[@]}"; do
-  if [ ! -f "$WT/$f" ]; then printf '\n=== %s (deleted in this change)\n' "$f" >> "$TMP/text"; continue; fi
-  sz=$(wc -c < "$WT/$f" | tr -d ' ')
+  i=$((i + 1))
+  # Read from git, never from the disk (round 6): a folder of the path can be a link (infra/ -> another checkout), which [ -L ] on the last part
+  # never saw. A link the commit itself holds (round 5: infra/prod.tf -> ~/.aws/credentials) is named, never followed.
+  ent=$(safe_git -C "$WT" ls-tree -z HEAD -- ":(literal)$f" | tr '\0' '\n' | head -1)
+  case "$ent" in
+    "") printf '\n=== %s (deleted in this change)\n' "$f" >> "$TMP/text"; continue ;;
+    120000\ *) printf '\n=== %s (a symbolic link; not read)\n' "$f" >> "$TMP/text"; continue ;;
+    *\ blob\ *) ;;
+    *) printf '\n=== %s (not a file; not read)\n' "$f" >> "$TMP/text"; continue ;;
+  esac
+  oid=$(cut -d' ' -f3 <<<"${ent%%	*}")
+  safe_git -C "$WT" cat-file blob "$oid" > "$TMP/head/$i" 2>/dev/null || { LEFT="${LEFT:+$LEFT, }$f"; continue; }
+  sz=$(wc -c < "$TMP/head/$i" | tr -d ' ')
   if [ "$sz" -gt "$MAX_ONE" ] || [ $((used + sz)) -gt "$MAX_TEXT" ]; then LEFT="${LEFT:+$LEFT, }$f"; continue; fi
-  { printf '\n=== %s\n' "$f"; cat "$WT/$f"; } >> "$TMP/text"; used=$((used + sz))
+  { printf '\n=== %s\n' "$f"; cat "$TMP/head/$i"; } >> "$TMP/text"; used=$((used + sz))
 done
 filetext=$(cat "$TMP/text")
 FILENOTE=""; [ -z "$LEFT" ] || FILENOTE="Not included because of size (read them from your working folder if you need them): $LEFT"
 
 # stack notes of the packs that fit the kinds of file in THIS change (not everything else in the checkout). Terraform counts as AWS only when
 # a changed .tf file names the AWS provider or an aws_ resource: Terraform alone says nothing about the cloud.
-PACKIDS=$(python3 - "$QUARTERDECK_DIR" "$WT" "$TMP/list" 2>>"$LOG_FILE" <<'PY'
-import re, sys
+PACKIDS=$(python3 - "$QUARTERDECK_DIR" "$TMP" "$TMP/list" 2>>"$LOG_FILE" <<'PY'
+import os, re, sys
 sys.path.insert(0, sys.argv[1] + "/bin")
 import packs
 rows = [l.rstrip("\n").split("\t", 1) for l in open(sys.argv[3]) if "\t" in l]
 prof = {"infrastructure": [], "deploy_targets": []}
-for kind, path in rows:
+for i, (kind, path) in enumerate(rows, 1):
     if kind == "Terraform":
+        # the head's text as git holds it, saved above ($TMP/head/<n>); absent for a link, a deleted file or a non-file (round 6)
         try:
-            if not re.search(r'aws_|hashicorp/aws|provider\s+"aws"', open(sys.argv[2] + "/" + path, errors="replace").read(400000)):
-                continue
+            tf = open(sys.argv[2] + "/head/" + str(i), errors="replace").read(400000)
         except OSError:
             continue
-    key = "deploy_targets" if kind in ("Vercel", "Supabase") else "infrastructure"
+        # Terraform alone names no cloud: the provider or resource names in the changed file do
+        if re.search(r'hashicorp/google|provider\s+"google|\bgoogle_[a-z_]+"', tf):
+            prof["deploy_targets"].append({"name": "Google Cloud", "evidence": [path]})
+        if re.search(r'hashicorp/azurerm|provider\s+"azurerm|\bazurerm_[a-z_]+"', tf):
+            prof["deploy_targets"].append({"name": "Azure", "evidence": [path]})
+        if not re.search(r'aws_|hashicorp/aws|provider\s+"aws"', tf):
+            continue
+    key = "deploy_targets" if kind in ("Vercel", "Supabase", "Cloudflare", "Fly.io", "Azure Functions") or kind.startswith("Google Cloud") else "infrastructure"
     prof[key].append({"name": kind, "evidence": [path]})
     if kind in ("AWS CDK", "AWS CloudFormation / SAM", "Serverless Framework"):
         prof["deploy_targets"].append({"name": "AWS", "evidence": [path]})
+    if kind in ("Azure Functions", "Azure ARM template"):
+        prof["deploy_targets"].append({"name": "Azure", "evidence": [path]})
 print(" ".join(p["id"] for p, _ in packs.select(prof)))
 PY
 )
@@ -189,6 +209,7 @@ you write outside them is thrown away, so do not keep a second list in prose.
 Write plain words. Do not write a command line for anyone to run and do not name a tool invocation: the harness refuses a reply
 that does. Say what a person should check in words.
 
+Every item must carry all seven keys, rollback included, even a low one: an item with a key missing makes the harness throw the whole reply away.
 End your reply with exactly these lines and nothing after them:
 INFRA_JSON: <one-line JSON array; [] when there is nothing to say. Each item: {\"resource\":\"the resource or, if none, the file\",\"change\":\"what changes, in plain words\",\"risk\":\"low|medium|high\",\"why\":\"why it is that risk, pointing at the file\",\"blast_radius\":\"what is affected if this is wrong\",\"rollback\":\"how to undo it from the files, or that it cannot be undone from the files\",\"needs_human\":true or false}>
 VERDICT: CLEAN
@@ -202,9 +223,27 @@ result=$(claude_run "$WT" "$prompt" "Read,Grep,Glob" "$DENY"); rc=$?
 [ $rc = 0 ] && [ -n "$result" ] || { record_run "$PROJECT" infra ERROR "$KEY run failed"; die "infra run failed"; }
 
 # A reply that tells anyone to run a cloud command is refused whole. The harness is files only; nothing in a reply is ever run.
-CLOUD_CMD='(^|[^[:alnum:]_./-])((terraform|tofu|terragrunt|pulumi)[[:space:]]+(plan|apply|destroy|import|taint|untaint|force-unlock)|(cdk|sam|sls|serverless|vercel|supabase)[[:space:]]+(deploy|destroy|diff|synth|bootstrap|remove|invoke|logs|login|link|push|pull|migrate|db|functions|secrets|env|--prod|--force|--stage|--profile|-)|aws[[:space:]]+(s3api|s3|iam|ec2|rds|lambda|cloudformation|sts|ssm|secretsmanager|kms|dynamodb|sqs|sns|route53|logs|ecr|ecs|eks|apigateway|configure|--))'
-if grep -Eq "$CLOUD_CMD" <<<"$result"; then
-  say "  refused: the reply tells someone to run a cloud command: $(grep -Eo "$CLOUD_CMD" <<<"$result" | head -1 | sed 's/^[^[:alnum:]]//')"
+CLOUD_CMD='(^|[^[:alnum:]_./-])((terraform|tofu|terragrunt|pulumi)[[:space:]]+(plan|apply|destroy|import|taint|untaint|force-unlock)|(cdk|sam|sls|serverless|vercel|supabase)[[:space:]]+(deploy|destroy|diff|synth|bootstrap|remove|invoke|logs|login|link|push|pull|migrate|db|functions|secrets|env|--prod|--force|--stage|--profile|-)|aws[[:space:]]+(s3api|s3|iam|ec2|rds|lambda|cloudformation|sts|ssm|secretsmanager|kms|dynamodb|sqs|sns|route53|logs|ecr|ecs|eks|apigateway|configure|--)|wrangler[[:space:]]+(deploy|publish|dev|secret|d1|kv|r2|delete|login|tail|rollback|versions|pages|types|whoami)|(flyctl|fly)[[:space:]]+(deploy|launch|secrets|scale|volumes?|ssh|apps?|machines?|postgres|proxy|console|destroy|auth|logs|status|ips|certs|releases|regions|redeploy|restart)|gcloud[[:space:]]+(run|compute|iam|projects|storage|sql|functions|app|secrets|auth|config|services|container|builds|deploy|kms|logging|pubsub|artifacts|organizations|alpha|beta)|gsutil[[:space:]]+(cp|mv|rm|iam|acl|ls|mb|rb|rsync|defacl)|bq[[:space:]]+(query|mk|rm|load|extract|update)|azd[[:space:]]+(up|deploy|provision|down|auth|env|init|pipeline)|az[[:space:]]+(login|account|group|deployment|storage|keyvault|role|webapp|functionapp|resource|vm|network|sql|cosmosdb|monitor|ad|acr|bicep|containerapp|--))'
+# Matched on the reply as a reader would see it once decoded (round 5: "terraform destroy" inside the JSON passed the raw text): escapes
+# ( , \t, \x20, &nbsp;) decoded, every unicode space, control and invisible character made a plain space, quotes and backslashes dropped
+# ("terra\"form\""), letter case folded.
+plain=$(python3 -c '
+import html, re, sys, unicodedata
+t = sys.stdin.read()
+for _ in range(2):
+    t = re.sub(r"\\u([0-9a-fA-F]{4})", lambda m: chr(int(m.group(1), 16)), t)
+    t = re.sub(r"\\x([0-9a-fA-F]{2})", lambda m: chr(int(m.group(1), 16)), t)
+    t = re.sub(r"\\[tnrfv]", " ", t)
+    t = html.unescape(t)
+t = unicodedata.normalize("NFKC", t)
+t = "".join(" " if unicodedata.category(c)[0] in "ZC" and c != "\n" else c for c in t)
+# ponytail: an all-capitals AWS or AZ is the cloud named in prose ("the AWS IAM role"), not the command, so it is kept apart before folding case
+t = re.sub(r"\b(AWS|AZ|AZD)\b", r"\1_", t)
+t = re.sub(r"[\"'"'"'`\\]", "", t).casefold()
+print(re.sub(r"[ ]+", " ", t))' <<<"$result") || plain="$result"
+if grep -Eq "$CLOUD_CMD" <<<"$result"$'\n'"$plain"; then
+  say "  refused: the reply tells someone to run a cloud command: $(grep -Eo "$CLOUD_CMD" <<<"$result
+$plain" | head -1 | sed 's/^[^[:alnum:]]//')"
   record_run "$PROJECT" infra ERROR "$KEY the reply suggested running a cloud command"
   die "infra: the reply suggested running a cloud command — refused, nothing written (see logs/runs/$QUARTERDECK_RUN_ID.json)"
 fi

@@ -1,0 +1,9 @@
+postgres://admin:fixturepw	credential in [env]	prompt
+fixture-secret-key-base	secret in [env]	prompt
+destination = "/data2"	mount path moved, data left behind	prompt
+port = 5432	database published as a public service	prompt
+port = 80	plain port 80 with no https redirect	prompt
+auto_stop_machines = "suspend"	suspend without auto start	prompt
+release_command	migration on every deploy that drops	prompt
+shop-production	production app name	prompt
+performance-8x	large machine, cost	prompt

@@ -24,7 +24,7 @@ st_gone() { local i; for i in $(seq 1 40); do pgrep -f "$1" >/dev/null 2>&1 || r
 
 st_init() { # st_init <duty>... — a throwaway Quarterdeck holding the harness, those duties and the real crew
   mkdir -p "$T"/{bin,config,crew,duties,state,workspace,logs/runs,path,ghdata,replies}
-  cp "$REAL"/bin/lib.sh "$T/bin/"
+  cp "$REAL"/bin/{lib.sh,outscan.py,guard.py,home.py,protect.py,safegit.py,gitrisky.re,behaviour.py,routes.py} "$T/bin/"
   for f in browse.mjs decisions.sh; do [ -f "$REAL/bin/$f" ] && cp "$REAL/bin/$f" "$T/bin/"; done
   for d in "$@"; do cp "$REAL/duties/$d.sh" "$T/duties/"; done
   cp "$REAL"/config/quarterdeck.env "$T/config/"; cp "$REAL"/crew/*.md "$T/crew/"
@@ -55,7 +55,9 @@ GH
 #!/bin/bash
 # Answers by contract: the first replies/*.match regex found in the prompt picks replies/<same name>.reply.
 # Records argv and prompt in claude-calls (one JSON object per call), and costs a fixed figure so spend can be checked.
-while [ $# -gt 0 ]; do case "$1" in -p) p="$2"; shift ;; --disallowedTools) deny="$2"; shift ;; --allowedTools) allow="$2"; shift ;; --model) model="$2"; shift ;; esac; shift; done
+argv=$(printf '%s\0' "$@" | jq -Rsc 'split("\u0000")[:-1]')
+p=$(cat)   # the prompt arrives on stdin, never in the process arguments
+while [ $# -gt 0 ]; do case "$1" in -p) ;; --disallowedTools) deny="$2"; shift ;; --allowedTools) allow="$2"; shift ;; --model) model="$2"; shift ;; --tools) tools="$2"; shift ;; --settings) settings="$2"; shift ;; --setting-sources) sources="$2"; shift ;; esac; shift; done
 R="$QUARTERDECK_DIR/replies"; reply=""
 for m in $(ls "$R"/*.match 2>/dev/null | sort); do
   if grep -Eq "$(cat "$m")" <<<"$p"; then reply="$(cat "${m%.match}.reply")"; break; fi
@@ -63,14 +65,16 @@ done
 [ -n "$reply" ] || reply="$(cat "$R/default.reply" 2>/dev/null)"
 # one writer at a time: seats run in parallel, and on macOS a long line is written in 4 KB pieces that interleave
 lk="$QUARTERDECK_DIR/.calls.lock"; until mkdir "$lk" 2>/dev/null; do sleep 0.02; done
-jq -nc --arg p "$p" --arg deny "${deny:-}" --arg allow "${allow:-}" --arg model "${model:-}" '{prompt:$p, deny:$deny, allow:$allow, model:$model}' >> "$QUARTERDECK_DIR/claude-calls"
+spath=""; smode=""
+[ -f "${settings:-/nonexistent}" ] && { spath="$settings"; smode="$(stat -f %Lp "$settings" 2>/dev/null || stat -c %a "$settings")"; settings="$(cat "$settings")"; }
+jq -nc --arg p "$p" --arg deny "${deny:-}" --arg allow "${allow:-}" --arg model "${model:-}" --arg tools "${tools:-}" --arg settings "${settings:-}" --arg sources "${sources-unset}" --argjson argv "$argv" --arg spath "$spath" --arg smode "$smode" '{spath:$spath, smode:$smode, argv:$argv, prompt:$p, deny:$deny, allow:$allow, model:$model, tools:$tools, settings:$settings, sources:$sources}' >> "$QUARTERDECK_DIR/claude-calls"
 rmdir "$lk"
 [ -x "$QUARTERDECK_DIR/claude-hook" ] && "$QUARTERDECK_DIR/claude-hook" "$p" >/dev/null 2>&1
 jq -n --arg r "$reply" --argjson c "${STUB_COST:-0.05}" '{result:$r, total_cost_usd:$c, num_turns:1, usage:{}, modelUsage:{"stub-model":{}}}'
 STUB
   chmod +x "$T/claude"
   # QUARTERDECK_GH, not PATH: lib.sh puts the real gh first, and a stand-in that is bypassed would touch a real repository.
-  export QUARTERDECK_DIR="$T" QUARTERDECK_SECRETS_DIR="$T/nosecrets" CLAUDE_BIN="$T/claude" QUARTERDECK_GH="$T/path/gh"
+  export QUARTERDECK_DIR="$T" QUARTERDECK_SECRETS_DIR="$T/nosecrets" CLAUDE_BIN="$T/claude" QUARTERDECK_CLAUDE_ENV=inherit QUARTERDECK_GH="$T/path/gh"
   export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_AUTHOR_NAME=fixture GIT_AUTHOR_EMAIL=fixture@example.invalid GIT_COMMITTER_NAME=fixture GIT_COMMITTER_EMAIL=fixture@example.invalid
   echo '[]' > "$T/state/runs.json"
 }

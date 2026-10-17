@@ -39,7 +39,7 @@ APPLY=0 PR=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --apply) APPLY=1 ;;
-    --pr)    PR="${2:-}"; shift ;;
+    --pr)    PR="${2:-}"; need_num "--pr" "$PR"; shift ;;
     *) die "marshal: unknown argument '$1'" ;;
   esac
   shift
@@ -57,21 +57,21 @@ WT="$QUARTERDECK_HOME/workspace/wt-marshal-${PROJECT}-${PR}"
 TMP="$(mktemp -d)"
 cleanup() {
   [ "${BASH_SUBSHELL:-0}" = 0 ] || return 0
-  git -C "$SOURCE_REPO_DIR" worktree remove --force "$WT" >/dev/null 2>&1 || true
+  safe_git -C "$SOURCE_REPO_DIR" worktree remove --force "$WT" >/dev/null 2>&1 || true
   rm -rf "$TMP"
 }
 trap cleanup EXIT
 
 meta=$(guard 60 "$GH" pr view "$PR" -R "$REPO" --json number,title,body,state,headRefOid 2>>"$LOG_FILE") \
   || die "cannot read $REPO#$PR"
-title=$(jq -r .title <<<"$meta"); body=$(jq -r .body <<<"$meta"); sha=$(jq -r '.headRefOid // ""' <<<"$meta")
+title=$(jq -r .title <<<"$meta" | python3 "$QUARTERDECK_DIR/bin/outscan.py" --redact); body=$(jq -r .body <<<"$meta"); sha=$(jq -r '.headRefOid // ""' <<<"$meta")
 changed=$(guard 60 "$GH" pr diff "$PR" -R "$REPO" --name-only 2>>"$LOG_FILE") || die "cannot read the files $REPO#$PR changes"
 working_on "PR #$PR — $title"
 say "quarterdeck: marshal on $REPO#$PR — $title"
 
 post() { # post <body> — a comment on the pull request, only with --apply
   [ "$APPLY" = 1 ] || return 0
-  guard 60 "$GH" pr comment "$PR" -R "$REPO" --body "$1" >/dev/null 2>>"$LOG_FILE" || { record_run "$PROJECT" marshal ERROR "could not comment on #$PR"; die "could not post"; }
+  gh_post 60 pr comment "$PR" -R "$REPO" --body "$1" >/dev/null 2>>"$LOG_FILE" || { record_run "$PROJECT" marshal ERROR "could not comment on #$PR"; die "could not post"; }
 }
 save_findings() { # save_findings <verdict> <findings-json>
   mkdir -p "$QUARTERDECK_HOME/state/findings"
@@ -86,7 +86,7 @@ while read -r forbidden; do
   # A literal prefix, not a regex; through the environment so awk does not read backslashes as escapes.
   while read -r f; do
     [ -n "$f" ] || continue
-    F="$forbidden" awk -v f="$f" 'BEGIN { exit !(index(f, ENVIRON["F"]) == 1) }' && hits="${hits:+$hits, }$f ($forbidden)"
+    F="$forbidden" awk -v f="$f" 'BEGIN { exit !(index(tolower(f), tolower(ENVIRON["F"])) == 1) }' && hits="${hits:+$hits, }$f ($forbidden)"
   done <<<"$changed"
 done < <(jq -r --arg p "$PROJECT" '(.[$p].forbidden_paths // [])[]' "$PROJECTS_FILE")
 if [ -n "$hits" ]; then
@@ -103,7 +103,7 @@ if [ -n "$hits" ]; then
 fi
 
 # ---- 2. the security crew reads the head, read only -------------------------------------------------------------
-guard 180 git -C "$SOURCE_REPO_DIR" fetch -q origin "pull/$PR/head" 2>>"$LOG_FILE" || die "could not fetch pull/$PR/head"
+guard 180 "${SAFE_GIT[@]}" -C "$SOURCE_REPO_DIR" fetch -q origin "pull/$PR/head" 2>>"$LOG_FILE" || die "could not fetch pull/$PR/head"
 worktree_at "$SOURCE_REPO_DIR" "$WT" FETCH_HEAD || die "could not create a worktree at $WT"
 SEATS=$(crew_by_discipline security | tr '\n' ' '); SEATS="$(xargs <<<"$SEATS")"
 [ -n "$SEATS" ] || die "marshal: no crew sits on the security panel (see: quarterdeck crew)"
@@ -114,6 +114,7 @@ $body"
   ADR_SPEC=$'ADR: <cites ADR n | matches ADR n | searched <records>>\n'
 fi
 
+DIFF_TEXT="$(wt_diff "$WT" "origin/$BASE")"
 PIDS=""
 for seat in $SEATS; do
   (
@@ -131,9 +132,11 @@ $(crew_role "$seat")
 
 $(printf 'Pull request #%s of %s: %s\n\n%s\n' "$PR" "$REPO" "$title" "$body" | untrusted "pull request text")
 
-The pull request is checked out around you at its head. \`git diff origin/$BASE...HEAD\` shows the change, and these
-are the files it touches:
+The pull request is checked out around you at its head. Its diff follows (read by the harness; you have no git), and
+these are the files it touches:
 $changed
+
+$(printf '%s\n' "$DIFF_TEXT" | untrusted "diff of pull request #$PR")
 
 Read the change and the code around it from your own side only. The other seats cover theirs. Report defects this
 diff introduces that weaken security or privacy, not pre-existing debt and not style. At most $PER_SEAT findings, fewer

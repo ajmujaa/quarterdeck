@@ -496,7 +496,7 @@ function frame(){
   requestAnimationFrame(frame);
   if(document.hidden) return;
   const t = (performance.now()-t0)/1000, dist = camera.position.length();
-  const calm = document.documentElement.classList.contains("calm");
+  const calm = document.documentElement.classList.contains("calm") || matchMedia("(prefers-reduced-motion: reduce)").matches;   // Calm or the OS setting: the map stops turning
   controls.autoRotate = !hoverId && !selId && !calm;
   controls.update();
   shellPts.material.uniforms.uCam.value = headPts.material.uniforms.uCam.value = dist;
@@ -509,7 +509,16 @@ function frame(){
     label.style.opacity = (depth*k).toFixed(2);
   };
   for(const r of Object.values(regionLabels)) place2(r.el, r.at, -30, -8);
-  for(const l of hubLabels.values()) place2(l.el, l.v, 18, -8, dimmed(l.n) ? 0.25 : 1);
+  const boxes = Object.values(regionLabels).map(r => { v.copy(r.at).project(camera); return {x: (v.x+1)/2*w - 30, y: (1-v.y)/2*h - 8, w: r.w || (r.w = r.el.offsetWidth || 60)}; });      // the region names stay where they are
+  // two hubs can project to nearly one spot: the nearer label keeps its place, the other steps down until their boxes no longer overlap
+  for(const l of [...hubLabels.values()].sort((a, b) => a.v.distanceTo(camera.position) - b.v.distanceTo(camera.position))){
+    v.copy(l.v).project(camera);
+    const w2 = l.w || (l.w = l.el.offsetWidth || 60), x = Math.max(4, Math.min((v.x+1)/2*w + 18, w - w2 - 4));      // kept inside the stage
+    let y = (1-v.y)/2*h - 8;
+    for(let i = 0; i < 12; i++){ const hit = boxes.find(b => x < b.x + b.w && b.x < x + w2 && y < b.y + 22 && b.y < y + 22); if(!hit) break; y = hit.y + 22; }
+    boxes.push({x, y, w: w2});
+    place2(l.el, l.v, x - (v.x+1)/2*w, y - (1-v.y)/2*h, dimmed(l.n) ? 0.25 : 1);
+  }
   renderer.render(scene, camera);
 }
 

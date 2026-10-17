@@ -8,6 +8,9 @@
 # after the contract parses. An unparseable reply is a failed run that writes
 # nothing, which is the whole safety story in one sentence.
 
+# Everything this harness writes (logs, full model envelopes, state, workspace) is for its owner alone.
+umask 077
+
 # Physical path (-P): the dashboard resolves symlinks, and it recognises
 # Quarterdeck's own processes by this path in their command lines.
 _dd_explicit="${QUARTERDECK_DIR:-}"
@@ -68,11 +71,30 @@ CLAUDE_BIN="${CLAUDE_BIN:-$(command -v claude || true)}"
 export CLAUDE_BIN
 
 mkdir -p "$QUARTERDECK_HOME/state" "$QUARTERDECK_HOME/logs" "$QUARTERDECK_HOME/logs/runs" "$QUARTERDECK_HOME/workspace"
+# Only a data folder of its own is tightened; the program folder (the older layout) may be a shared checkout.
+if [ "$QUARTERDECK_HOME" != "$QUARTERDECK_DIR" ]; then chmod 700 "$QUARTERDECK_HOME" 2>/dev/null; fi
+chmod 700 "$QUARTERDECK_HOME/state" "$QUARTERDECK_HOME/logs" "$QUARTERDECK_HOME/logs/runs" "$QUARTERDECK_HOME/workspace" 2>/dev/null || true
+
+# Scratch files (a duty's TMP folder, the sandbox settings file, a jq temp) go in state/tmp, 0700, which no sandbox profile makes writable. In the system temp
+# folder a project command running in parallel could rewrite them (round-2 audit R9: the settings file of the model's sandbox). The model's own process
+# still gets the system TMPDIR (_qd_claude_env): giving it a writable private folder would be the opposite of the point.
+_QD_SYSTMP="${TMPDIR:-/tmp}"
+mkdir -p "$QUARTERDECK_HOME/state/tmp" && chmod 700 "$QUARTERDECK_HOME/state/tmp" 2>/dev/null && export TMPDIR="$QUARTERDECK_HOME/state/tmp"
+# BSD mktemp ignores TMPDIR when it is given no template (it asks the system for the per-user temp folder), so every bare `mktemp` / `mktemp -d` in a duty
+# goes through this: with no template it makes one in $TMPDIR.
+mktemp() {
+  local a
+  for a in "$@"; do case "$a" in -*) ;; *) command mktemp "$@"; return ;; esac; done
+  command mktemp "$@" "${TMPDIR:-/tmp}/tmp.XXXXXXXX"
+}
+find "$QUARTERDECK_HOME/state/tmp" -mindepth 1 -maxdepth 1 -mtime +2 -exec rm -rf {} + 2>/dev/null || true
 
 RUNS_LEDGER="$QUARTERDECK_HOME/state/runs.json"
 [ -f "$RUNS_LEDGER" ] || echo '[]' > "$RUNS_LEDGER"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "${LOG_FILE:-$QUARTERDECK_HOME/logs/quarterdeck.log}"; }
+# need_num <what> <value> — a number the duty will put into a gh query, a --jq filter or a path must be digits and nothing else.
+need_num() { [[ "${2:-}" =~ ^[1-9][0-9]{0,8}$ ]] || die "${1} takes a number (digits only), not '${2:-}'"; }
 say() { printf '%s\n' "$*" >&2; }
 die() { log "FATAL: $*"; say "quarterdeck: $*"; exit 1; }
 
@@ -96,6 +118,206 @@ notify() {
 guard() { # guard <seconds> <cmd...>
   local secs=$1; shift
   perl -e 'alarm shift; exec @ARGV' "$secs" "$@"
+}
+# guard_group <seconds> <cmd...> — guard, for project code: the command runs as the leader of its own process group, and when it ends (or the time
+# is up) the whole group is killed. A child it left running (detached, stdout closed) would otherwise outlive the check and could change the
+# worktree after a gate had looked at it (round 6, H1). A command that left anything running fails (exit 125) even if it exited 0.
+# A child that moved itself to another group or session (setsid) is not reached; the gates do not depend on this kill (post_checks_gate stages first).
+guard_group() {
+  local secs=$1; shift
+  perl -e '
+    my $s = shift; my $pid = fork; defined $pid or exit 127;
+    if (!$pid) { setpgrp(0, 0); exec @ARGV; exit 127 }
+    setpgrp($pid, $pid);
+    my $to = 0; local $SIG{ALRM} = sub { $to = 1; kill "KILL", -$pid };
+    alarm $s; waitpid($pid, 0); my $st = $?; alarm 0;
+    select(undef, undef, undef, 0.05);
+    my $left = kill 0, -$pid; kill "KILL", -$pid;
+    if ($to) { print STDERR "\n[quarterdeck] timed out after ${s}s; the process group was killed\n"; exit 142 }
+    my $rc = ($st & 127) ? 128 + ($st & 127) : $st >> 8;
+    if ($left) { print STDERR "\n[quarterdeck] the command left a process running; it was killed, and the command counts as failed\n"; exit($rc || 125) }
+    exit $rc;' "$secs" "$@"
+}
+
+# ---- git against a folder that is not ours -------------------------------------------------------------
+# A registered folder's .git/config and hooks are text someone else may have written. Every git command the harness runs there goes
+# through SAFE_GIT (safe_git, or "${SAFE_GIT[@]}" after guard): no hooks (a post-checkout hook runs on worktree add), no fsmonitor
+# command, no ssh command from the repo, no repo-level credential helper (the helpers of YOUR global config are put back), no
+# ext:: transport. A selftest fails on a duty that calls plain git on a project folder.
+_qd_cred=(-c credential.helper=)
+while IFS= read -r _qd_h; do [ -n "$_qd_h" ] && _qd_cred+=(-c "credential.helper=$_qd_h"); done < <(git config --global --get-all credential.helper 2>/dev/null)
+# Signing is off too: commit.gpgsign + gpg.program in a repository's config would run a program of its choosing, outside every sandbox, at the next commit.
+SAFE_GIT=(git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.sshCommand=ssh -c protocol.ext.allow=never -c core.pager=cat
+          -c commit.gpgsign=false -c tag.gpgsign=false -c gpg.program=/usr/bin/false "${_qd_cred[@]}")
+unset _qd_cred _qd_h
+# A linked worktree's `.git` is a FILE ("gitdir: <repo>/.git/worktrees/<name>") inside the folder a model works in. worktree_at records what it
+# should say (<worktree>.gitpin, outside the folder); every git command the harness runs there afterwards compares the file with it and, only then,
+# runs with GIT_DIR and GIT_WORK_TREE set, so git never reads the file at all. A model that rewrote it (to a repository of its own, whose config
+# could name a program to run) gets a refusal, and no git command runs.
+# The keys of a folder's OWN git configuration that make git run a program or go somewhere else, which no -c flag above reaches one by one (filters,
+# textconv, external diff, merge drivers, gpg programs, url rewrites, includes, URL credential helpers ...): the list is bin/gitrisky.re, shared with
+# bin/safegit.py. A folder that defines any is not touched (safe_git returns 98), unless the registry says "trusted_git_config": true for it.
+# Git LFS's three canonical filter lines are the one allowed use of a filter.
+_qd_risky_keys() { # _qd_risky_keys <dir> — one offending key per line
+  local re scope k lk
+  [ -r "$QUARTERDECK_DIR/bin/gitrisky.re" ] || { printf 'bin/gitrisky.re-is-missing\n'; return 0; }      # no list, no trust
+  re=$(<"$QUARTERDECK_DIR/bin/gitrisky.re")
+  for scope in --local --worktree; do
+    git -c core.fsmonitor=false -C "$1" config "$scope" --name-only --list 2>/dev/null
+  done | sort -u | while IFS= read -r k; do
+    lk=$(printf '%s' "$k" | tr '[:upper:]' '[:lower:]')
+    [[ "$lk" =~ $re ]] || continue
+    case "$lk" in
+      filter.lfs.clean)   [ "$(git -c core.fsmonitor=false -C "$1" config --local --get "$k" 2>/dev/null)" = "git-lfs clean -- %f" ] && continue ;;
+      filter.lfs.smudge)  [ "$(git -c core.fsmonitor=false -C "$1" config --local --get "$k" 2>/dev/null)" = "git-lfs smudge -- %f" ] && continue ;;
+      filter.lfs.process) [ "$(git -c core.fsmonitor=false -C "$1" config --local --get "$k" 2>/dev/null)" = "git-lfs filter-process" ] && continue ;;
+    esac
+    printf '%s\n' "$k"
+  done
+}
+_qd_git_trust() { # _qd_git_trust <dir> — 0 when git may be run there; else says why and returns 1
+  local bad
+  [ "${QUARTERDECK_TRUSTED_GIT_CONFIG:-}" = 1 ] && return 0
+  [ -d "$1" ] || return 0
+  bad=$(_qd_risky_keys "$1" | head -6 | tr '\n' ' ' | sed 's/ *$//')
+  [ -z "$bad" ] && return 0
+  log "REFUSED git in $1: its own git config defines $bad"
+  say "quarterdeck: refused: $1 has git settings of its own that make git run programs ($bad); no git command was run there. If you wrote that folder yourself, set \"trusted_git_config\": true for it in config/projects.json"
+  return 1
+}
+_qd_pin() { # _qd_pin <worktree> -> QD_PIN (env GIT_DIR=.. GIT_WORK_TREE=..), or empty for a folder worktree_at did not make; returns 1 when the file was changed
+  QD_PIN=()
+  local wt want
+  wt=$(cd "$1" 2>/dev/null && pwd -P) || return 0
+  [ -f "$wt.gitpin" ] || return 0
+  want=$(<"$wt.gitpin")
+  if [ -n "$want" ] && [ -f "$wt/.git" ] && [ ! -L "$wt/.git" ] && [ "$(cat "$wt/.git" 2>/dev/null)" = "gitdir: $want" ]; then
+    QD_PIN=(env "GIT_DIR=$want" "GIT_WORK_TREE=$wt"); return 0
+  fi
+  log "REFUSED git in $wt: its .git file was changed (expected 'gitdir: $want')"
+  say "quarterdeck: refused: the worktree's .git file was repointed, so no git command was run in it"
+  return 1
+}
+_qd_git_wt() { # _qd_git_wt <git args...> -> QD_PIN for the folder named by the first -C, if it is a pinned worktree; returns 1 when it was tampered with
+  local a prev=""
+  QD_PIN=()
+  for a in "$@"; do [ "$prev" = -C ] && { _qd_pin "$a" || return 99; _qd_git_trust "$a" || return 98; return 0; }; prev=$a; done
+  return 0
+}
+# What leaves this machine through git: a commit message, a branch name pushed, a tag. Scanned for credentials like gh_post's text (rc 3, nothing done).
+_qd_git_out() { # _qd_git_out <git args...>
+  local a skip=0 sub=""
+  for a in "$@"; do
+    [ "$skip" = 1 ] && { skip=0; continue; }
+    case "$a" in -C|-c) skip=1; continue ;; -*) continue ;; esac
+    sub=$a; break
+  done
+  case "$sub" in commit|push|tag|branch|checkout|switch) ;; *) return 0 ;; esac
+  if ! printf '%s\n' "$@" | python3 "$QUARTERDECK_DIR/bin/outscan.py" - >/dev/null 2>&1; then
+    log "REFUSED git $sub: a message or a name in it looks like a credential. Nothing was done."
+    say "quarterdeck: refused git $sub — a message or a name in it looks like it holds a credential. Nothing was done."
+    return 3
+  fi
+  if [ "$sub" = commit ]; then                      # a message read from a file is text that leaves too
+    local f="" prevf=""
+    for a in "$@"; do
+      case "$prevf" in -F|--file|-t|--template) f=$a ;; esac
+      case "$a" in --file=*|--template=*) f=${a#*=} ;; esac
+      prevf=$a
+      if [ -n "$f" ] && { [ "$f" = - ] || ! python3 "$QUARTERDECK_DIR/bin/outscan.py" "$f" >/dev/null 2>&1; }; then
+        log "REFUSED git commit: the message file looks like it holds a credential, or could not be read. Nothing was done."
+        say "quarterdeck: refused git commit — its message file looks like it holds a credential (or is stdin). Nothing was done."
+        return 3
+      fi
+    done
+  fi
+  if [ "$sub" = commit ]; then                      # and the lines the commit adds (a model's change is pushed under the owner's name)
+    local dir="" prev=""
+    for a in "$@"; do [ "$prev" = -C ] && { dir=$a; break; }; prev=$a; done
+    if [ -n "$dir" ]; then
+      local g=(${QD_PIN[@]+"${QD_PIN[@]}"} "${SAFE_GIT[@]}" -C "$dir") bad=""
+      # --text and grep -a: a file git calls binary (a NUL byte, or a `-diff` line in .gitattributes that a model can write) is still scanned line by line
+      "${g[@]}" diff --cached --text --no-ext-diff --no-textconv --no-color -U0 2>/dev/null | grep -a '^+' | python3 "$QUARTERDECK_DIR/bin/outscan.py" - >/dev/null 2>&1
+      [ "${PIPESTATUS[2]}" = 0 ] || bad="a line it adds looks like it holds a credential"
+      # a commit adds no binary file but a small list of image, font and PDF types, and no symlink or submodule (nothing a line scan can read)
+      if [ -z "$bad" ]; then
+        local nb
+        nb=$("${g[@]}" diff --cached --numstat --no-renames 2>/dev/null | awk -F'\t' '$1 == "-" && $2 == "-" && tolower($3) !~ /\.(png|jpe?g|gif|webp|ico|woff2?|ttf|otf|pdf)$/ {print $3}' | head -3 | tr '\n' ' ')
+        [ -z "$nb" ] || bad="it adds a binary file ($nb), which cannot be scanned for credentials"
+      fi
+      if [ -z "$bad" ]; then
+        local nm
+        nm=$("${g[@]}" diff --cached --raw --no-renames 2>/dev/null | awk '$2 != "000000" && $2 != "100644" && $2 != "100755" {print $NF}' | head -3 | tr '\n' ' ')
+        [ -z "$nm" ] || bad="it adds a symlink or submodule ($nm)"
+      fi
+      if [ -n "$bad" ]; then
+        log "REFUSED git commit: $bad. Nothing was committed."
+        say "quarterdeck: refused to commit — $bad. Nothing was committed."
+        return 3
+      fi
+    fi
+  fi
+  return 0
+}
+safe_git() { _qd_git_wt "$@" || return $?; _qd_git_out "$@" || return $?; ${QD_PIN[@]+"${QD_PIN[@]}"} "${SAFE_GIT[@]}" "$@"; }
+safe_git_guard() { local secs=$1; shift; _qd_git_wt "$@" || return $?; _qd_git_out "$@" || return $?; guard "$secs" ${QD_PIN[@]+"${QD_PIN[@]}"} "${SAFE_GIT[@]}" "$@"; }   # safe_git_guard <seconds> <git args...>
+
+# Commit identity. A commit the harness makes is credited to your GitHub account through its no-reply address (<id>+<login>@users.noreply.github.com), never
+# to whatever address the checkout happens to be configured with: GitHub refuses a push that would publish a private address (GH007), and a made-up address is
+# not an account. Applied per commit with -c, so no repository's own configuration is ever changed. Override per project in the registry:
+# "git_identity": "repo" keeps the checkout's own name and address; "git": {"name": "...", "email": "..."} names them.
+# commit_identity <project> <worktree>  sets COMMIT_ID (an array of -c options; empty when the checkout's own identity is to be used)
+commit_identity() {
+  COMMIT_ID=()
+  local p=$1 wt=$2 mode gname gemail cache n e
+  gname=$(project_get "$p" git.name); gemail=$(project_get "$p" git.email)
+  if [ -n "$gemail" ]; then COMMIT_ID=(-c "user.name=${gname:-$gemail}" -c "user.email=$gemail"); return 0; fi
+  mode=$(project_get "$p" git_identity noreply)
+  if [ "$mode" = repo ]; then
+    [ -n "$(safe_git -C "$wt" config user.email || true)" ] && return 0
+    return 1
+  fi
+  cache="$QUARTERDECK_HOME/state/gh-identity"
+  if [ ! -s "$cache" ]; then
+    guard 20 "${QUARTERDECK_GH:-gh}" api user --jq '[(.name // .login), ((.id|tostring) + "+" + .login + "@users.noreply.github.com")] | @tsv' >"$cache.tmp" 2>/dev/null \
+      && [ -s "$cache.tmp" ] && mv "$cache.tmp" "$cache" && chmod 600 "$cache"
+    rm -f "$cache.tmp"
+  fi
+  if [ -s "$cache" ]; then
+    n=$(cut -f1 "$cache"); e=$(cut -f2 "$cache")
+    case "$e" in *@users.noreply.github.com) COMMIT_ID=(-c "user.name=$n" -c "user.email=$e"); return 0 ;; esac
+  fi
+  [ -n "$(safe_git -C "$wt" config user.email || true)" ]      # GitHub could not be asked: fall back to the checkout's own identity, if it has one
+}
+
+# ---- text that leaves this machine ---------------------------------------------------------------------
+# Every comment, issue and pull request the harness writes on GitHub goes through gh_post, which scans the title and body (and a
+# --body-file) for credentials first (bin/outscan.py: the patterns bin/guard.py uses, plus a few that only matter in prose) and
+# refuses on a hit. The model never posts; this is what stops a secret it was shown from being posted by the harness for it.
+# gh_post <seconds> <gh args...>   (returns 3 and posts nothing when the text holds a secret)
+gh_post() {
+  local secs=$1; shift
+  local a prev="" bad="" all=""
+  for a in "$@"; do
+    case "$prev" in
+      --body-file|-F|--input|-T|--template) { [ "$a" != - ] && python3 "$QUARTERDECK_DIR/bin/outscan.py" "$a" >/dev/null 2>&1; } || bad="the body file" ;;
+    esac
+    case "$a" in
+      --input=*|--template=*) python3 "$QUARTERDECK_DIR/bin/outscan.py" "${a#*=}" >/dev/null 2>&1 || bad="the body file" ;;
+      -T?*)          python3 "$QUARTERDECK_DIR/bin/outscan.py" "${a#-T}" >/dev/null 2>&1 || bad="the body file" ;;
+      --body-file=*) python3 "$QUARTERDECK_DIR/bin/outscan.py" "${a#*=}" >/dev/null 2>&1 || bad="the body file" ;;
+      -F?*)          python3 "$QUARTERDECK_DIR/bin/outscan.py" "${a#-F}" >/dev/null 2>&1 || bad="the body file" ;;
+    esac
+    all="$all$a"$'\n'                                  # every argument is text that leaves the machine: body, title, --body=..., -bTEXT, a label, a branch, a milestone
+    prev=$a
+  done
+  [ -n "$bad" ] || printf '%s' "$all" | python3 "$QUARTERDECK_DIR/bin/outscan.py" - >/dev/null 2>&1 || bad="${bad:-an argument (title, body, label or branch name)}"
+  if [ -n "$bad" ]; then
+    log "REFUSED to post: $bad looks like it holds a credential (gh $1 $2). Nothing was sent."
+    say "quarterdeck: refused to post — $bad looks like it holds a credential. Nothing was sent."
+    return 3
+  fi
+  guard "$secs" "${QUARTERDECK_GH:-gh}" "$@"
 }
 
 # ---- project registry -------------------------------------------------------
@@ -139,7 +361,31 @@ duty_exists() { [ -f "$QUARTERDECK_DIR/duties/$1.sh" ]; }
 
 # ---- locking ----------------------------------------------------------------
 # One run per (project, duty). A dead pid's lock is broken rather than inherited.
+# valid_branch <name> — a plain branch name: no leading dash (it would pass for an option: --upload-pack=...), no "..", no space, quote or shell character.
+# A default branch comes from a folder's own .git (untrusted text) into `git fetch origin "$BASE"`, `--base "$BASE"` and `origin/$BASE`. Same rule as bin/safegit.py.
+valid_branch() {
+  [[ "${1:-}" =~ ^[A-Za-z0-9._][A-Za-z0-9._/-]{0,199}$ ]] && [[ "$1" != *..* && "$1" != *//* && "$1" != */ && "$1" != *. && "$1" != *.lock && "$1" != @ ]]
+}
+# repo_gate — every duty passes through acquire_lock, so this is the one place a run is refused before it starts: a registered folder whose own git
+# config makes git run programs (see _qd_git_trust), or whose default branch is not a plain branch name. "trusted_git_config": true in the registry
+# opts one folder out of the first (and only that).
+repo_gate() {
+  local p=${QUARTERDECK_PROJECT:-} w=${QUARTERDECK_WORKDIR:-} duty base
+  [ -n "$p" ] && [ -n "$w" ] && project_exists "$p" || return 0
+  duty=$(basename "${0:-quarterdeck}" .sh)
+  base=$(project_get "$p" default_branch main)
+  if ! valid_branch "$base"; then
+    log "REFUSED $duty on $p: the registry's default branch '$base' is not a plain branch name"
+    say "quarterdeck: refused: the default branch '$base' for $p is not a plain branch name (a leading dash would pass for a git option). Fix default_branch in config/projects.json"
+    record_run "$p" "$duty" REFUSED "the default branch is not a plain branch name"; exit 1
+  fi
+  if [ "$(project_get "$p" trusted_git_config)" = true ]; then export QUARTERDECK_TRUSTED_GIT_CONFIG=1
+  elif ! _qd_git_trust "$w"; then
+    record_run "$p" "$duty" REFUSED "the folder's own git settings make git run programs; nothing was run"; exit 1
+  fi
+}
 acquire_lock() {
+  repo_gate
   local lock="$QUARTERDECK_HOME/state/$1.lock"
   if ! mkdir "$lock" 2>/dev/null; then
     local pid; pid=$(cat "$lock/pid" 2>/dev/null || true)
@@ -191,22 +437,180 @@ working_on() {
   log "working on: $1"
 }
 
+# ---- what no model may read ---------------------------------------------------------
+# ONE list, rendered twice: as Read(...) deny rules for the model's tools, and as denyRead paths for the operating-system sandbox that
+# confines its shell commands. It is built from BOTH the data folder and the program folder: with a data folder of its own (the product
+# default) the private files live under $QUARTERDECK_HOME/state, and a list built from the program folder alone left them readable by the
+# Read tool. bin/selftest-security.sh fails if the two renderings differ or if either misses the data folder.
+# Relative to each of the two folders:
+_QD_PRIVATE_STATE="state/dashboard.token state/dashboard.sessions.json* state/pair/** state/connectors/** state/capture.jsonl state/agenda-status.json state/attention.json* state/intent.jsonl* state/hand-runs.jsonl* state/rhythm-tasks.json* state/project-status.json* config/integrations.json config/fleet.local.json guard-denylist.txt"
+# Relative to the owner's home folder (credentials of other tools, and Quarterdeck's own secrets):
+_QD_PRIVATE_HOME=".config .config/quarterdeck .config/gh .config/gcloud .docker/config.json .ssh .aws .azure .oci .gnupg .kube .docker .npmrc .netrc .pgpass .my.cnf .git-credentials .pypirc .terraformrc .terraform.d .vault-token .boto .s3cfg .password-store .local/share/keyrings .gem/credentials .cargo/credentials .cargo/credentials.toml .supabase .netlify .vercel .railway .fly .wrangler .stripe .huggingface .kaggle .bash_history .zsh_history .zsh_sessions .bash_sessions .python_history .node_repl_history .psql_history .mysql_history .viminfo .lesshst Library/Keychains"
+# Folders that hold other apps' data and the owner's own documents, `|` separated because one name has a space. They are NOT on the list above (which also
+# becomes the Read(...) rules): a working folder or a registered project may legitimately sit in Documents, so these are added only to the operating-system
+# sandboxes, and only where the working folder is not inside them (claude_sandbox_json), or denied with the worktree let back in (_qd_sb_profile).
+_QD_BROAD_HOME="Documents|Desktop|Downloads|Pictures|Movies|Music|Public|Library/Application Support|Library/Cookies|Library/Sa"fari"|Library/Messages|Library/Mail|Library/Group Containers|Library/Containers|Library/Mobile Documents|Library/Accounts|Library/Calendars|Library/Reminders|Library/HomeKit|Library/Passes"
+# (QUARTERDECK_PRIVATE_HOME in your own env file adds more home-relative paths, space separated; it can never remove any.)
+# File names that are secrets wherever they sit (a project's .env, a key someone committed):
+_QD_SECRET_NAMES=".env* *.pem *.key *.p12 *.pfx id_rsa* id_ed25519* id_ecdsa*"
+# The owner's other source trees (round-5 A1): the common code folders under the home folder. With every registered project's checkout, they are
+# unreadable to a project command (_qd_sb_profile); the worktree, its own git, its borrowed node_modules and toolchains on PATH are let back in.
+# The sandbox matches a name as it is spelled on disk (asking for ~/CODE still hits a rule on ~/code), and that may be either spelling, so both are listed.
+_QD_DEV_HOME="code Code dev Dev src source Source Projects projects repos Repos git GitHub github Developer Sites work Work workspace Workspace"
+
+_qd_physical() { # _qd_physical <path> — the path with its longest existing folder resolved (/tmp is /private/tmp on a Mac); the rest is kept as written
+  local p=$1 rest="" d
+  while [ -n "$p" ] && [ "$p" != / ] && [ ! -d "$p" ]; do rest="/${p##*/}$rest"; p=${p%/*}; done
+  d=$(cd "${p:-/}" 2>/dev/null && pwd -P) || d=$p
+  printf '%s%s' "${d%/}" "$rest"
+}
+private_paths() { # one absolute path or glob per line: the single source of both renderings (a path is listed as written and, if different, with its symlinks resolved)
+  local b p q
+  local -a st hm
+  # read -ra, not an unquoted expansion: these words are globs and must not be matched against the files in the current folder
+  IFS=' ' read -ra st <<<"$_QD_PRIVATE_STATE"; IFS=' ' read -ra hm <<<"$_QD_PRIVATE_HOME ${QUARTERDECK_PRIVATE_HOME:-}"
+  {
+    for b in "$QUARTERDECK_HOME" "$QUARTERDECK_DIR"; do
+      for p in "${st[@]}"; do printf '%s\n' "$b/$p"; done
+      [ "$QUARTERDECK_HOME" = "$QUARTERDECK_DIR" ] && break
+    done
+    for p in "${hm[@]}"; do printf '%s\n' "$HOME/$p"; done
+  } | while IFS= read -r p; do
+    printf '%s\n' "$p"
+    q=$(_qd_physical "$p"); [ "$q" != "$p" ] && printf '%s\n' "$q"
+  done
+}
+
+_qd_broad_home() { # _qd_broad_home [keep-readable-folder...] — $HOME/<folder> for each _QD_BROAD_HOME entry that does not contain any of the folders given, the data folder or the program folder
+  local e k p q keep
+  local -a ents keeps=("$QUARTERDECK_HOME" "$QUARTERDECK_DIR")
+  for k in "$@"; do [ -n "$k" ] && keeps+=("$k"); done
+  IFS='|' read -ra ents <<<"$_QD_BROAD_HOME"
+  for e in "${ents[@]}"; do
+    p="$HOME/$e"; keep=""
+    for k in "${keeps[@]}"; do
+      case "$k/" in "$p"/*) keep=1 ;; esac
+      case "$(_qd_physical "$k")/" in "$(_qd_physical "$p")"/*) keep=1 ;; esac
+    done
+    [ -n "$keep" ] && continue
+    printf '%s\n' "$p"; q=$(_qd_physical "$p"); [ "$q" != "$p" ] && printf '%s\n' "$q"
+  done
+  return 0
+}
+
+private_read_rules() { # the same list as Read(...) deny rules, comma separated; a folder is denied with everything under it
+  local p
+  while IFS= read -r p; do
+    case "$p" in *,*) continue ;; esac              # a comma would split the rule list
+    printf 'Read(/%s),' "$p"
+    case "$p" in *'*') ;; *) printf 'Read(/%s/**),' "$p" ;; esac
+  done < <(private_paths)
+  local n
+  local -a nm
+  IFS=' ' read -ra nm <<<"$_QD_SECRET_NAMES"
+  for n in "${nm[@]}"; do printf 'Read(**/%s),Edit(**/%s),' "$n" "$n"; done
+  printf 'Edit(**/.git/**),Edit(**/.git),Edit(**/.claude/**),Edit(**/.mcp.json),'     # never a place for a model to write: hooks, agent settings, MCP servers; a linked worktree's .git is a FILE, which .git/** does not match
+}
+
+# claude_sandbox_json <workdir> — the sandbox settings for a call that may run shell commands: the private list above, plus the secret
+# file names inside the working folder, no escape hatch for an unsandboxed command, no silent run without a sandbox (failIfUnavailable:
+# the CLI otherwise runs the shell unconfined where it cannot build one), the worktree's own .git file closed to writes, and nothing written
+# outside the working folder (the sandbox's own default). Both keys were checked against the real CLI (2.1.293) by hand: see docs/public/SECURITY.md.
+claude_sandbox_json() {
+  local wdir=$1 n
+  local -a nm
+  IFS=' ' read -ra nm <<<"$_QD_SECRET_NAMES"
+  { private_paths; for n in "${nm[@]}"; do printf '%s\n' "$wdir/$n" "$wdir/**/$n" "$HOME/**/$n"; done; _qd_broad_home "$wdir"; } \
+    | jq -Rn --arg w "$wdir" '[inputs] as $d | {sandbox: {enabled: true, allowUnsandboxedCommands: false, failIfUnavailable: true, filesystem: {denyRead: $d, denyWrite: [($w + "/.git")]}}}' -c
+}
+
+# The environment a model call gets: what claude needs to run and to sign in, and nothing else. Everything exported from
+# ~/.config/quarterdeck/env (tokens, webhooks, QUARTERDECK_*) and the owner's GH_TOKEN stay out of a process whose shell commands a prompt may steer.
+# QUARTERDECK_CLAUDE_ENV=inherit passes the whole environment (the self-tests' stand-in model needs its fixtures).
+_qd_claude_env() { # fills the array CLAUDE_ENV with NAME=value pairs for env -i
+  CLAUDE_ENV=("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1")
+  local k cloud=""
+  [ -n "${CLAUDE_CODE_USE_BEDROCK:-}${CLAUDE_CODE_USE_VERTEX:-}${CLAUDE_CODE_USE_FOUNDRY:-}" ] && cloud=1
+  while IFS= read -r k; do
+    case "$k" in
+      TMPDIR) CLAUDE_ENV+=("TMPDIR=$_QD_SYSTMP"); continue ;;
+      HOME|PATH|USER|LOGNAME|SHELL|LANG|LC_*|TERM|TZ|ANTHROPIC_*|CLAUDE_CONFIG_DIR|CLAUDE_CODE_*|HTTP_PROXY|HTTPS_PROXY|NO_PROXY|http_proxy|https_proxy|no_proxy|NODE_EXTRA_CA_CERTS|SSL_CERT_FILE|SSL_CERT_DIR) ;;
+      AWS_*|GOOGLE_*|CLOUD_ML_REGION|VERTEX_*|GCLOUD_*|ANTHROPIC_FOUNDRY_*) [ -n "$cloud" ] || continue ;;
+      *) continue ;;
+    esac
+    [ "$k" = CLAUDE_CODE_SUBPROCESS_ENV_SCRUB ] && continue
+    CLAUDE_ENV+=("$k=${!k}")
+  done < <(compgen -e)
+}
+
 # ---- the model call ---------------------------------------------------------
-# Returns Claude's final text on stdout. Never give this write tools: the
-# contract the caller parses is the only thing that should cause a side effect.
+# Returns Claude's final text on stdout. The contract the caller parses is the only thing that should cause a side effect.
 #
-# --allowedTools is an allowlist, NOT a sandbox: under non-interactive
-# permission modes it does not by itself block anything. --disallowedTools is
-# what the harness actually enforces, so both are set and the deny list is the
-# one that matters.
-claude_run() { # claude_run <workdir> <prompt> [allowed-tools] [deny-tools]
-  local wdir=$1 prompt=$2 allowed="${3:-Read,Grep,Glob,Bash(git log*),Bash(git diff*),Bash(git show*),Bash(gh pr view*),Bash(gh pr diff*),Bash(gh issue view*)}"
+# What a model can do is decided here, not by the duty:
+#   --tools            the built-in tools that exist at all. A read-only duty gets Read, Grep and Glob and no shell; a duty that
+#                      edits code in a throwaway worktree also gets Edit and Write and the few commands it names.
+#   --allowedTools     Read, Edit and Write are narrowed to the working folder (a bare "Read" means "the working folder"); Grep and
+#                      Glob are allowed only where the working folder is, never anywhere on the disk.
+#   --disallowedTools  the secret and private paths, git, gh, curl and friends, whatever a duty passes. This list is the one that
+#                      matters: deny rules win over allow rules.
+#   the shell          a duty may name shell commands, but never git (git diff --output= overwrites any file), gh, curl, ssh: the
+#                      harness fetches what the model needs and puts it in the prompt through untrusted().
+#   the sandbox        every call that has a shell runs inside the OS sandbox (settings below), with no unsandboxed escape.
+#   settings/MCP       only what this function passes: a registered repository's .claude/settings.json and .mcp.json never load.
+claude_run() { # claude_run <workdir> <prompt> [tools, comma separated] [deny-tools]
+  local wdir=$1 prompt=$2 tools="${3:-Read,Grep,Glob}"
   # A duty that must edit code (the shipwright) overrides this, but only ever to
   # widen editing inside a throwaway worktree — never to allow publishing. The
   # harness still owns commit, push and anything that leaves the machine.
   local deny="${4:-$QUARTERDECK_DENY_TOOLS}"
-  deny="$deny,$QUARTERDECK_PRIVATE_DENY"
   local out result rc
+  wdir=$(cd "$wdir" 2>/dev/null && pwd -P) || { log "claude_run: no working folder '$1'"; return 1; }
+  case "$wdir" in *,*|*"("*|*")"*) log "claude_run: refusing a working folder whose name holds a comma or a bracket ($wdir)"; return 1 ;; esac
+
+  # tools -> --tools (names) and --allowedTools (rules)
+  local t base names="" has_shell="" allow=""
+  local -a items
+  IFS=',' read -ra items <<<"$tools"
+  for t in "${items[@]}"; do
+    base=${t%%(*}
+    case "$base" in
+      Read|Edit|Write) [ "$t" = "$base" ] && t="$base(/$wdir/**)" ;;       # "/" + "/abs/path" is the rule syntax for an absolute path
+      Grep|Glob) [ "$t" = "$base" ] && t="" ;;                              # allowed in the working folder by default; a bare allow would lift that
+      Bash) has_shell=1
+            case "$t" in "Bash"|"Bash(git"*|"Bash(gh"*|"Bash(curl"*|"Bash(wget"*|"Bash(ssh"*|"Bash(scp"*|"Bash(sudo"*|"Bash(security"*|"Bash(*"*)
+              log "claude_run: refusing a tool list that hands the model '$t' (the harness fetches and posts; the model never runs git, gh or an open shell)"; return 1 ;; esac ;;
+      WebFetch|WebSearch|NotebookEdit) log "claude_run: refusing '$t' in a tool list"; return 1 ;;
+    esac
+    case ",$names," in *",$base,"*) ;; *) names="$names${names:+,}$base" ;; esac
+    [ -n "$t" ] && allow="$allow${allow:+,}$t"
+  done
+  [ -n "$allow" ] || allow="Read(/$wdir/**)"
+  deny="$deny,Edit(/$wdir/.git),WebFetch,WebSearch,NotebookEdit,Bash(git*),Bash(gh*),Bash(curl*),Bash(wget*),Bash(ssh*),Bash(scp*),Bash(sudo*),Bash(security*),$(private_read_rules)${QUARTERDECK_PRIVATE_DENY:-}"
+  # G11: a file in the working folder whose CONTENT is a credential is denied by path, whatever it is called, for any call that can read.
+  case ",$names," in *,Read,*|*,Grep,*)
+    # Fail closed (round 5): a screen that fails or did not finish the project's own files, or a secret file whose name no rule can carry (a comma,
+    # a bracket, a glob or escape character, a newline), stops the call. Names are read NUL-separated, so a newline in one cannot split it in two.
+    local sp rec sr="" skipped="" scr="$QUARTERDECK_HOME/logs/runs/${QUARTERDECK_RUN_ID:-run}.screen.txt" scrout src=0
+    scrout=$(mktemp) || return 1
+    python3 "$QUARTERDECK_DIR/bin/guard.py" --worktree-secrets -z "$wdir" > "$scrout" 2>/dev/null || src=$?
+    while IFS= read -r -d '' rec; do
+      sp=${rec#?}; [ -n "$sp" ] || continue
+      case "$sp" in *,*|*"("*|*")"*|*"*"*|*"?"*|*"["*|*"]"*|*"{"*|*"}"*|*"!"*|*"#"*|*\\*|*[[:cntrl:]]*|" "*|*" ") skipped="$skipped${sp//$'\n'/\\n}"$'\n'; continue ;; esac
+      case "$rec" in D*) deny="$deny,Read(/$wdir/$sp/**)"; sr="$sr$sp/ (not finished: denied whole)"$'\n' ;; *) deny="$deny,Read(/$wdir/$sp)"; sr="$sr$sp"$'\n' ;; esac
+    done < "$scrout"
+    rm -f "$scrout"
+    if [ -n "$sr$skipped" ] || [ "$src" != 0 ]; then
+      { printf 'secret screen of %s: files whose content looks like a credential, or that could not be judged (names only)\n' "$wdir"
+        [ -z "$sr" ] || printf 'denied for Read:\n%s' "$sr"
+        [ -z "$skipped" ] || printf 'the call was REFUSED: these names cannot be written as a rule:\n%s' "$skipped"
+        [ "$src" = 0 ] || printf 'the call was REFUSED: the screen did not finish the folder (exit %s)\n' "$src"; } > "$scr" 2>/dev/null
+      log "secret screen: $(printf '%s' "$sr" | grep -c .) file(s) denied for Read in $wdir, $(printf '%s' "$skipped" | grep -c .) could not be, screen exit $src (see $scr)"
+    fi
+    if [ -n "$skipped" ] || [ "$src" != 0 ]; then
+      log "claude_run: refusing: the secret screen of $wdir is not complete (see $scr)"; return 1
+    fi ;;
+  esac
+  deny="${deny%,}"
 
   # Which model, at what effort, for THIS call. Most specific wins:
   #   QUARTERDECK_MODEL_OVERRIDE  — set by a fix for its tier, or a decision panel
@@ -229,27 +633,34 @@ claude_run() { # claude_run <workdir> <prompt> [allowed-tools] [deny-tools]
 
   # Captured with ||, not a following $?: under set -e a failing substitution
   # would end the script before its cost was recorded.
-  # An operating-system sandbox, on by default (config/quarterdeck.env), off with QUARTERDECK_SANDBOX=off: the shell commands an agent
-  # runs (node) cannot read the private folders, which a Read rule alone cannot stop. It is
-  # applied only to calls that do not use gh, because gh cannot reach GitHub from inside it
-  # on this machine (blocked network, then a certificate error); those duties have no node.
+  # An operating-system sandbox, on by default (config/quarterdeck.env), off with QUARTERDECK_SANDBOX=off: the shell commands a model runs
+  # (node, npm) cannot read the private files or write outside the working folder, which a Read rule alone cannot stop. Every call
+  # that has a shell gets it: the models no longer run gh (which cannot reach GitHub from inside it), the harness does.
   local sandbox=""
-  case "$allowed" in *"Bash(gh"*) ;; *)
-    [ "${QUARTERDECK_SANDBOX:-on}" = on ] && sandbox=$(jq -cn --arg a "$HOME/.config/quarterdeck" --arg b "$QUARTERDECK_HOME/state/connectors" \
-      --arg c "$QUARTERDECK_HOME/state/capture.jsonl" --arg d "$QUARTERDECK_HOME/state/agenda-status.json" --arg e "$HOME/.ssh" --arg f "$HOME/.aws" \
-      --arg g "$QUARTERDECK_HOME/state/attention.json*" --arg i "$QUARTERDECK_HOME/state/intent.jsonl*" --arg j "$QUARTERDECK_HOME/state/project-status.json*" --arg k "$QUARTERDECK_HOME/state/hand-runs.jsonl*" --arg l "$QUARTERDECK_HOME/state/rhythm-tasks.json*" \
-      '{sandbox: {enabled: true, filesystem: {denyRead: [$a, $b, $c, $d, $e, $f, $g, $i, $j, $k, $l]}}}') ;;
-  esac
+  if [ -n "$has_shell" ] && [ "${QUARTERDECK_SANDBOX:-on}" = on ]; then sandbox=$(claude_sandbox_json "$wdir"); fi
+  local -a cenv=()
+  if [ "${QUARTERDECK_CLAUDE_ENV:-clean}" != inherit ]; then _qd_claude_env; cenv=(env -i "${CLAUDE_ENV[@]}"); fi
+  # Nothing about the call is put in the process arguments where any local user's `ps` shows it: the prompt (issue text, diffs, which
+  # can quote private code) goes in on stdin, and the sandbox settings are a file only this user can read, removed when the call ends.
+  local sfile=""
+  if [ -n "$sandbox" ]; then
+    sfile=$(mktemp "${TMPDIR:-/tmp}/quarterdeck-settings.XXXXXX") && chmod 600 "$sfile" && printf '%s' "$sandbox" > "$sfile" \
+      || { log "claude_run: could not write the sandbox settings file"; rm -f "$sfile"; return 1; }
+  fi
   rc=0
-  out=$(cd "$wdir" && guard "${QUARTERDECK_RUN_TIMEOUT:-900}" "$CLAUDE_BIN" -p "$prompt" \
+  out=$(cd "$wdir" && printf '%s' "$prompt" | guard "${QUARTERDECK_RUN_TIMEOUT:-900}" ${cenv[@]+"${cenv[@]}"} "$CLAUDE_BIN" -p \
         --permission-mode dontAsk \
-        --allowedTools "$allowed" \
+        --tools "$names" \
+        --allowedTools "$allow" \
         --disallowedTools "$deny" \
+        --setting-sources "${QUARTERDECK_SETTING_SOURCES:-}" \
+        --strict-mcp-config \
         ${model:+--model "$model"} \
         ${effort:+--effort "$effort"} \
         ${QUARTERDECK_CALL_BUDGET:+--max-budget-usd "$QUARTERDECK_CALL_BUDGET"} \
-        ${sandbox:+--settings "$sandbox"} \
-        --output-format json </dev/null 2>>"${LOG_FILE:-$QUARTERDECK_HOME/logs/quarterdeck.log}") || rc=$?
+        ${sfile:+--settings "$sfile"} \
+        --output-format json 2>>"${LOG_FILE:-$QUARTERDECK_HOME/logs/quarterdeck.log}") || rc=$?
+  [ -z "$sfile" ] || rm -f "$sfile"
   [ -n "$out" ] || { log "claude returned nothing (exit $rc, workdir=$wdir)"; return 1; }
 
   # Keep the raw envelope; when a contract fails to parse this is the only way
@@ -417,16 +828,430 @@ crew_by_discipline() { # crew_by_discipline <discipline>
 # A duty that must build or test something works in a worktree, never in the
 # real checkout: the model cannot leave a mess in a directory you are using, and
 # a crashed run costs a directory rather than your working tree.
+worktree_pin() { # worktree_pin <worktree> — record what its .git file says, now, before any model has touched the folder (see _qd_pin)
+  local gd p; gd=$(sed -n 's/^gitdir: //p' "$1/.git" 2>/dev/null)
+  [ -n "$gd" ] || { log "worktree_pin: $1 has no usable .git file"; return 1; }
+  p=$(cd "$1" && pwd -P) && printf '%s' "$gd" > "$p.gitpin"
+}
 worktree_at() { # worktree_at <source-repo> <path> <ref>
   local src=$1 wt=$2 ref=$3
-  git -C "$src" worktree remove --force "$wt" >/dev/null 2>&1 || true
-  git -C "$src" worktree add -q --detach "$wt" "$ref" 2>>"${LOG_FILE:-/dev/null}" || return 1
+  rm -f "${wt%/}.ignored-before"
+  safe_git -C "$src" worktree remove --force "$wt" >/dev/null 2>&1 || true
+  safe_git -C "$src" worktree add -q --detach "$wt" "$ref" 2>>"${LOG_FILE:-/dev/null}" || return 1
+  worktree_pin "$wt" || return 1
   # A worktree has no node_modules, so any verify command that needs them fails
   # for a reason that has nothing to do with the code under test. Borrow the
   # real one rather than spending two minutes installing a second copy.
-  if [ -d "$src/node_modules" ] && [ ! -e "$wt/node_modules" ]; then
-    ln -s "$src/node_modules" "$wt/node_modules" 2>/dev/null || true
+  # The link made here is recorded next to the worktree (where a check cannot write): the sandboxes let ONLY that target back in, never a
+  # node_modules link the checkout itself carries (round 5: one committed pointing at ~/Documents made it readable to every check).
+  worktree_nm_borrow "$src" "$wt"
+}
+worktree_nm_borrow() { # worktree_nm_borrow <source-repo> <worktree> — links and records the source checkout's node_modules (see worktree_at)
+  local src=$1 wt=$2 p; p=$(cd "$wt" && pwd -P) || return 1; rm -f "$p.nmlink"
+  if [ -d "$src/node_modules" ] && [ ! -e "$wt/node_modules" ] && [ ! -L "$wt/node_modules" ]; then
+    ln -s "$src/node_modules" "$wt/node_modules" 2>/dev/null && { printf '%s' "$src/node_modules" > "$p.nmlink"; chmod 600 "$p.nmlink"; }
   fi
+  return 0
+}
+_qd_nm_borrowed() { # _qd_nm_borrowed <physical-worktree> — the node_modules target worktree_at linked, if the link is still exactly that; else nothing
+  local rec t; rec=$(cat "$1.nmlink" 2>/dev/null) || return 0
+  t=$(readlink "$1/node_modules" 2>/dev/null) || return 0
+  [ -n "$rec" ] && [ "$t" = "$rec" ] && printf '%s' "$rec"
+  return 0
+}
+
+# What a model reviews is put in its prompt by the harness, through untrusted(): it has no git and no gh. Both are capped at
+# QUARTERDECK_MAX_DIFF bytes (the model can Read any file of the working folder for the rest).
+wt_diff() { # wt_diff <worktree> <base-ref> — the change a worktree makes against a base, as text
+  local max="${QUARTERDECK_MAX_DIFF:-200000}" d
+  d=$(safe_git -C "$1" --no-pager diff --no-ext-diff --no-textconv --no-color "$2"...HEAD 2>/dev/null) || d=""
+  printf '%s' "$d" | head -c "$max"
+  [ "${#d}" -gt "$max" ] && printf '\n[the diff was cut at %s bytes; Read the files for the rest]\n' "$max"
+  return 0
+}
+pr_diff_text() { # pr_diff_text <owner/repo> <number> — a pull request's diff from GitHub, as text
+  local max="${QUARTERDECK_MAX_DIFF:-200000}" d
+  d=$(guard 60 "${QUARTERDECK_GH:-gh}" pr diff "$2" -R "$1" 2>/dev/null) || d=""
+  printf '%s' "$d" | head -c "$max"
+  [ "${#d}" -gt "$max" ] && printf '\n[the diff was cut at %s bytes; Read the files for the rest]\n' "$max"
+  return 0
+}
+
+# ---- running a project's own commands -------------------------------------------------------------------------
+# A project's verify, test, build and install commands run on code that a model, or the author of a pull request, may have changed.
+# They are run here with:
+#   env -i       PATH, a scratch HOME and TMPDIR, LANG and TERM and nothing else: not what ~/.config/quarterdeck/env exports, not GH_TOKEN
+#   seatbelt     on macOS, inside sandbox-exec: it may read everything except the private list (the same one the models are denied),
+#                write only in the worktree, a scratch folder and the temp folders, and reach only this machine on the network
+#                (an install may reach the network, for the package manager, and keep its cache in ~/.npm)
+#   a timeout    guard, as before
+# sandbox-exec is deprecated by Apple but ships with macOS and is what Claude Code's own sandbox is built on. Where it is missing
+# (Linux) the command runs without it, the check's record says "sandbox":"none" and the pull request says so: the protected-path gate
+# below is then the control that stands between a model and this machine's shell. On a Mac where the sandbox cannot be applied the
+# command is NOT run (no silent fallback); QUARTERDECK_CHECK_SANDBOX=off is the owner's explicit way to accept that.
+_qd_sb_deny_read() { # _qd_sb_deny_read <path-or-glob> — one seatbelt rule
+  local p=$1 op=${2:-file-read*}
+  case "$p" in *'"'*|*'\'*) return 0 ;; esac
+  case "$p" in
+    *"/**") printf '(deny %s (subpath "%s"))\n' "$op" "${p%/**}" ;;
+    *"*"*)  printf '(deny %s (regex #"^%s$"))\n' "$op" "$(printf '%s' "$p" | sed -e 's/[][(){}.+?^$|\\]/\\&/g' -e 's/\*/.*/g')" ;;
+    *)      printf '(deny %s (subpath "%s"))\n' "$op" "$p" ;;
+  esac
+}
+_qd_source_trees() { # $HOME/<folder> for each _QD_DEV_HOME entry, and every registered project's checkout; each also with its symlinks resolved
+  local p q n
+  local -a ents
+  IFS=' ' read -ra ents <<<"$_QD_DEV_HOME"
+  {
+    for n in "${ents[@]}"; do printf '%s
+' "$HOME/$n"; done
+    [ -f "${PROJECTS_FILE:-}" ] && jq -r '.[] | .path? // empty | strings' "$PROJECTS_FILE" 2>/dev/null | sed "s|^~|$HOME|"
+  } | while IFS= read -r p; do
+    case "$p" in /*) ;; *) continue ;; esac
+    case "$HOME/" in "${p%/}"/*) continue ;; esac            # never the home folder itself or anything above it
+    printf '%s\n' "$p"; q=$(_qd_physical "$p"); [ "$q" != "$p" ] && printf '%s\n' "$q"
+  done
+  return 0
+}
+_qd_sb_allow_read() { # _qd_sb_allow_read <folder> — lets a folder back in after a broader deny (a later rule wins in seatbelt)
+  case "$1" in ''|*'"'*|*'\'*) return 0 ;; esac
+  printf '(allow file-read* file-read-data (subpath "%s"))\n' "$1"
+}
+_qd_sb_profile() { # _qd_sb_profile <check|install> <worktree> <scratch>
+  local mode=$1 wt=$2 scratch=$3 p w q h nm d prev=""
+  local -a pe
+  printf '(version 1)\n(allow default)\n'
+  if [ "$mode" != install ]; then
+    # Three narrow rules, NOT one (allow network* (local ip ..) (remote ip ..) (local unix-socket) ..): a local-ip filter next to a unix-socket
+    # filter in a single allow opened the whole network (round-2 audit R1, proven with curl -4 and -6). No unix socket is let through: the system
+    # resolver's (/var/run/mDNSResponder) carried arbitrary hostnames out (round-3 S2, proven with a real lookup); "localhost" is answered from
+    # /etc/hosts without it, and an address by number needs no resolver. A name that is not local does not resolve in a check, by design.
+    printf '(deny network*)\n(allow network-outbound (remote ip "localhost:*"))\n(allow network-bind (local ip "localhost:*"))\n(allow network-inbound (local ip "localhost:*"))\n'
+  fi
+  # Other processes (round-3 S4): a project command may not list, inspect or signal anything but itself and its own children, and may not talk
+  # to launchd the way a user's shell can (launchctl print/list). Probed for real in bin/selftest-security.sh. Not blocked, because the system lets any
+  # process of the same user do it and no rule reaches it: reading the arguments of a process whose pid is already known (sysctl KERN_PROCARGS2).
+  printf '(deny process-info*)\n(allow process-info* (target self) (target children))\n(deny signal)\n(allow signal (target self) (target children))\n'
+  printf '(deny sysctl-read (sysctl-name "kern.proc.all") (sysctl-name-prefix "kern.proc.uid") (sysctl-name-prefix "kern.proc.ruid") (sysctl-name-prefix "kern.proc.tty") (sysctl-name-prefix "kern.proc.pgrp") (sysctl-name-prefix "kern.proc.session"))\n'
+  # Services of the logged-in user's session (round-3 S3/S4): the clipboard, the process monitor behind pgrep and top, Launch Services (`open` of a
+  # URL or file starts a browser or an app: a way out for data) and Apple events (`osascript` telling another app to run a command).
+  printf '(deny mach-lookup (global-name-prefix "com.apple.pasteboard") (global-name "com.apple.sysmond") (global-name "com.apple.coreservices.launchservicesd") (global-name "com.apple.coreservices.appleevents") (global-name-prefix "com.apple.lsd."))\n'
+  # The programs that front those services, and the keychain's, are not started either (a tool that copies one still hits the service rules above).
+  printf '(deny process-exec (literal "/usr/bin/open") (literal "/usr/bin/osascript") (literal "/usr/bin/security") (literal "/usr/bin/%s") (literal "/usr/bin/%s") (literal "/bin/launchctl"))\n' pb""copy pb""paste   # (spelled in two pieces: bin/forbidden_signals.py rightly flags the clipboard programs by name, and this denies them)
+  # Credentials and other people's data outside the worktree (round-3 S5): the broad folders are denied, the secret file names are denied anywhere under
+  # the home folder, and then the worktree, the scratch folder, the borrowed node_modules and the owner's toolchain folders (those on PATH) are let back in.
+  while IFS= read -r p; do _qd_sb_deny_read "$p" file-read-data; done < <(_qd_broad_home)
+  h=$(_qd_physical "$HOME")
+  for d in "$HOME" "$h"; do
+    [ "$d" = "${prev:-}" ] && continue; prev=$d
+    case "$d" in *'"'*|*'\'*) continue ;; esac
+    nm=$(printf '%s' "$d" | sed -e 's/[][(){}.+?^$|\\]/\\&/g')
+    printf '(deny file-read* (regex #"^%s/(.*/)?\\.env(\\..*)?$") (regex #"^%s/(.*/)?[^/]*\\.(pem|key|p12|pfx)$") (regex #"^%s/(.*/)?(id_rsa|id_ed25519|id_ecdsa)[^/]*$"))\n' "$nm" "$nm" "$nm"
+    printf '(allow file-read* (regex #"^%s/(.*/)?\\.env\\.(example|sample|template|dist)$"))\n' "$nm"
+  done
+  # The owner's other source trees (round-5 A1): the code folders and every registered project's checkout, this project's own main checkout
+  # included (it may hold work the owner has not committed). The worktree and its git are let back in just below.
+  while IFS= read -r p; do _qd_sb_deny_read "$p" file-read-data; done < <(_qd_source_trees)
+  # The worktree's git lives in the main checkout's .git (its .git file says where): reading it is what git status and log need.
+  # Round 6 (M2): the data folder's workspace holds other projects' worktrees, scratch folders, plans and reports; this worktree and its scratch
+  # folder are let back in just below.
+  for p in "$QUARTERDECK_HOME/workspace" "$(_qd_physical "$QUARTERDECK_HOME/workspace")"; do _qd_sb_deny_read "$p" file-read-data; done
+  # Round 6 (L7): what the harness recorded (<wt>.gitpin, outside the folder) wins over the file in the folder, and only a linked worktree's gitdir
+  # (…/.git/worktrees/<name>) lets anything in: "gitdir: $HOME" lets in nothing.
+  if [ -f "${wt%/}.gitpin" ]; then q=$(head -1 "${wt%/}.gitpin"); else q=$(sed -n 's/^gitdir: //p' "$wt/.git" 2>/dev/null | head -1); fi
+  case "$q" in */.git/worktrees/*) q=${q%/worktrees/*} ;; *) q="" ;; esac
+  for p in "$wt" "$scratch" "$(_qd_nm_borrowed "$wt")" "$q"; do [ -n "$p" ] && _qd_sb_allow_read "$p"; done
+  # Round 6 (L1): of the main checkout's .git, git in the worktree needs the objects, refs and its own worktrees/<name>; not the stash (work the
+  # owner set aside), the reflogs, or the main checkout's index (what the owner staged). Its config is still readable: git refuses to run without
+  # it, and a credential written into a remote URL there is readable to a check (stated in SECURITY.md).
+  [ -n "$q" ] && for p in "$q/refs/stash" "$q/logs" "$q/index"; do _qd_sb_deny_read "$p" "file-read* file-read-data"; done
+  IFS=: read -ra pe <<<"$PATH"
+  # A toolchain that lives in one of the denied folders (node from ~/Library/Application Support/fnm) stays usable: its bin folder and the folder
+  # above it (node's lib/ is a sibling of bin/), never the denied folder itself.
+  # In a source tree (round 6, L2) only the PATH folder itself: the folder above ~/Projects/X/bin is the whole checkout of X.
+  while IFS=$'\t' read -r k d; do
+    for p in "${pe[@]}"; do
+      case "$p" in "$d"/*) _qd_sb_allow_read "$p"; q=${p%/*}; [ "$k" = B ] && [ "$q" != "$d" ] && _qd_sb_allow_read "$q" ;; esac
+    done
+  done < <(_qd_broad_home | sed 's/^/B	/'; _qd_source_trees | sed 's/^/S	/')
+  while IFS= read -r p; do
+    [ "$mode" = install ] && [ "$p" = "$HOME/.npmrc" ] && continue
+    _qd_sb_deny_read "$p"
+  done < <(private_paths)
+  # The install step is the one that reads the package managers' own settings (and keeps its cache in the home folder).
+  if [ "$mode" = install ]; then for p in "$HOME/.config/pnpm" "$HOME/.config/yarn" "$HOME/.config/npm"; do _qd_sb_allow_read "$p"; done; fi
+  # A project command has no business in this tool's own state or logs (the dashboard's token and sessions, run envelopes, findings):
+  # the whole of both folders is unreadable to it, on top of the named private files above. Worktrees and scratch folders live in workspace/.
+  for p in "$QUARTERDECK_HOME" "$QUARTERDECK_DIR"; do
+    for w in state logs; do
+      _qd_sb_deny_read "$p/$w/**"; q=$(_qd_physical "$p/$w"); [ "$q" != "$p/$w" ] && _qd_sb_deny_read "$q/**"
+    done
+    [ "$QUARTERDECK_HOME" = "$QUARTERDECK_DIR" ] && break
+  done
+  w="(subpath \"$wt\") (subpath \"$scratch\") (subpath \"/private/tmp\") (subpath \"/private/var/folders\") (literal \"/dev/null\") (literal \"/dev/zero\") (literal \"/dev/tty\") (literal \"/dev/dtracehelper\") (regex #\"^/dev/ttys[0-9]+$\")"
+  [ "$mode" = install ] && w="$w (subpath \"$HOME/.npm\") (subpath \"$HOME/.cache\") (subpath \"$HOME/Library/Caches\") (subpath \"$HOME/.pnpm-store\") (subpath \"$HOME/.yarn\")"
+  printf '(deny file-write* (require-not (require-any %s)))\n' "$w"
+  # Round 6 (L3): /private/tmp stays writable (G14), but not Claude Code's own session folders there (task output of other sessions).
+  # (the worktree and scratch folder win over it, should the data folder itself sit there)
+  printf '(deny file-read* file-write* (regex #"^/private/tmp/claude-"))\n(allow file-read* file-write* (subpath "%s") (subpath "%s"))\n' "$wt" "$scratch"
+  # The worktree's .git file (round-5 A2), as the model's own sandbox already has it: rewritten, it would point git somewhere else.
+  case "$wt" in *'"'*|*'\'*) ;; *) printf '(deny file-write* (subpath "%s/.git"))\n' "$wt" ;; esac
+}
+
+# ---- Linux: the same promises with bubblewrap (issue #84, gap G5). NOT RUN ON REAL LINUX: written on a Mac, tested only as an argument list and
+# against a stand-in `bwrap` that records what it was given (bin/selftest-checks.sh). ----------------------------------------------------------------
+# An ALLOW-list, where the seatbelt profile is a deny-list: the command sees the system folders read-only, a private tmpfs for /tmp and for the home
+# folder, and exactly three things of yours: the worktree and the scratch folder (writable) and the folders on PATH (read-only). The data folder, the
+# program folder, ~/.ssh, ~/.config and every other credential place are simply not mounted, so nothing needs listing and nothing can be forgotten.
+# check: network unshared (bwrap raises loopback inside the new namespace; nothing else is there). install: the host network, ~/.npmrc and the
+# package managers' settings read-only, their caches writable. Also: own pid namespace and /proc (no other processes), own IPC, --new-session
+# (no TIOCSTI), no capabilities, --die-with-parent. Differences from the Mac profile, stated in SECURITY.md: /etc is readable (resolv.conf, ssl,
+# passwd); a unix socket of the host is not reachable only because nothing outside the list is mounted.
+# _qd_bwrap_argv <check|install> <worktree> <scratch> [node_modules-target] — prints the bwrap words, one per line, ending with "--". Pure: no probing.
+_qd_bwrap_argv() {
+  local mode=$1 wt=$2 scratch=$3 nm=${4:-} a p e k bad
+  local -a a_=() pe hm
+  for a in "$wt" "$scratch" "$nm" "$HOME"; do case "$a" in *$'\n'*) return 1 ;; esac; done
+  a_=(--die-with-parent --new-session --cap-drop ALL --unshare-all)
+  [ "$mode" = install ] && a_+=(--share-net)
+  a_+=(--proc /proc --dev /dev)
+  for p in /usr /bin /sbin /lib /lib32 /lib64 /etc /opt; do a_+=(--ro-bind-try "$p" "$p"); done
+  a_+=(--tmpfs /tmp --tmpfs "$HOME")
+  if [ "$mode" = install ]; then
+    a_+=(--ro-bind-try "$HOME/.npmrc" "$HOME/.npmrc")
+    for p in .config/pnpm .config/yarn .config/npm; do a_+=(--ro-bind-try "$HOME/$p" "$HOME/$p"); done
+    for p in .npm .cache .pnpm-store .yarn; do a_+=(--bind-try "$HOME/$p" "$HOME/$p"); done
+  fi
+  [ -n "$nm" ] && a_+=(--ro-bind-try "$nm" "$nm")
+  # a toolchain on PATH (node from fnm or nvm) and the folder above it (node's lib/ is a sibling of bin/), never $HOME itself, a private place or the data folders
+  IFS=' ' read -ra hm <<<"$_QD_PRIVATE_HOME ${QUARTERDECK_PRIVATE_HOME:-}"
+  # Round 6 (H3): every test runs on the entry as the kernel will resolve it. A string compare missed $HOME/, $HOME//bin, $HOME/./bin and a link to
+  # the home folder, and bound the whole of it over the tmpfs. Each line is "<entry, lexically normalised>\t<the same with every link resolved>"
+  # (the folder above it follows, worked out the same way); the normalised entry is bound, the resolved one is what is judged.
+  local hs ks
+  hs=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$HOME")
+  while IFS=$'\t' read -r p c; do
+    case "$p" in /*) ;; *) continue ;; esac
+    bad=""
+    for k in "$p" "$c"; do case "$k" in /|/usr|/usr/*|/bin|/sbin|/lib|/lib32|/lib64|/opt|/opt/*|/etc|/etc/*) bad=1 ;; esac; done
+    # never the home folder or anything above it, in either spelling
+    for k in "$HOME" "$hs"; do case "$k/" in "$p"/*|"$c"/*) bad=1 ;; esac; done
+    for k in "$QUARTERDECK_HOME" "$QUARTERDECK_DIR"; do
+      ks=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$k")
+      for e in "$k" "$ks"; do case "$e/" in "$p"/*|"$c"/*) bad=1 ;; esac; case "$p/" in "$e"/*) bad=1 ;; esac; case "$c/" in "$e"/*) bad=1 ;; esac; done
+    done
+    # neither inside a private place nor holding one (~/.cargo holds .cargo/credentials, ~/.local holds .local/share/keyrings)
+    for k in "${hm[@]}"; do [ -n "$k" ] || continue; for e in "$HOME/$k" "$hs/$k"; do
+      case "$p/" in "$e"/*) bad=1 ;; esac; case "$c/" in "$e"/*) bad=1 ;; esac; case "$e/" in "$p"/*|"$c"/*) bad=1 ;; esac
+    done; done
+    [ -n "$bad" ] || a_+=(--ro-bind-try "$p" "$p")
+  done < <(python3 -c '
+import os, sys
+for e in sys.argv[1].split(":"):
+    if not e.startswith("/") or "\n" in e or "\t" in e:
+        continue
+    n = "/" + os.path.normpath(e).lstrip("/")
+    for p in (n, os.path.dirname(n)):
+        print(p + "\t" + os.path.realpath(p))' "${PATH:-}")
+  # the worktree's .git file read-only over the writable worktree (round 6, L7), as on the Mac
+  a_+=(--bind "$wt" "$wt" --ro-bind-try "$wt/.git" "$wt/.git" --bind "$scratch" "$scratch" --chdir "$wt" --)
+  printf '%s\n' "${a_[@]}"
+}
+# _qd_bwrap_usable — returns 0 when bubblewrap is on PATH and can really make the namespaces here (a container or a distro that turns user
+# namespaces off has bwrap installed and unable to work). QUARTERDECK_BWRAP overrides the program (the tests give it a recorder).
+_qd_bwrap_usable() {
+  local b=${QUARTERDECK_BWRAP:-bwrap}
+  command -v "$b" >/dev/null 2>&1 && "$b" --unshare-all --ro-bind / / --die-with-parent true >/dev/null 2>&1
+}
+# qd_sandbox_status — one line for doctor: "ok <words>" or "no <words>"
+qd_sandbox_status() {
+  case "$(uname -s)" in
+    Darwin) if [ -x /usr/bin/sandbox-exec ] && /usr/bin/sandbox-exec -p '(version 1)(allow default)' /usr/bin/true >/dev/null 2>&1; then echo "ok seatbelt (sandbox-exec)"; else echo "no sandbox-exec cannot be applied: project commands are not run"; fi ;;
+    Linux)  if [ "${QUARTERDECK_CHECK_SANDBOX:-on}" != on ]; then echo "no QUARTERDECK_CHECK_SANDBOX=off: project commands run with NO file sandbox (your explicit choice)"
+            elif _qd_bwrap_usable; then echo "ok bubblewrap (never run on real Linux by the author)"
+            else echo "no bubblewrap missing or unusable: project commands are not run. Install bwrap (apt install bubblewrap), or set QUARTERDECK_CHECK_SANDBOX=off to accept running them unsandboxed"; fi ;;
+    *)      echo "ok no sandbox on this system (environment only)" ;;
+  esac
+}
+
+# project_exec <check|install> <seconds> <worktree> <command> — runs the command as described above.
+# Sets EXEC_OUT (stdout and stderr together), RUN_SANDBOX (seatbelt|bwrap|none), and returns the command's exit status.
+# Not meant for $(...): the variables would be lost with the subshell.
+# px_prepare <check|install> <worktree> — everything a project command is run with, for a caller that must build its own command line (a server that
+# keeps running): PX_ENV (the env -i words: PATH, a scratch HOME and TMPDIR, LANG, TERM), PX_PRE (the sandbox-exec words, empty where there is none),
+# PX_SCRATCH (the caller removes it), RUN_SANDBOX. Returns 126 on a Mac where the sandbox cannot be applied: nothing is to be run then.
+#   env -i "${PX_ENV[@]}" ${PX_PRE[@]+"${PX_PRE[@]}"} bash -c "$cmd"
+px_prepare() {
+  local mode=$1 wt home
+  RUN_SANDBOX=none; PX_PRE=(); PX_SCRATCH=""; PX_WHY=""
+  wt=$(cd "$2" 2>/dev/null && pwd -P) || return 127
+  PX_SCRATCH=$(mktemp -d "$QUARTERDECK_HOME/workspace/exec.XXXXXX") || return 127
+  PX_SCRATCH=$(cd "$PX_SCRATCH" && pwd -P); mkdir -p "$PX_SCRATCH/home" "$PX_SCRATCH/tmp"
+  home="$PX_SCRATCH/home"; [ "$mode" = install ] && home="$HOME"
+  PX_ENV=("PATH=$PATH" "HOME=$home" "TMPDIR=$PX_SCRATCH/tmp" "LANG=${LANG:-C}" "TERM=dumb")
+  if [ "${QUARTERDECK_CHECK_SANDBOX:-on}" = on ] && [ "$(uname -s)" = Darwin ]; then
+    if [ -x /usr/bin/sandbox-exec ] && /usr/bin/sandbox-exec -p '(version 1)(allow default)' /usr/bin/true >/dev/null 2>&1; then
+      _qd_sb_profile "$mode" "$wt" "$PX_SCRATCH" > "$PX_SCRATCH/profile.sb" && { PX_PRE=(/usr/bin/sandbox-exec -f "$PX_SCRATCH/profile.sb"); RUN_SANDBOX=seatbelt; }
+    fi
+    if [ "$RUN_SANDBOX" != seatbelt ]; then
+      log "px_prepare: no usable sandbox-exec here; a project command is not run unsandboxed (QUARTERDECK_CHECK_SANDBOX=off accepts that)"
+      rm -rf "$PX_SCRATCH"; PX_SCRATCH=""; return 126
+    fi
+  fi
+  if [ "$(uname -s)" = Linux ]; then
+    if [ "${QUARTERDECK_CHECK_SANDBOX:-on}" != on ]; then
+      log "px_prepare: QUARTERDECK_CHECK_SANDBOX=${QUARTERDECK_CHECK_SANDBOX}: a project command runs with NO file sandbox (the owner's explicit opt-out)"
+    else
+      local nmt bw=${QUARTERDECK_BWRAP:-bwrap} w
+      nmt=$(_qd_nm_borrowed "$wt")
+      if _qd_bwrap_usable; then
+        PX_PRE=("$bw")
+        while IFS= read -r w; do PX_PRE+=("$w"); done < <(_qd_bwrap_argv "$mode" "$wt" "$PX_SCRATCH" "$nmt") && RUN_SANDBOX=bwrap
+      fi
+      if [ "$RUN_SANDBOX" != bwrap ]; then
+        PX_WHY="bubblewrap (bwrap) is missing or cannot make namespaces here, and a project command is never run without a file sandbox on Linux by default (install bubblewrap, or set QUARTERDECK_CHECK_SANDBOX=off to accept that)"
+        log "px_prepare: $PX_WHY"
+        PX_PRE=(); rm -rf "$PX_SCRATCH"; PX_SCRATCH=""; return 126
+      fi
+    fi
+  fi
+  return 0
+}
+project_exec() {
+  local mode=$1 secs=$2 cmd=$4 wt rc=0 pr=0
+  EXEC_OUT=""
+  wt=$(cd "$3" 2>/dev/null && pwd -P) || { EXEC_OUT="no such folder: $3"; RUN_SANDBOX=none; return 127; }
+  px_prepare "$mode" "$wt" || pr=$?
+  if [ "$pr" = 126 ]; then
+    EXEC_OUT="not run: ${PX_WHY:-the macOS sandbox could not be applied, and a project command is never run unsandboxed on a Mac by default}"
+    return 126
+  elif [ "$pr" != 0 ]; then EXEC_OUT="cannot make a scratch folder"; return 127; fi
+  EXEC_OUT=$(cd "$wt" && guard_group "$secs" env -i "${PX_ENV[@]}" ${PX_PRE[@]+"${PX_PRE[@]}"} bash -c "$cmd" 2>&1) || rc=$?
+  rm -rf "$PX_SCRATCH"
+  return $rc
+}
+# fork_refuse <pr-json> — returns 0 (and says why on stdout) unless the pull request's head is a branch of the repository itself. A fork's head is a
+# stranger's code; a branch of the repository itself can only be pushed by someone with write access. An unreadable answer is treated as a fork.
+fork_refuse() {
+  [ "$(jq -r 'if .isCrossRepository == false then "same" else "other" end' <<<"$1" 2>/dev/null)" = same ] && return 1
+  printf 'this pull request comes from a fork (or its origin could not be told), and its build, start and verify commands are a stranger'"'"'s code; the harness runs only the head of a branch of %s itself' "${REPO:-the repository}"
+  return 0
+}
+
+# ---- what a model-made change may not touch -----------------------------------------------------------------------
+# verify_inputs <worktree> — a digest of what the verify/test/build commands are made of (every package.json scripts block, every
+# Makefile). Take it when the worktree is made and again when the model has stopped.
+verify_inputs() { python3 "$QUARTERDECK_DIR/bin/protect.py" inputs "$1" 2>/dev/null || echo unreadable; }
+# wt_changed <worktree> — every path the worktree differs from HEAD by, one per line, spelled as it is on disk (core.quotepath=false and -z: git
+# C-quotes a non-ASCII or special name, and a leading quote defeated every anchored pattern; renames show both ends). Ignored files are not in it:
+# see wt_ignored.
+wt_changed() {
+  _qd_pin "$1" || return 1            # the .git file was rewritten: nothing is listed, and the caller refuses
+  { safe_git -C "$1" -c core.quotepath=false diff --no-ext-diff --no-textconv --no-renames --name-only -z HEAD
+    safe_git -C "$1" -c core.quotepath=false ls-files --others --exclude-standard -z
+  } | tr '\0' '\n' | sort -u
+}
+# wt_ignored <worktree> — files git is told to ignore. A model that writes .gitignore and then a file it names hides it from wt_changed, and the
+# checks still load it. wt_mark records what was there before the model ran (the node_modules link, a base check's build output); the gate adds
+# every ignored file that is not in that record to the paths it examines.
+wt_ignored() { safe_git -C "$1" -c core.quotepath=false ls-files --others --ignored --exclude-standard -z | tr '\0' '\n' | sort -u; }
+wt_mark() { wt_ignored "$1" > "${1%/}.ignored-before" 2>/dev/null; chmod 600 "${1%/}.ignored-before" 2>/dev/null; return 0; }
+wt_ignored_new() { # wt_ignored_new <worktree>
+  local mark="${1%/}.ignored-before"
+  if [ -f "$mark" ]; then comm -13 "$mark" <(wt_ignored "$1"); else wt_ignored "$1"; fi
+}
+# model_diff_gate <project> <worktree> <inputs-before> [plan-file] — the changed paths on stdin (the worktree's new ignored files are examined too). Refuses, BEFORE any check runs, a change to a
+# protected path (bin/protect.py: CI workflows, package.json, lockfiles, .npmrc, tool configs, Makefile, scripts, Dockerfiles ...) unless the
+# project's "protected_allow" or the plan names it, and ANY change to a package.json scripts block or a Makefile. Prints why, returns 1.
+model_diff_gate() {
+  local proj=$1 wt=$2 before=$3 plan=${4:-} hits rc after a list
+  local -a args=()
+  while IFS= read -r a; do [ -n "$a" ] && args+=(--allow "$a"); done < <(jq -r --arg p "$proj" '(.[$p].protected_allow // [])[]' "$PROJECTS_FILE" 2>/dev/null)
+  while IFS= read -r a; do [ -n "$a" ] && args+=(--extra "$a"); done < <(jq -r --arg p "$proj" '(.[$p].protected_paths // [])[]' "$PROJECTS_FILE" 2>/dev/null)
+  [ -n "$plan" ] && [ -f "$plan" ] && args+=(--plan "$plan")
+  list=$(cat)
+  hits=$( { printf '%s\n' "$list"; wt_ignored_new "$wt"; } | python3 "$QUARTERDECK_DIR/bin/protect.py" check ${args[@]+"${args[@]}"}); rc=$?
+  if [ $rc != 0 ]; then
+    if [ $rc = 1 ] && [ -n "$hits" ]; then
+      echo "it changed a protected path ($(tr '\n' ' ' <<<"$hits" | sed 's/ *$//')): the build, CI and dependency files are never changed by a model unless the plan or the project's protected_allow names them. A person makes that change"
+    else echo "the protected-path check itself failed (exit $rc), so nothing is trusted"; fi
+    return 1
+  fi
+  after=$(verify_inputs "$wt")
+  if [ "$after" != "$before" ] || [ "$after" = unreadable ]; then
+    echo "it changed what the verify command is made of (a package.json scripts block or a Makefile), which would let a model choose what the harness runs next"
+    return 1
+  fi
+  # what passed, as git would store it now: post_checks_gate stages the list and compares the staged blobs with this (kept outside the worktree,
+  # where a check cannot write)
+  printf '%s\n' "$list" | _qd_blob_record "$wt" > "${wt%/}.passed" && chmod 600 "${wt%/}.passed"
+  return 0
+}
+# _qd_blob_record <worktree> — the paths on stdin, each with the mode and blob id `git add` would give it now ("-" when absent), sorted
+_qd_blob_record() {
+  local wt=$1 rel id
+  sort -u | while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    if [ -L "$wt/$rel" ]; then id="120000 $(printf '%s' "$(readlink "$wt/$rel")" | safe_git -C "$wt" hash-object --stdin)"
+    elif [ -f "$wt/$rel" ]; then
+      if [ -x "$wt/$rel" ] && [ "$(safe_git -C "$wt" config --type=bool core.filemode 2>/dev/null)" != false ]; then id=100755; else id=100644; fi
+      id="$id $(safe_git -C "$wt" hash-object --path="$rel" --stdin < "$wt/$rel")" || id=unreadable
+    elif [ -e "$wt/$rel" ]; then id=other
+    else id=-; fi
+    printf '%s\t%s\n' "$id" "$rel"
+  done
+}
+# _qd_staged_record <worktree> — the same, for what is in the index now
+_qd_staged_record() {
+  local wt=$1 rel e
+  sort -u | while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    e=$(safe_git -C "$wt" ls-files -s -z -- ":(literal)$rel" | tr '\0' '\n' | awk -F'\t' -v r="$rel" '$2 == r {split($1, a, " "); print a[1] " " a[2]}')
+    printf '%s\t%s\n' "${e:--}" "$rel"
+  done
+}
+# The checks run project code, and the sandbox lets that code write in the worktree, so the first gate (before the checks) proves nothing about
+# what is in the folder afterwards (round-3 S1: a model-written test made `node --test` write .github/workflows/pwn.yml). A duty that commits
+# therefore runs the gate AGAIN after the checks, with the same baseline, throws away what the checks created or changed outside the list that
+# passed the first gate, and stages ONLY that list (never `add -A`). The caller commits what is staged and does not stage again.
+# post_checks_gate <project> <worktree> <inputs-before> <passed-list> [plan] — prints why and returns 1 to refuse.
+post_checks_gate() {
+  local proj=$1 wt=$2 before=$3 first=$4 plan=${5:-} now why extra f real d was staged
+  now=$(wt_changed "$wt") || { echo "the worktree's .git file was changed while the checks ran"; return 1; }
+  # A file that passed the first gate must be committed exactly as it passed: a check that rewrote it (round 5: a model's test appended a private
+  # file it could read to the source it was testing), or a process it left running that rewrote it after any comparison of files on disk (round 6),
+  # would have its words committed. So the list is staged first and the STAGED blobs are compared with the record; the commit takes the index, never
+  # the disk, so nothing written after this point is committed.
+  was=$(cat "${wt%/}.passed" 2>/dev/null) || { echo "there is no record of what passed the gate before the checks, so nothing is trusted"; return 1; }
+  why=$(printf '%s\n' "$now" | model_diff_gate "$proj" "$wt" "$before" "$plan") || { echo "after the checks ran, $why"; return 1; }
+  extra=$(comm -13 <(printf '%s\n' "$first" | sort -u) <(printf '%s\n' "$now" | sort -u))
+  real=$(cd "$wt" && pwd -P) || return 1
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    case "/$f/" in /../*|*/../*|//*) echo "a check left a path outside the worktree ($f)"; return 1 ;; esac
+    if safe_git -C "$wt" ls-files --error-unmatch -- ":(literal)$f" >/dev/null 2>&1; then
+      safe_git -C "$wt" checkout -q HEAD -- ":(literal)$f" 2>/dev/null || { echo "could not restore $f after the checks"; return 1; }
+    else
+      d=$(cd "$(dirname "$wt/$f")" 2>/dev/null && pwd -P) || continue
+      case "$d" in "$real"|"$real"/*) rm -rf -- "$wt/$f" ;; *) echo "a check left $f behind a link out of the worktree"; return 1 ;; esac
+    fi
+    log "post_checks_gate: discarded $f (a check made or changed it; it was not in the change that passed the gate)"
+  done <<<"$extra"
+  stage_passed "$wt" "$first" || { echo "the files that passed the gate could not be staged"; return 1; }
+  staged=$(printf '%s\n' "$first" | _qd_staged_record "$wt")
+  if [ "$staged" != "$was" ]; then
+    d=$(diff <(printf '%s\n' "$was") <(printf '%s\n' "$staged") | sed -n 's/^> [^	]*	//p' | head -5 | tr '\n' ' ' | sed 's/ $//')
+    safe_git -C "$wt" reset -q 2>/dev/null
+    echo "a check changed what had already passed the gate (${d:-the list}): the change is not what the gate saw, so it is not committed"; return 1
+  fi
+  return 0
+}
+# stage_passed <worktree> <passed-list> — stages exactly those paths (literal, deletions included), nothing else
+stage_passed() {
+  local wt=$1 f; local -a arr=()
+  while IFS= read -r f; do [ -n "$f" ] && arr+=("$f"); done <<<"$2"
+  [ ${#arr[@]} -gt 0 ] || return 1
+  safe_git -C "$wt" --literal-pathspecs add -A -- "${arr[@]}"
 }
 
 # ---- local gates -------------------------------------------------------------
@@ -449,12 +1274,12 @@ run_checks() { # run_checks <project> <workdir> -> one JSON object per check
     cmd=$(project_get "$proj" "$name")
     [ -n "$cmd" ] || continue
     say "    $name: $cmd"
-    out=$(cd "$wdir" && guard "${QUARTERDECK_CHECK_TIMEOUT:-900}" bash -c "$cmd" 2>&1); rc=$?
+    project_exec check "${QUARTERDECK_CHECK_TIMEOUT:-900}" "$wdir" "$cmd"; rc=$?; out=$EXEC_OUT
     errs=$(grep -ciE '(^|[^[:alnum:]])error' <<<"$out" || true)
-    say "      exit $rc, $errs error line(s)"
-    jq -nc --arg n "$name" --arg c "$cmd" --argjson rc "${rc:-1}" \
+    say "      exit $rc, $errs error line(s) [sandbox: $RUN_SANDBOX]"
+    jq -nc --arg n "$name" --arg c "$cmd" --argjson rc "${rc:-1}" --arg sb "$RUN_SANDBOX" \
            --argjson e "${errs:-0}" --arg t "$(tail -25 <<<"$out")" \
-       '{name:$n, cmd:$c, rc:$rc, errors:$e, tail:$t}'
+       '{name:$n, cmd:$c, rc:$rc, errors:$e, tail:$t, sandbox:$sb}'
   done
 }
 
@@ -479,7 +1304,8 @@ check_regressions() { # check_regressions <before-json-lines> <after-json-lines>
 checks_summary() { # checks_summary <after-json-lines>
   jq -rs 'if length == 0 then "No local checks are configured for this project."
           else map("- `\(.cmd)` — exit `\(.rc)`" + (if .errors > 0 then ", \(.errors) error line(s)" else "" end))
-               | join("\n") end' <<<"$1"
+               | join("\n") end
+          + (if any(.[]?; .sandbox == "none") then "\n\nThese checks ran without an operating-system sandbox (none is available on that machine); they ran with a minimal environment and no secrets." else "" end)' <<<"$1"
 }
 
 # ---- labelling a ruling -------------------------------------------------------

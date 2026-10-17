@@ -15,7 +15,7 @@ set -uo pipefail
 REAL="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 mkdir -p "$T"/{bin,config,crew,duties,state,workspace,logs/runs,work,path}
-cp "$REAL"/bin/lib.sh "$T/bin/"; cp "$REAL"/duties/purser.sh "$T/duties/"
+cp "$REAL"/bin/{lib.sh,outscan.py,guard.py,home.py,protect.py,safegit.py,gitrisky.re,behaviour.py} "$T/bin/"; cp "$REAL"/duties/purser.sh "$T/duties/"
 cp "$REAL"/config/quarterdeck.env "$T/config/"; cp "$REAL"/crew/*.md "$T/crew/"
 jq -n --arg w "$T/work" '{tp:{repo:"x/tp",path:$w,summary:"s",default_branch:"main",duties:["purser"],
   guardrails:[],verify:"",board:{number:1,owner:"x"}}}' > "$T/config/projects.json"
@@ -39,13 +39,13 @@ GH
 chmod +x "$T/path/gh"
 cat > "$T/claude" <<'STUB'
 #!/bin/bash
-while [ $# -gt 0 ]; do [ "$1" = -p ] && { echo "$2" >> "$QUARTERDECK_DIR/prompts"; shift; }; shift; done
+cat >> "$QUARTERDECK_DIR/prompts"; echo >> "$QUARTERDECK_DIR/prompts"
 jq -n --arg r "$REPLY" '{result:$r, total_cost_usd:0, num_turns:1, usage:{}, modelUsage:{}}'
 STUB
 chmod +x "$T/claude"
 # QUARTERDECK_GH, not PATH: lib.sh puts the real gh first, and a stand-in that is
 # bypassed would edit a real issue.
-export QUARTERDECK_DIR="$T" QUARTERDECK_SECRETS_DIR="$T/nosecrets" CLAUDE_BIN="$T/claude" QUARTERDECK_GH="$T/path/gh"
+export QUARTERDECK_DIR="$T" QUARTERDECK_SECRETS_DIR="$T/nosecrets" CLAUDE_BIN="$T/claude" QUARTERDECK_CLAUDE_ENV=inherit QUARTERDECK_GH="$T/path/gh"
 
 READY='REQUIREMENTS_JSON: {"summary":"Tell people when a bill is settled.","requirements":[{"what":"When a member marks a bill settled, every other member gets a notification.","accept":"Settle a bill as A; B sees a notification within a minute."},{"what":"A notification names the bill.","accept":"The text contains the bill title."}],"out_of_scope":["Email notifications"]}
 RESULT: READY 2 requirement(s)'
@@ -96,6 +96,18 @@ go "$ORIG" "I think this looks fine." --apply
 ck "an unparseable reply writes nothing"            '! grep -q "issue edit" $T/gh-calls && [ ! -f $T/board-calls ] && [ "$(verdict)" = ERROR ]'
 go "$ORIG" $'REQUIREMENTS_JSON: {"requirements":[{"what":"x"}]}\nRESULT: READY 1 requirement(s)' --apply
 ck "a requirement with no acceptance check is refused" '! grep -q "issue edit" $T/gh-calls && [ "$(verdict)" = ERROR ]'
+
+# #86: an acceptance check that only proves a thing exists is not enough; at least one must make the thing do something
+EXISTONLY='REQUIREMENTS_JSON: {"summary":"Add a Reset button.","requirements":[{"what":"There is a Reset button.","accept":"grep index.html for id=\"reset\"; the element exists."},{"what":"It is labelled.","accept":"The page contains the string Reset."}],"out_of_scope":[]}
+RESULT: READY 2 requirement(s)'
+go "$ORIG" "$EXISTONLY" --apply
+ck "#86 checks that only grep for an element or string are refused: nothing written, the card does not move" '! grep -q "issue edit" $T/gh-calls && [ ! -f $T/board-calls ] && [ "$(verdict)" = ERROR ]'
+ck "  and the local copy is not written as if it were requirements" '! grep -q "Accept when" $T/workspace/tp-requirements-7.md 2>/dev/null'
+MIXED='REQUIREMENTS_JSON: {"summary":"Add a Reset button.","requirements":[{"what":"There is a Reset button.","accept":"The page contains the string Reset."},{"what":"Reset clears the form.","accept":"Type a name, click Reset: the field is empty again."}],"out_of_scope":[]}
+RESULT: READY 2 requirement(s)'
+go "$ORIG" "$MIXED" --apply
+ck "#86 an existence check beside one that exercises the behaviour is accepted" 'grep -q "^gh issue edit" $T/gh-calls && [ "$(verdict)" = READY ]'
+ck "#86 the Purser is told to write one check that makes the thing do something and to say what happens" 'grep -q "exercises the behaviour" $T/prompts && grep -q "never only that" $T/prompts'
 
 go "$ORIG" "$READY"
 ck "report only: nothing is written or moved"       '! grep -q "issue edit" $T/gh-calls && [ ! -f $T/board-calls ] && [ "$(verdict)" = DRY-RUN ]'

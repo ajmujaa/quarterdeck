@@ -1,0 +1,1 @@
+^(filter\..+\.(smudge|clean|process)|diff\..+\.(textconv|command)|diff\.external|merge\..+\.(driver|recursive)|gpg\.(.+\.)?program|url\..+\.(insteadof|pushinsteadof)|include\.path|includeif\..+\.path|credential\..+\.helper|core\.(gitproxy|askpass|attributesfile|worktree|alternaterefscommand|editor)|sequence\.editor|pager\..+|remote\..+\.(uploadpack|receivepack|vcs))$

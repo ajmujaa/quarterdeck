@@ -146,10 +146,10 @@ while read -r item; do
   labels=$(jq -r '(.labels // []) | join(",")' <<<"$item")
   # Labels that don't exist make `gh issue create` fail outright and lose the
   # issue, so they are best-effort: retry once without them.
-  if url=$(guard 60 "$GH" issue create -R "$REPO" --title "$title" --body "$body" \
+  if url=$(gh_post 60 issue create -R "$REPO" --title "$title" --body "$body" \
              ${labels:+--label "$labels"} 2>>"$LOG_FILE"); then
     :
-  elif url=$(guard 60 "$GH" issue create -R "$REPO" --title "$title" --body "$body" 2>>"$LOG_FILE"); then
+  elif url=$(gh_post 60 issue create -R "$REPO" --title "$title" --body "$body" 2>>"$LOG_FILE"); then
     log "filed without labels: $title"
   else
     log "FAILED to file: $title"

@@ -16,6 +16,10 @@ import os
 import re
 import subprocess
 import sys
+from pathlib import Path as _P
+sys.path.insert(0, str(_P(__file__).resolve().parent))
+import safegit as _safegit
+import sys
 
 SKIP = {"node_modules", ".git", "vendor", "dist", "build", ".next", "__pycache__", "coverage", ".venv", "venv"}
 LOCKS = {"package-lock.json", "npm-shrinkwrap.json"}
@@ -23,7 +27,10 @@ SRC = (".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".vue", ".svelte", ".py")
 
 
 def show(repo, ref, path):
-    r = subprocess.run(["git", "-C", repo, "show", f"{ref}:{path}"], capture_output=True, text=True, timeout=60)
+    try:
+        r = _safegit.run(repo, "show", f"{ref}:{path}", text=True)       # refuses a folder whose own git settings make git run programs
+    except (_safegit.Untrusted, OSError, subprocess.SubprocessError):
+        return None
     return r.stdout if r.returncode == 0 else None
 
 

@@ -57,13 +57,13 @@ TX="$QUARTERDECK_HOME/state/panels/$PANEL.json"
 acquire_lock "logkeeper-$PROJECT-$PANEL"
 export QUARTERDECK_RUN_ID="$(tr '/' '_' <<<"$REPO")-logkeeper-$PANEL"
 WT="$QUARTERDECK_HOME/workspace/wt-logkeeper-${PROJECT}-${PANEL}"
-cleanup() { [ "${BASH_SUBSHELL:-0}" = 0 ] || return 0; git -C "$SOURCE_REPO_DIR" worktree remove --force "$WT" >/dev/null 2>&1 || true; }
+cleanup() { [ "${BASH_SUBSHELL:-0}" = 0 ] || return 0; safe_git -C "$SOURCE_REPO_DIR" worktree remove --force "$WT" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
-guard 120 git -C "$SOURCE_REPO_DIR" fetch -q origin "$BASE" 2>>"$LOG_FILE" || log "fetch failed; using local $BASE"
+guard 120 "${SAFE_GIT[@]}" -C "$SOURCE_REPO_DIR" fetch -q origin "$BASE" 2>>"$LOG_FILE" || log "fetch failed; using local $BASE"
 # Already recorded? A record names the panel it came from, so asking twice does not write twice.
-ref="origin/$BASE"; git -C "$SOURCE_REPO_DIR" rev-parse -q --verify "$ref" >/dev/null || ref="$BASE"
-if git -C "$SOURCE_REPO_DIR" grep -qE "^Panel: $PANEL\$" "$ref" -- docs/decisions 2>/dev/null; then
+ref="origin/$BASE"; safe_git -C "$SOURCE_REPO_DIR" rev-parse -q --verify "$ref" >/dev/null || ref="$BASE"
+if safe_git -C "$SOURCE_REPO_DIR" grep -qE "^Panel: $PANEL\$" "$ref" -- docs/decisions 2>/dev/null; then
   say "quarterdeck: $PANEL is already on record in docs/decisions — nothing to do"
   record_run "$PROJECT" logkeeper NOTHING "$PANEL is already recorded"
   exit 0
@@ -143,9 +143,9 @@ if [ -n "$bad" ]; then
 fi
 
 # Already proposed? The same panel must not open a second pull request while the first waits.
-guard 120 git -C "$SOURCE_REPO_DIR" fetch -q origin '+refs/heads/decision/*:refs/remotes/origin/decision/*' 2>>"$LOG_FILE" || true
-for b in $(git -C "$SOURCE_REPO_DIR" for-each-ref --format='%(refname)' refs/remotes/origin/decision 2>/dev/null); do
-  if git -C "$SOURCE_REPO_DIR" log -1 --format=%B "$b" 2>/dev/null | grep -qF "Quarterdeck panel $PANEL."; then
+guard 120 "${SAFE_GIT[@]}" -C "$SOURCE_REPO_DIR" fetch -q origin '+refs/heads/decision/*:refs/remotes/origin/decision/*' 2>>"$LOG_FILE" || true
+for b in $(safe_git -C "$SOURCE_REPO_DIR" for-each-ref --format='%(refname)' refs/remotes/origin/decision 2>/dev/null); do
+  if safe_git -C "$SOURCE_REPO_DIR" log -1 --format=%B "$b" 2>/dev/null | grep -qF "Quarterdeck panel $PANEL."; then
     say "quarterdeck: $PANEL is already proposed as ${b#refs/remotes/origin/} — merge or close that pull request first"
     record_run "$PROJECT" logkeeper ERROR "$PANEL — already proposed as ${b#refs/remotes/origin/}"
     exit 0
@@ -154,7 +154,7 @@ done
 
 # ---- number it: after every record on the trunk and every record already proposed on a branch --------------------------
 n_base=$(python3 "$ADR_PY" next --repo "$SOURCE_REPO_DIR" --base "$BASE") || die "logkeeper: could not number the record"
-n_branch=$(git -C "$SOURCE_REPO_DIR" ls-remote --heads origin 'decision/*' 2>/dev/null | sed -nE 's#.*refs/heads/decision/([0-9]{4})-.*#\1#p' | sort -n | tail -1)
+n_branch=$(safe_git -C "$SOURCE_REPO_DIR" ls-remote --heads origin 'decision/*' 2>/dev/null | sed -nE 's#.*refs/heads/decision/([0-9]{4})-.*#\1#p' | sort -n | tail -1)
 num=$(printf '%04d' $(( 10#${n_base} > 10#${n_branch:-0} + 1 ? 10#${n_base} : 10#${n_branch:-0} + 1 )))
 slug=$(jq -r '.title' <<<"$rec" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g' | cut -c1-40 | sed -E 's/-+$//')
 [ -n "$slug" ] || slug=decision
@@ -178,18 +178,18 @@ if [ "$APPLY" != 1 ]; then
 fi
 
 # ---- a branch from the trunk holding that one file, and a pull request; never a push to the trunk ---------------------------
-git -C "$SOURCE_REPO_DIR" ls-remote --exit-code --heads origin "$BR" >/dev/null 2>&1 \
+safe_git -C "$SOURCE_REPO_DIR" ls-remote --exit-code --heads origin "$BR" >/dev/null 2>&1 \
   && { record_run "$PROJECT" logkeeper ERROR "$PANEL — $BR is already proposed"; die "logkeeper: $BR already exists; merge or close that pull request first"; }
 worktree_at "$SOURCE_REPO_DIR" "$WT" "$ref" || die "could not create a worktree at $WT"
-git -C "$WT" checkout -q -B "$BR" 2>>"$LOG_FILE" || die "could not create branch $BR"
+safe_git -C "$WT" checkout -q -B "$BR" 2>>"$LOG_FILE" || die "could not create branch $BR"
 mkdir -p "$WT/docs/decisions"
 render > "$WT/$FILE"
-[ "$(git -C "$WT" status --porcelain | wc -l | tr -d ' ')" = 1 ] && git -C "$WT" status --porcelain | grep -qF "$FILE" \
+[ "$(safe_git -C "$WT" status --porcelain | wc -l | tr -d ' ')" = 1 ] && safe_git -C "$WT" status --porcelain | grep -qF "$FILE" \
   || { record_run "$PROJECT" logkeeper ERROR "$PANEL — the commit would hold more than $FILE"; die "logkeeper: the working tree holds more than the record; nothing committed"; }
-git -C "$WT" add -- "$FILE"
-[ -n "$(git -C "$WT" config user.email || true)" ] || die "no git identity configured for $PROJECT — set user.name and user.email in $(project_path "$PROJECT")"
-git -C "$WT" commit -q -m "$(printf 'decision %s: %s\n\nRecord of the ruling of Quarterdeck panel %s.\n\nOpened by the Quarterdeck logkeeper.\n' "$num" "$(jq -r .title <<<"$rec")" "$PANEL")" || die "commit failed"
-guard 180 git -C "$WT" push -q origin "HEAD:refs/heads/$BR" 2>>"$LOG_FILE" || { record_run "$PROJECT" logkeeper ERROR "$PANEL push failed"; die "push failed"; }
+safe_git -C "$WT" add -- "$FILE"
+commit_identity "$PROJECT" "$WT" || die "no commit identity for $PROJECT: GitHub could not be asked for the account's no-reply address and the checkout has no user.email (set \"git\": {\"name\", \"email\"} in the registry)"
+safe_git -C "$WT" ${COMMIT_ID[@]+"${COMMIT_ID[@]}"} commit -q -m "$(printf 'decision %s: %s\n\nRecord of the ruling of Quarterdeck panel %s.\n\nOpened by the Quarterdeck logkeeper.\n' "$num" "$(jq -r .title <<<"$rec")" "$PANEL")" || die "commit failed"
+safe_git_guard 180 -C "$WT" push -q origin "HEAD:refs/heads/$BR" 2>>"$LOG_FILE" || { record_run "$PROJECT" logkeeper ERROR "$PANEL push failed"; die "push failed"; }
 pr_body="Record of a decision, written from the ruling of Quarterdeck panel \`$PANEL\`.
 
 **$(jq -r .title <<<"$rec")**
@@ -197,7 +197,7 @@ pr_body="Record of a decision, written from the ruling of Quarterdeck panel \`$P
 Merging this adds \`$FILE\` and nothing else. Once merged, the harness shows it to every review whose diff touches its paths or whose issue uses its keywords.
 
 <sub>Quarterdeck logkeeper. The model wrote the parts of the record; the harness validated, numbered and rendered it. Nothing was merged.</sub>"
-if url=$(guard 90 "$GH" pr create -R "$REPO" --base "$BASE" --head "$BR" --title "decision $num: $(jq -r .title <<<"$rec")" --body "$pr_body" 2>>"$LOG_FILE"); then
+if url=$(gh_post 90 pr create -R "$REPO" --base "$BASE" --head "$BR" --title "decision $num: $(jq -r .title <<<"$rec")" --body "$pr_body" 2>>"$LOG_FILE"); then
   say "  ✓ $url"
   record_run "$PROJECT" logkeeper RECORD "$num → $url" "$url"
 else

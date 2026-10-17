@@ -52,7 +52,7 @@ APPLY=0 PR="" FFILE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --apply)    APPLY=1 ;;
-    --pr)       PR="${2:-}"; shift ;;
+    --pr)       PR="${2:-}"; need_num "--pr" "$PR"; shift ;;
     --findings) FFILE="${2:-}"; shift ;;
     *) die "caulker: unknown argument '$1'" ;;
   esac
@@ -68,7 +68,7 @@ WT="$QUARTERDECK_HOME/workspace/wt-caulker-${PROJECT}-${PR}"
 TMP="$(mktemp -d)"
 cleanup() {
   [ "${BASH_SUBSHELL:-0}" = 0 ] || return 0
-  git -C "$SOURCE_REPO_DIR" worktree remove --force "$WT" >/dev/null 2>&1 || true
+  safe_git -C "$SOURCE_REPO_DIR" worktree remove --force "$WT" >/dev/null 2>&1 || true
   rm -rf "$TMP"
 }
 trap cleanup EXIT
@@ -128,8 +128,8 @@ The caulker has had $done_cycles cycle(s) and stops here. A person decides which
 <sub>Quarterdeck caulker. Decided by the harness's cycle counter, not by any model. Nothing was merged.</sub>"
   if [ "$APPLY" = 1 ]; then
     guard 60 "$GH" label create needs-human --description "Quarterdeck stopped: a finding is still open after its cycles" --force >/dev/null 2>>"$LOG_FILE" || true
-    guard 60 "$GH" pr edit "$PR" -R "$REPO" --add-label needs-human >/dev/null 2>>"$LOG_FILE" || log "caulker #$PR: could not add the label"
-    guard 60 "$GH" pr comment "$PR" -R "$REPO" --body "$msg" >/dev/null 2>>"$LOG_FILE" || log "caulker #$PR: could not comment"
+    gh_post 60 pr edit "$PR" -R "$REPO" --add-label needs-human >/dev/null 2>>"$LOG_FILE" || log "caulker #$PR: could not add the label"
+    gh_post 60 pr comment "$PR" -R "$REPO" --body "$msg" >/dev/null 2>>"$LOG_FILE" || log "caulker #$PR: could not comment"
     cyc | jq '.needs_human = true' | cyc_write
     record_run "$PROJECT" caulker NEEDS_HUMAN "#$PR — $nopen finding(s) open after $done_cycles cycle(s)" "https://github.com/$REPO/pull/$PR"
   else
@@ -161,7 +161,7 @@ forbidden_hit() { # forbidden_hit <path> — prints the matching prefix
   local p="$1" f
   while read -r f; do
     [ -n "$f" ] || continue
-    F="$f" awk -v p="$p" 'BEGIN { exit !(index(p, ENVIRON["F"]) == 1) }' && { printf '%s' "$f"; return 0; }
+    F="$f" awk -v p="$p" 'BEGIN { exit !(index(tolower(p), tolower(ENVIRON["F"])) == 1) }' && { printf '%s' "$f"; return 0; }
   done < <(jq -r --arg p "$PROJECT" '(.[$p].forbidden_paths // [])[]' "$PROJECTS_FILE")
   return 1
 }
@@ -170,11 +170,13 @@ for p in $allowed; do
 done
 
 # ---- a worktree on the pull request's own head --------------------------------------------------------------------------------------------
-guard 180 git -C "$SOURCE_REPO_DIR" fetch -q origin "pull/$PR/head" 2>>"$LOG_FILE" || die "could not fetch pull/$PR/head"
+guard 180 "${SAFE_GIT[@]}" -C "$SOURCE_REPO_DIR" fetch -q origin "pull/$PR/head" 2>>"$LOG_FILE" || die "could not fetch pull/$PR/head"
 worktree_at "$SOURCE_REPO_DIR" "$WT" FETCH_HEAD || die "could not create a worktree at $WT"
-[ "$(git -C "$WT" rev-parse HEAD)" = "$sha" ] || refuse REFUSED "the head moved while the caulker was starting; run it again"
+[ "$(safe_git -C "$WT" rev-parse HEAD)" = "$sha" ] || refuse REFUSED "the head moved while the caulker was starting; run it again"
+INPUTS_BEFORE="$(verify_inputs "$WT")"
 say "  baselining local checks"
 BASE_CHECKS="$(run_checks "$PROJECT" "$WT")"
+wt_mark "$WT"
 CHECK_LIST="$(jq -rs 'if length == 0 then "" else map("  " + .cmd + "   (currently exit " + (.rc|tostring) + ")") | join("\n") end' <<<"$BASE_CHECKS")"
 
 attempt() { # attempt <outcome> <summary> <notes-json> — one cycle used, written by the harness; only with --apply
@@ -215,7 +217,7 @@ RESULT: NO_CHANGE <why nothing should change>"
 # A seal is routine work: Sonnet unless the caller chose (a fix routing by tier sets QUARTERDECK_MODEL_OVERRIDE, which wins).
 export QUARTERDECK_MODEL_PERSONA="${QUARTERDECK_MODEL_CAULKER:-claude-sonnet-5}"
 result=$(claude_run "$WT" "$prompt" \
-  "Read,Edit,Write,Grep,Glob,Bash(npx tsc*),Bash(npm run*),Bash(node*),Bash(git diff*),Bash(git status*),Bash(git log*)" \
+  "Read,Edit,Write,Grep,Glob,Bash(npx tsc*),Bash(npm run*),Bash(node*)" \
   "WebFetch,WebSearch,Bash(git push*),Bash(git commit*),Bash(git checkout*),Bash(git reset*),Bash(gh *),Bash(rm -rf*),Bash(curl*),Bash(ssh*),Bash(npm publish*),Bash(npm install*)")
 rc=$?
 [ $rc = 2 ] && { say "quarterdeck: usage limit reached — worktree discarded, nothing written"; exit 0; }
@@ -238,13 +240,13 @@ case "$verdict" in
 esac
 
 # ---- the harness checks the work itself -------------------------------------------------------------------------------------------------
-changed=$( { git -C "$WT" diff --name-only HEAD; git -C "$WT" ls-files --others --exclude-standard; } | sort -u)
 reject() { # reject <reason> — nothing is committed; the attempt still counts
   say ""; say "  REJECTED: $1"
   attempt REJECTED "rejected by the harness: $1" "$fixes"
   record_run "$PROJECT" caulker "$([ "$APPLY" = 1 ] && echo REJECTED || echo DRY-RUN)" "#$PR — $([ "$APPLY" = 1 ] || echo 'would be REJECTED: ')$1"
   exit 0
 }
+changed=$(wt_changed "$WT") || reject "the worktree's .git file was changed, so nothing in it was trusted"
 [ -n "$changed" ] || reject "claimed SEALED but changed nothing"
 is_test_path() { # a test is anything under a test folder or named like one
   case "$(tr '[:upper:]' '[:lower:]' <<<"$1")" in
@@ -260,18 +262,21 @@ while read -r f; do
   fi
   fp=$(forbidden_hit "$f") && reject "it touched $f, under the forbidden path $fp"
 done <<<"$changed"
-lines=$( { git -C "$WT" diff --numstat HEAD; } | awk '{ s += $1 + $2 } END { print s + 0 }')
-untracked_lines=0; while read -r f; do [ -n "$f" ] && untracked_lines=$((untracked_lines + $(wc -l < "$WT/$f" | tr -d " "))); done < <(git -C "$WT" ls-files --others --exclude-standard)
+lines=$( { safe_git -C "$WT" diff --numstat HEAD; } | awk '{ s += $1 + $2 } END { print s + 0 }')
+untracked_lines=0; while read -r f; do [ -n "$f" ] && untracked_lines=$((untracked_lines + $(wc -l < "$WT/$f" | tr -d " "))); done < <(safe_git -C "$WT" -c core.quotepath=false ls-files --others --exclude-standard)
 [ $((lines + untracked_lines)) -le "$MAX_LINES" ] || reject "it changed $((lines + untracked_lines)) lines; a seal is under $MAX_LINES"
+
+why=$(printf '%s\n' "$changed" | model_diff_gate "$PROJECT" "$WT" "$INPUTS_BEFORE") || reject "$why"
 
 say "  re-running local checks"
 AFTER_CHECKS="$(run_checks "$PROJECT" "$WT")"
+why=$(post_checks_gate "$PROJECT" "$WT" "$INPUTS_BEFORE" "$changed") || reject "$why"   # the checks ran project code: the gate again (S1)
 REGRESSIONS="$(check_regressions "$BASE_CHECKS" "$AFTER_CHECKS")"
 [ "$(jq length <<<"$REGRESSIONS")" = 0 ] || reject "it makes a local check worse: $(jq -r '[.[] | "\(.name): \(.why)"] | join(", ")' <<<"$REGRESSIONS")"
 
 say ""
 say "── $REPO#$PR — $summary ──"
-git -C "$WT" --no-pager diff --stat | sed 's/^/  /' >&2
+safe_git -C "$WT" --no-pager diff --cached --stat | sed 's/^/  /' >&2
 if [ "$APPLY" != 1 ]; then
   say ""; say "  (report only — re-run with --apply to commit and push to $BRANCH)"
   record_run "$PROJECT" caulker "DRY-RUN" "#$PR — $summary"
@@ -279,16 +284,15 @@ if [ "$APPLY" != 1 ]; then
 fi
 
 # ---- commit, and push to the pull request's own branch, only ------------------------------------------------------------------------
-git -C "$WT" add -A
-ident_email=$(git -C "$WT" config user.email || true)
-[ -n "$ident_email" ] || die "no git identity configured for $PROJECT — set user.name and user.email in $(project_path "$PROJECT")"
+# post_checks_gate staged exactly what passed (and checked the staged blobs); nothing is staged again here
+commit_identity "$PROJECT" "$WT" || die "no commit identity for $PROJECT: GitHub could not be asked for the account's no-reply address and the checkout has no user.email (set \"git\": {\"name\", \"email\"} in the registry)"
 ids=$(jq -r '[.[].id] | join(", ")' "$TMP/open.json")
-git -C "$WT" commit -q -m "$(printf 'seal: %s\n\nFindings: %s\n\nOpened by the Quarterdeck caulker. It never approves its own work: the reviewers read this head again.\n' "${summary#SEALED }" "$ids")" || die "commit failed"
+safe_git -C "$WT" ${COMMIT_ID[@]+"${COMMIT_ID[@]}"} commit -q -m "$(printf 'seal: %s\n\nFindings: %s\n\nOpened by the Quarterdeck caulker. It never approves its own work: the reviewers read this head again.\n' "${summary#SEALED }" "$ids")" || die "commit failed"
 # An explicit refspec to the one branch, never forced: if the branch moved, the push is refused and nothing is overwritten.
-guard 180 git -C "$WT" push -q origin "HEAD:refs/heads/$BRANCH" 2>>"$LOG_FILE" || { attempt ERROR "the push was refused" "$fixes"; record_run "$PROJECT" caulker ERROR "#$PR push to $BRANCH refused"; die "push to $BRANCH failed"; }
+safe_git_guard 180 -C "$WT" push -q origin "HEAD:refs/heads/$BRANCH" 2>>"$LOG_FILE" || { attempt ERROR "the push was refused" "$fixes"; record_run "$PROJECT" caulker ERROR "#$PR push to $BRANCH refused"; die "push to $BRANCH failed"; }
 attempt SEALED "${summary#SEALED }" "$fixes"
 cycle=$(jq -r .cycles <<<"$(cyc)")
-guard 60 "$GH" pr comment "$PR" -R "$REPO" --body "**Caulker — #$PR** (cycle $cycle of $MAX_CYCLES)
+gh_post 60 pr comment "$PR" -R "$REPO" --body "**Caulker — #$PR** (cycle $cycle of $MAX_CYCLES)
 
 ${summary#SEALED }
 

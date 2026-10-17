@@ -52,7 +52,7 @@ REVIEWERS="surveyor marshal lookout pilot inspector"
 PROJECT="" ISSUE="" APPLY=0 RESUME="" STATUS_ID="" WANT_STATUS=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --issue)  ISSUE="${2:-}"; shift ;;
+    --issue)  ISSUE="${2:-}"; need_num "--issue" "$ISSUE"; shift ;;
     --apply)  APPLY=1 ;;
     --resume) RESUME="${2:-}"; shift ;;
     --status) WANT_STATUS=1; case "${2:-}" in ""|--*) ;; *) STATUS_ID="$2"; shift ;; esac ;;

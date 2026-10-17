@@ -7,7 +7,7 @@ set -uo pipefail
 REAL="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 mkdir -p "$T"/{bin,config,crew,duties,state/panels,workspace,logs}
-cp "$REAL"/bin/{lib.sh,fix} "$T/bin/"; cp "$REAL"/config/quarterdeck.env "$T/config/"; cp "$REAL"/crew/*.md "$T/crew/"
+cp "$REAL"/bin/{lib.sh,fix,outscan.py,guard.py,home.py,protect.py,safegit.py,gitrisky.re} "$T/bin/"; cp "$REAL"/config/quarterdeck.env "$T/config/"; cp "$REAL"/crew/*.md "$T/crew/"
 # the registry is the test's own, never anyone's real one: a fresh clone has none
 cat > "$T/config/projects.json" <<'JSON'
 {"harvest-pipeline": {"repo": "x/harvest-pipeline", "path": "~/Projects/harvest-pipeline", "default_branch": "main",

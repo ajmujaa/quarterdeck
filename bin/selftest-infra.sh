@@ -8,11 +8,12 @@ st_repo
 
 # every cloud tool, stubbed to fail loudly and leave a mark
 mkdir -p "$T/cloudbin"
-for b in aws terraform tofu cdk sam sls serverless vercel supabase pulumi gcloud az; do
+for b in aws terraform tofu cdk sam sls serverless vercel supabase pulumi gcloud gsutil bq az azd bicep wrangler fly flyctl; do
   printf '#!/bin/bash\necho "%s $*" >> "%s/cloud-calls"\nexit 99\n' "$b" "$T" > "$T/cloudbin/$b"; chmod +x "$T/cloudbin/$b"
 done
 export PATH="$T/cloudbin:$PATH"
 export AWS_ACCESS_KEY_ID=AKIAFIXTUREKEY AWS_SECRET_ACCESS_KEY=fixture-secret-value AWS_PROFILE=prod VERCEL_TOKEN=vercel-fixture-token SUPABASE_ACCESS_TOKEN=sbp_fixture TF_VAR_db_password=fixture-pw
+export CLOUDFLARE_API_TOKEN=cf-fixture-token FLY_API_TOKEN=fly-fixture-token GOOGLE_APPLICATION_CREDENTIALS=/fixture/gcp.json AZURE_CLIENT_SECRET=az-fixture-secret ARM_CLIENT_SECRET=arm-fixture-secret CLOUDSDK_CORE_PROJECT=fixture-proj
 printf '#!/bin/bash\nenv > "%s/claude-env"\n' "$T" > "$T/claude-hook"; chmod +x "$T/claude-hook"
 
 st_registry '["infra"]' '{}'
@@ -58,9 +59,9 @@ ck "  the stack notes of the fitting pack were added" 'grep -q "Stack notes: AWS
 ck "  the secret-looking file is named and never given: its contents are nowhere in the prompt" 'grep -q "terraform.tfvars" "$T/claude-calls" && ! grep -q "hunter2-secret" "$T/claude-calls"'
 ck "  the model is told the contract is all the harness reads, so nothing is left in prose" 'grep -q "anything" "$T/claude-calls" && grep -q "outside them is thrown away" "$T/claude-calls"'
 ck "  the seat is the rigger's" 'grep -q "You are the rigger" "$T/claude-calls"'
-ck "  the model may only read: Read, Grep, Glob, and the deny list shuts the shell and secret files" '[ "$(jq -r .allow "$T/claude-calls" | head -1)" = "Read,Grep,Glob" ] && jq -e ".deny | contains(\"Bash\") and contains(\"Write\") and contains(\"tfstate\") and contains(\"tfvars\")" "$T/claude-calls" >/dev/null'
+ck "  the model may only read: Read, Grep, Glob, and the deny list shuts the shell and secret files" '[ "$(jq -r .tools "$T/claude-calls" | head -1)" = "Read,Grep,Glob" ] && jq -e ".deny | contains(\"Bash\") and contains(\"Write\") and contains(\"tfstate\") and contains(\"tfvars\")" "$T/claude-calls" >/dev/null'
 ck "  report only writes nothing: no document, no pull request write, the project checkout is as it was, no worktree left" '[ -z "$(docs)" ] && no_gh_writes && [ "$(git -C "$T/work" status --porcelain | wc -l | tr -d " ")" = "$before" ] && [ "$(git -C "$T/work" worktree list | wc -l | tr -d " ")" = 1 ]'
-ck "  no cloud tool was called and no cloud credential reached the model" '[ ! -e "$T/cloud-calls" ] && ! grep -qE "AKIAFIXTUREKEY|fixture-secret-value|vercel-fixture-token|sbp_fixture|fixture-pw|^AWS_|^VERCEL_|^SUPABASE_|^TF_VAR" "$T/claude-env"'
+ck "  no cloud tool was called and no cloud credential reached the model" '[ ! -e "$T/cloud-calls" ] && ! grep -qE "AKIAFIXTUREKEY|fixture-secret-value|vercel-fixture-token|sbp_fixture|fixture-pw|cf-fixture-token|fly-fixture-token|az-fixture-secret|arm-fixture-secret|^AWS_|^VERCEL_|^SUPABASE_|^TF_VAR|^CLOUDFLARE_|^FLY_|^GOOGLE_|^AZURE_|^ARM_|^CLOUDSDK_" "$T/claude-env"'
 ck "  the author's text is inside an untrusted block, after the marker that says it is data" '[ "$(awk "/^BEGIN UNTRUSTED pull request text/ {b=NR} /HOSTILE-PR-TEXT/ && b {print (NR > b)}" <(jq -r .prompt "$T/claude-calls") | head -1)" = 1 ]'
 
 # ---- --apply: a document in workspace/, nothing else, nothing in the project -----------------------------------------------
@@ -85,12 +86,20 @@ ck "an empty list with CLEAN is CLEAN, recorded and written" '[ "$(last_verdict)
 # ---- replies that tell anyone to run a cloud command are refused whole ---------------------------------------------------------
 rm -f "$T"/workspace/*infra*.md
 n=0
-for cmd in 'run terraform apply to confirm' 'then terraform plan -out x' 'aws s3api put-bucket-acl --bucket b' 'aws iam list-roles' 'cdk deploy --all' 'sam deploy --guided' 'serverless deploy --stage prod' 'supabase db push' 'vercel --prod' 'sls remove' 'tofu destroy'; do
+for cmd in 'run terraform apply to confirm' 'then terraform plan -out x' 'aws s3api put-bucket-acl --bucket b' 'aws iam list-roles' 'cdk deploy --all' 'sam deploy --guided' 'serverless deploy --stage prod' 'supabase db push' 'vercel --prod' 'sls remove' 'tofu destroy' 'wrangler deploy --env production' 'wrangler secret put API_KEY' 'fly deploy --remote-only' 'flyctl secrets set A=b' 'fly volumes destroy vol_1' 'gcloud run deploy shop-api' 'gsutil iam ch allUsers:objectViewer gs://b' 'az role assignment create --role Owner' 'az login' 'azd up'; do
   n=$((n+1))
   bad=$(jq -nc --arg c "$cmd" '{resource:"r",change:"c",risk:"high",why:"w",blast_radius:"b",rollback:$c,needs_human:true}')
   reply "[$bad]" "REVIEWED 1"
   st_duty infra --pr 2 --apply
   ck "a reply whose rollback says '$cmd' is refused: ERROR, nothing written, no cloud tool called" '[ "$(last_verdict)" = ERROR ] && grep -q "cloud command" <<<"$OUT" && [ -z "$(docs)" ] && [ ! -e "$T/cloud-calls" ]'
+done
+# round 5: the same command spelled so the raw text does not match (a JSON escape, a no-break or other unicode space, letter case, quotes inside the word)
+B=$(printf '\134')   # one backslash, so the reply carries JSON escapes such as \\u0020
+for raw in "run terraform${B}u0020destroy -target=x" "run terraform${B}u00a0destroy now" "run terraform destroy now" "TERRAFORM DESTROY -auto-approve" "run terra${B}\"form${B}\" destroy" "aws${B}u2003s3 rm s3://b --recursive" "aws s3 rm s3://b --recursive" "run \`terraform\`${B}t\`apply\`" "run terraform${B}u200bdestroy" "run terraform​destroy" "run ${B}u0074erraform destroy"; do
+  st_noreplies; st_reply default "INFRA_JSON: [{\"resource\":\"r\",\"change\":\"c\",\"risk\":\"high\",\"why\":\"w\",\"blast_radius\":\"b\",\"rollback\":\"$raw\",\"needs_human\":true}]
+VERDICT: REVIEWED 1"; : > "$T/claude-calls"; rm -f "$T"/workspace/*infra*.md
+  st_duty infra --pr 2 --apply
+  ck "R5 a rollback spelled '$raw' (decoded, it is a cloud command) is refused too, nothing written" '[ "$(last_verdict)" = ERROR ] && grep -q "cloud command" <<<"$OUT" && [ -z "$(docs)" ]'
 done
 st_noreplies; st_reply default "Before anything else, please run terraform plan and look.
 INFRA_JSON: []
@@ -126,6 +135,53 @@ reply "[$(ITEM public.notes high)]" "REVIEWED 1"
 st_duty infra --pr 4
 ck "a Supabase migration and vercel.json are found, and the Vercel and Supabase pack is the one added (not the AWS pack)" 'grep -q "Stack notes: Vercel and Supabase" "$T/claude-calls" && ! grep -q "Stack notes: AWS" "$T/claude-calls"'
 
+# ---- one planted-risk fixture per pack: fixtures/infra/<pack>/ (files) and planted.tsv (marker, what it is, prompt|held[, file]) ----------
+# The stub model answers from the planted list. What is really tested: the right pack is picked (and only it), every planted line reaches
+# the model, files that may hold secrets are named and never opened, the model gets Read/Grep/Glob only, no cloud tool is called and
+# no cloud credential reaches the model, and the report is written to workspace/ and nowhere else. Whether a real model FINDS the risks
+# is not tested here (see the tested statement of each pack).
+PN=20
+for P in vercel-supabase cloudflare fly azure google-cloud aws-cdk aws-sam aws-serverless; do
+  PN=$((PN+1)); FX="$REAL/fixtures/infra/$P"
+  case "$P" in vercel-supabase) LABEL="Vercel and Supabase";; cloudflare) LABEL="Cloudflare Workers and data";; fly) LABEL="Fly.io";; azure) LABEL="Azure infrastructure files";; google-cloud) LABEL="Google Cloud files";; aws-*) LABEL="AWS infrastructure files";; esac
+  args=(); while IFS= read -r f; do rel="${f#$FX/}"; [ "$rel" = planted.tsv ] && continue; args+=("$rel" "$(cat "$f")"); done < <(find "$FX" -type f | sort)
+  while IFS=$'\t' read -r mk desc where hf; do [ "$where" = held ] && args+=("$hf" "SECRET=$mk"); done < "$FX/planted.tsv"
+  git -C "$T/work" checkout -q main
+  st_pr "$PN" "feat-$P" "${args[@]}"
+  items=(); n=0
+  while IFS=$'\t' read -r mk desc where hf; do [ "$where" = prompt ] || continue; n=$((n+1)); items[${#items[@]}]=$(ITEM "$desc" high); done < "$FX/planted.tsv"
+  reply "[$(IFS=,; echo "${items[*]}")]" "REVIEWED $n"
+  st_duty infra --pr "$PN" --apply
+  prompt_text=$(jq -r .prompt "$T/claude-calls")
+  ck "[$P] $n planted risks reported: REVIEWED $n, the report holds $n items" '[ "$(last_verdict)" = REVIEWED ] && [ "$(grep -c "^### " "$T/workspace/tp-infra-pr$PN.md")" = "$n" ]'
+  ck "[$P] only its own stack notes were added (\"$LABEL\"), once, and they carry the files-only rule" '[ "$(grep -c "^## Stack notes:" <<<"$prompt_text")" = 1 ] && grep -q "^## Stack notes: $LABEL" <<<"$prompt_text" && grep -q "Never run a command against any cloud" <<<"$prompt_text"'
+  miss=""; while IFS=$'\t' read -r mk desc where hf; do
+    if [ "$where" = prompt ]; then grep -qF -e "$mk" <<<"$prompt_text" || miss="$miss [$mk]"
+    else ! grep -qF -e "$mk" "$T/claude-calls" || miss="$miss [HELD BACK LEAKED: $mk]"; fi
+  done < "$FX/planted.tsv"
+  ck "[$P] every planted line reaches the model, and no held-back secret does${miss:+ (problem:$miss)}" '[ -z "$miss" ]'
+  held=$(awk -F'\t' '$3 == "held" {print $4}' "$FX/planted.tsv")
+  ck "[$P] secret-looking files are named, never opened${held:+ ($held)}" '[ -z "$held" ] || grep -qF -e "$held" <<<"$prompt_text"'
+  ck "[$P] read-only tools, no cloud tool called, no cloud credential in the model environment, nothing posted, nothing in findings" '[ "$(jq -r .tools "$T/claude-calls" | head -1)" = "Read,Grep,Glob" ] && [ ! -e "$T/cloud-calls" ] && ! grep -qE "fixture-token|fixture-secret|^AWS_|^VERCEL_|^SUPABASE_|^CLOUDFLARE_|^FLY_|^GOOGLE_|^AZURE_|^ARM_|^CLOUDSDK_" "$T/claude-env" && no_gh_writes && [ -z "$(ls "$T"/state/findings 2>/dev/null)" ]'
+  rm -f "$T"/workspace/*infra*.md
+done
+# a Terraform file for Azure, and a Cloud Run service file, pick that cloud's pack, not the AWS one
+git -C "$T/work" checkout -q main
+st_pr 31 feat-tf-az main.tf $'provider "azurerm" {\n  features {}\n}\nresource "azurerm_storage_account" "s" {\n  name = "x"\n}\n'
+reply "[$(ITEM azurerm_storage_account.s low)]" "REVIEWED 1"
+st_duty infra --pr 31
+ck "Terraform that names the azurerm provider gets the Azure notes, not the AWS notes" 'grep -q "Stack notes: Azure" "$T/claude-calls" && ! grep -q "Stack notes: AWS" "$T/claude-calls"'
+git -C "$T/work" checkout -q main
+st_pr 32 feat-run service.yaml $'apiVersion: serving.knative.dev/v1\nkind: Service\nmetadata:\n  name: shop-api\n'
+reply "[$(ITEM shop-api low)]" "REVIEWED 1"
+st_duty infra --pr 32
+ck "a Cloud Run service file is found and gets the Google Cloud notes" 'grep -q "Stack notes: Google Cloud" "$T/claude-calls" && grep -q "Google Cloud Run.service.yaml" <(jq -r .prompt "$T/claude-calls")'
+st_noreplies; st_reply default "The fly.toml mount, the Azure role assignment, the Google Cloud bucket and the wrangler.toml route all need a person.
+INFRA_JSON: []
+VERDICT: CLEAN"
+st_duty infra --pr 32 --apply
+ck "prose that names Fly, Azure, Google Cloud and wrangler.toml is not a command and passes" '[ "$(last_verdict)" = CLEAN ]'
+
 # ---- --diff against a base ---------------------------------------------------------------------------------------------------------------
 git -C "$T/work" checkout -q -B feat-local main
 st_file main.tf "$RISKY_TF"; git -C "$T/work" add -A; git -C "$T/work" commit -q -m local
@@ -147,11 +203,31 @@ reply '[]' CLEAN
 st_duty infra --pr 5
 ck "a file too large to include is named, not silently cut, and the model is told" 'grep -q "Not included because of size" "$T/claude-calls" && grep -q "big.tf" "$T/claude-calls"'
 
+# ---- round 5: an infrastructure file that is a link out of the checkout is named, never read into the prompt -------------------------------------
+echo 'aws_secret_access_key = R5DECOYdecoyDECOYdecoy' > "$T/r5-decoy-credentials"
+git -C "$T/work" checkout -q -B feat-link main; mkdir -p "$T/work/infra"; ln -s "$T/r5-decoy-credentials" "$T/work/infra/prod.tf"
+(cd "$T/work" && git add -A && git commit -q -m link && git push -q origin HEAD:refs/heads/feat-link HEAD:refs/pull/40/head && git checkout -q main)
+jq -n --arg s "$(git -C "$T/origin.git" rev-parse refs/pull/40/head)" '{number:40, title:"link", body:"", state:"OPEN", headRefOid:$s, isCrossRepository:false}' > "$T/ghdata/pr-40.json"
+reply '[]' CLEAN
+st_duty infra --pr 40
+ck "R5 a .tf file that is a symlink to a credentials file outside the checkout: its content never reaches the model" '! grep -q "R5DECOY" "$T/claude-calls"'
+# round 6 (M1): the FOLDER is the link. The base has infra/main.tf; the head replaces infra/ with a link to another checkout, so the diff lists
+# infra/main.tf as deleted while the disk path follows the link to a file of the same name. Before the fix its text was in the prompt.
+git -C "$T/work" checkout -q main; mkdir -p "$T/work/infra"; printf 'resource "aws_s3_bucket" "a" {\n  bucket = "x"\n}\n' > "$T/work/infra/main.tf"
+(cd "$T/work" && git add -A && git commit -q -m "infra base" && git push -q origin HEAD:refs/heads/main)
+mkdir -p "$T/other-infra"; printf 'resource "aws_db_instance" "x" {\n  password = "R6-OTHER-REPO-DECOY"\n}\n' > "$T/other-infra/main.tf"
+git -C "$T/work" checkout -q -B feat-dirlink main; git -C "$T/work" rm -rq infra; ln -s "$T/other-infra" "$T/work/infra"
+(cd "$T/work" && git add -A && git commit -q -m dirlink && git push -q origin HEAD:refs/heads/feat-dirlink HEAD:refs/pull/41/head && git checkout -q main)
+jq -n --arg s "$(git -C "$T/origin.git" rev-parse refs/pull/41/head)" '{number:41, title:"x", body:"", state:"OPEN", headRefOid:$s, isCrossRepository:false}' > "$T/ghdata/pr-41.json"
+: > "$T/claude-calls"; reply '[]' CLEAN
+st_duty infra --pr 41
+ck "M1 a changed infrastructure file under a folder that became a link out of the checkout is read from git (deleted), never from the linked folder" '! grep -q "R6-OTHER-REPO-DECOY" "$T/claude-calls"'
+
 # ---- the duty itself ---------------------------------------------------------------------------------------------------------------------------
 ck "no line of the duty runs a cloud tool, and it names no credential folder" '! grep -v "^[[:space:]]*#" "$REAL/duties/infra.sh" | grep -qE "(^|[;&|(\`]|[$][(])[[:space:]]*(aws|terraform|tofu|cdk|sam|sls|serverless|vercel|supabase|pulumi|gcloud)[[:space:]]" && ! grep -v "^[[:space:]]*#" "$REAL/duties/infra.sh" | grep -qE "[.]aws"'
 ck "the duty hands the model the read-only tool list and no other" '[ "$(grep -c "claude_run" "$REAL/duties/infra.sh")" -ge 1 ] && grep -q "claude_run \"\$WT\" \"\$prompt\" \"Read,Grep,Glob\"" "$REAL/duties/infra.sh" && ! grep -E "claude_run" "$REAL/duties/infra.sh" | grep -q "Bash(gh\|Write\|Edit"'
 ck "the rigger sits on a panel of its own, not among the reviewers, and states a bias and what it is willing to be wrong about" 'grep -q "^discipline: infra$" "$REAL/crew/rigger.md" && grep -q "willing to be wrong about" "$REAL/crew/rigger.md" && grep -q "^bias: ." "$REAL/crew/rigger.md"'
 ck "the crew file and the packs name no private word" '! grep -liE "her""mes|ora""cle|light""sail|kn""ool" "$REAL/crew/rigger.md" "$REAL/duties/infra.sh" "$REAL"/packs/aws/* "$REAL"/packs/vercel-supabase/* | grep -q .'
-ck "every pack states what was tested" 'jq -e ".tested | length > 40" "$REAL/packs/aws/pack.json" >/dev/null && jq -e ".tested | length > 40" "$REAL/packs/vercel-supabase/pack.json" >/dev/null'
+ck "every cloud pack states what was tested and what was not, and its note carries the files-only rule" '( for p in aws vercel-supabase cloudflare fly azure google-cloud; do jq -e ".tested | (length > 120) and test(\"NOT\")" "$REAL/packs/$p/pack.json" >/dev/null && grep -q "Never run a command against any cloud" "$REAL/packs/$p/knowledge.md" || exit 1; done )'
 ck "the duty is read whole before it runs" 'grep -q "^# quarterdeck: read-whole-file$" "$REAL/duties/infra.sh" && [ "$(tail -c 3 "$REAL/duties/infra.sh" | tr -d "\n")" = "}" ]'
 st_done

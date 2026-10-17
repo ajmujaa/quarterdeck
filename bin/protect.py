@@ -1,0 +1,191 @@
+#!/usr/bin/env python3
+"""protect: paths a model-made change may not touch, and the files a project's verify command is built from.
+
+    bin/protect.py list                         the default protected paths, one per line
+    bin/protect.py check [--allow P]... [--plan FILE] [--extra GLOB]...
+                                                changed paths on stdin; prints each protected one that is not allowed, exits 1 if any
+    bin/protect.py inputs WORKTREE              a digest of what the verify/test/build commands are made of: every package.json
+                                                "scripts" block and every Makefile; print it before the model runs and after
+
+Why: the harness runs the project's verify, test and build commands after a model has edited the worktree. A model (steered by a hostile
+issue or pull request) that can change package.json scripts, a lockfile, a test-runner config or a CI workflow turns that run into code
+execution on this machine, or into a workflow that runs with the repository's secrets once pushed. So such a change is refused BEFORE any
+check runs. A path is allowed only when the project's registry lists it in "protected_allow" or the plan the duty was given (a dev panel's
+ruling, not the issue text anyone can write) names it. Even then, a changed scripts block or Makefile is refused (see `inputs`).
+A pattern with no slash matches the file name at any depth; a pattern with a slash matches from the repository root; ** crosses folders.
+Standard library only.
+"""
+import fnmatch
+import hashlib
+import json
+import re
+import sys
+import unicodedata
+from pathlib import Path
+
+DEFAULT = [
+    ".github/**", ".gitlab-ci.yml", ".circleci/**", "Jenkinsfile", "azure-pipelines.yml", ".travis.yml",
+    "package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb", "poetry.lock", "Pipfile.lock", "Cargo.lock", "go.sum",
+    ".npmrc", ".yarnrc*", "*.config.*", "tsconfig*", "Makefile", "GNUmakefile", "makefile", ".husky/**", "scripts/**", "**/scripts/**",
+    "Dockerfile*", "docker-compose*", "pyproject.toml", "setup.py", "setup.cfg", "requirements*.txt", "tox.ini", "noxfile.py",
+    "Cargo.toml", "build.rs", "go.mod", "Gemfile", "Rakefile", "justfile", ".pre-commit-config.yaml", ".gitmodules", ".gitattributes",
+    ".claude/**", ".mcp.json",
+    # test-runner, linter, formatter and loader files that a check picks up by name (round-2 audit R3 D)
+    "conftest.py", "pytest.ini", "pytest.cfg", ".babelrc*", ".mocharc*", "jest.setup.*", "*.setup.*", "setupTests.*", "setup-tests.*", ".eslintrc*", ".prettierrc*",
+    ".flake8", "mypy.ini", ".mypy.ini", ".pylintrc", "ruff.toml", ".ruff.toml", ".nycrc*", "karma.conf.*", "vitest.workspace.*", ".swcrc", "sitecustomize.py",
+    "usercustomize.py", ".lintstagedrc*", "lefthook.yml", ".tool-versions",
+    # round-3 LOW: environment files (secrets; .envrc is run by direnv), cargo and yarn/pnpm project hooks, deploy config, code owners and infrastructure as code
+    ".env*", "*.env", ".cargo/**", "**/.cargo/**", ".yarn/**", "**/.yarn/**", "vercel.json", "netlify.toml", "CODEOWNERS",
+    "*.tf", "*.tfvars", "*.tf.json", ".terraform/**",
+    # round 6: package-manager files that run code or fetch it (pnpm 10 reads its settings, pnpmfile among them, from pnpm-workspace.yaml)
+    ".pnpmfile.*", "pnpm-workspace.yaml", "bunfig.toml",
+]
+
+# What a plan can never unlock, only the project's protected_allow (round 6, H2). A plan's Where line is written by a model, from an issue anyone can
+# file: CI runs with the repository's secrets once a branch is pushed, lockfiles and package-manager config choose what is fetched and run at install,
+# hooks run on the next commit, CODEOWNERS decides who must review, and agent settings decide what the next model may do.
+PLAN_NEVER = [
+    ".github/**", ".gitlab-ci.yml", ".circleci/**", "Jenkinsfile", "azure-pipelines.yml", ".travis.yml",
+    "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb", "poetry.lock", "Pipfile.lock", "Cargo.lock", "go.sum",
+    ".npmrc", ".yarnrc*", ".pnpmfile.*", "pnpm-workspace.yaml", "bunfig.toml", ".yarn/**", "**/.yarn/**", ".cargo/**", "**/.cargo/**",
+    ".husky/**", ".pre-commit-config.yaml", "lefthook.yml", ".lintstagedrc*", "CODEOWNERS", ".claude/**", ".mcp.json", ".env*", "*.env",
+    ".gitattributes", ".gitmodules",
+]
+
+
+def _rx(pat):
+    """A glob with ** crossing folders and * / ? staying inside one."""
+    out, i = "", 0
+    while i < len(pat):
+        c = pat[i]
+        if pat[i:i + 3] == "**/":
+            out += "(?:.*/)?"; i += 3; continue
+        if pat[i:i + 2] == "**":
+            out += ".*"; i += 2; continue
+        out += "[^/]*" if c == "*" else "[^/]" if c == "?" else re.escape(c)
+        i += 1
+    return re.compile(out + r"\Z")
+
+
+def prefixes():
+    """The default list as the literal path prefixes a registry's forbidden_paths understands (root-level only; a pattern that starts
+    with a * cannot be a prefix and is covered by the harness's own check instead)."""
+    out = []
+    for pat in DEFAULT:
+        if pat.startswith("*"):
+            continue
+        out.append(pat[:-2] if pat.endswith("/**") else pat.split("*", 1)[0])
+    return list(dict.fromkeys(o for o in out if o))
+
+
+def norm(text):
+    """The way a Mac's volume (APFS) compares names: letter case does not matter (casefold, not lower: ẞ is ss, the Kelvin sign is k) and neither does
+    how an accent is spelled (é as one character or as e plus a combining mark), so both are compared in one form."""
+    return unicodedata.normalize("NFC", unicodedata.normalize("NFC", text).casefold())
+
+
+def matches(path, patterns):
+    """Case and normalisation do not matter: JEST.CONFIG.JS is jest.config.js on a Mac, and so is an é spelled either way."""
+    path = norm(path.strip())
+    path = path[2:] if path.startswith("./") else path
+    base = path.rsplit("/", 1)[-1]
+    for pat in patterns:
+        pat = norm(pat)
+        if "/" in pat:
+            if _rx(pat).match(path):
+                return True
+        elif _rx(pat).match(base):
+            return True
+    return False
+
+
+WHERE = re.compile(r"\s*\*\*Where\.\*\*")
+WHERE_PATH = re.compile(r"\s*\*\*Where\.\*\*\s*`(?:\./)?([A-Za-z0-9._@+/-]+?)(?::\d+(?:[-:]\d+)*)?`\s*$")
+
+
+def plan_paths(plan_text):
+    """The paths a plan names in its structured field: the `**Where.** `path`` line of a ruling item (bin/panel, bin/fix and the joiner write exactly
+    one per item, the value in backticks). Only a field that is ONE path and nothing else counts: prose (even a sentence that says not to touch a file),
+    a list, a bare unquoted value, or an item with a second Where line (text a model put in another field) unlocks nothing. A `:12` suffix is dropped."""
+    out, items, cur = set(), [], []
+    for line in plan_text.splitlines():
+        if line.startswith("#"):
+            items.append(cur); cur = []
+        elif WHERE.match(line):
+            cur.append(line)
+    items.append(cur)
+    for where in items:
+        m = WHERE_PATH.match(where[0]) if len(where) == 1 else None
+        if m and ".." not in m.group(1).split("/"):
+            out.add(norm(m.group(1)))
+    return out
+
+
+def allowed_by(path, allow, plan_text):
+    """Listed by the registry (an exact path or a glob) or named, as a whole path, in the Where field of an item of the plan the duty was handed."""
+    if matches(path, [a for a in allow if a]):
+        return True
+    p = norm(path.strip())
+    p = p[2:] if p.startswith("./") else p
+    return bool(plan_text) and not matches(p, PLAN_NEVER) and p in plan_paths(plan_text)
+
+
+def violations(paths, allow=(), plan_text="", extra=()):
+    return [p for p in paths if p.strip() and matches(p, list(DEFAULT) + list(extra)) and not allowed_by(p.strip(), allow, plan_text)]
+
+
+def inputs_digest(worktree):
+    """sha256 over every package.json "scripts" block and every Makefile under the worktree (node_modules and .git left out)."""
+    root = Path(worktree)
+    parts = []
+    for p in sorted(root.rglob("*")):
+        rel = p.relative_to(root).as_posix()
+        if "node_modules/" in rel + "/" or rel.startswith(".git/") or not p.is_file() or p.is_symlink():
+            continue
+        if p.name == "package.json":
+            try:
+                scripts = json.loads(p.read_text(errors="replace")).get("scripts", {})
+            except (ValueError, AttributeError):
+                scripts = "unparseable"
+            parts.append((rel, json.dumps(scripts, sort_keys=True)))
+        elif p.name in ("Makefile", "makefile", "GNUmakefile"):
+            parts.append((rel, p.read_text(errors="replace")))
+    return hashlib.sha256(json.dumps(parts).encode()).hexdigest()
+
+
+def main(argv):
+    cmd = argv[0] if argv else ""
+    if cmd == "list":
+        print("\n".join(DEFAULT))
+        return 0
+    if cmd == "prefixes":
+        print("\n".join(prefixes()))
+        return 0
+    if cmd == "inputs" and len(argv) == 2:
+        print(inputs_digest(argv[1]))
+        return 0
+    if cmd == "check":
+        allow, extra, plan, a = [], [], "", argv[1:]
+        while a:
+            f = a.pop(0)
+            if f == "--allow" and a:
+                allow.append(a.pop(0))
+            elif f == "--extra" and a:
+                extra.append(a.pop(0))
+            elif f == "--plan" and a:
+                try:
+                    plan = Path(a.pop(0)).read_text(errors="replace")
+                except OSError:
+                    plan = ""
+            else:
+                print(__doc__)
+                return 2
+        bad = violations(sys.stdin.read().splitlines(), allow, plan, extra)
+        print("\n".join(bad))
+        return 1 if bad else 0
+    print(__doc__)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

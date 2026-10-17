@@ -24,12 +24,15 @@ CONFIG="$DHOME/config/fleet.local.json"
 REGISTRY="$DHOME/config/projects.json"      # a registered project is watched too, with no fleet file at all
 EVENTS="$DHOME/state/fleet-events"
 SETTINGS="${CLAUDE_SETTINGS_FILE:-$HOME/.claude/settings.json}"
+# The folder of a session is not ours: the same flags as bin/lib.sh's SAFE_GIT (no hooks, fsmonitor, ssh command, ext:: transport, pager or signing). The
+# commands below are rev-parse only, which runs none of that; the flags keep it so if one is ever added.
+GITSAFE=(git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.sshCommand=ssh -c protocol.ext.allow=never -c core.pager=cat -c commit.gpgsign=false -c tag.gpgsign=false -c gpg.program=/usr/bin/false)
 
 settings_edit() { # settings_edit <jq filter>: rewrite the settings file with a backup, keeping everything else
   mkdir -p "$(dirname "$SETTINGS")"
   [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
   jq -e . "$SETTINGS" >/dev/null 2>&1 || { echo "fleet-hook: $SETTINGS is not valid JSON, not touching it" >&2; return 1; }
-  cp "$SETTINGS" "$SETTINGS.quarterdeck-bak-$(date +%Y%m%d-%H%M%S)" || return 1
+  ( umask 077; cp "$SETTINGS" "$SETTINGS.quarterdeck-bak-$(date +%Y%m%d-%H%M%S)" ) || return 1
   local tmp; tmp="$(mktemp)"
   jq --arg cmd "$SELF" "$1" "$SETTINGS" > "$tmp" && mv "$tmp" "$SETTINGS" && chmod 600 "$SETTINGS"
 }
@@ -65,20 +68,20 @@ case "${1:-}" in
     esac
     case "$sess" in ""|*[!A-Za-z0-9_-]*) exit 0 ;; esac
     [ -n "$cwd" ] && [ -d "$cwd" ] && { [ -r "$CONFIG" ] || [ -r "$REGISTRY" ]; } || exit 0
-    common="$(git -C "$cwd" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || exit 0
+    common="$("${GITSAFE[@]}" -C "$cwd" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || exit 0
     common="$(cd "$common" 2>/dev/null && pwd -P)" || exit 0
     src=""
     while IFS=$'\t' read -r id path; do
       p="${path/#\~/$HOME}"
-      c="$(git -C "$p" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || continue
+      c="$("${GITSAFE[@]}" -C "$p" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || continue
       c="$(cd "$c" 2>/dev/null && pwd -P)" || continue
       [ "$c" = "$common" ] && { src="$id"; break; }
     done < <({ jq -r '.sources[]? | select(.kind == "repo-agents") | [.id, .path] | @tsv' "$CONFIG" 2>/dev/null
                jq -r 'to_entries[]? | select(.value | type == "object") | [.key, (.value.path // "")] | @tsv' "$REGISTRY" 2>/dev/null; })
     [ -n "$src" ] || exit 0
     case "$src" in *[!a-z0-9_-]*|"") exit 0 ;; esac
-    top="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)"
-    branch="$(git -C "$cwd" rev-parse --abbrev-ref HEAD 2>/dev/null)"
+    top="$("${GITSAFE[@]}" -C "$cwd" rev-parse --show-toplevel 2>/dev/null)"
+    branch="$("${GITSAFE[@]}" -C "$cwd" rev-parse --abbrev-ref HEAD 2>/dev/null)"
     mkdir -p "$EVENTS" && chmod 700 "$EVENTS" 2>/dev/null
     f="$EVENTS/$src.jsonl"
     jq -nc --arg e "$kind" --arg s "$sess" --arg w "$(basename "${top:-$cwd}")" --arg b "$branch" --arg a "$agent" \

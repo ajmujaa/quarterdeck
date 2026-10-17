@@ -1,0 +1,5 @@
+name: shop
+hooks:
+  postprovision:
+    shell: sh
+    run: az deployment group create --mode Complete --resource-group rg-shop --template-file infra/data.bicep

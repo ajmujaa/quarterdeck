@@ -18,7 +18,7 @@ const CSS = `
 .rh-card h3{margin:0 0 8px;font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);font-weight:600}
 .rh-wide{grid-column:1/-1}
 .rh-heat{display:grid;grid-template-columns:22px repeat(35,minmax(0,1fr));gap:2px;align-items:center}
-.rh-heat .lab{font-size:10px;color:var(--dim);text-align:right;padding-right:3px}.rh-heat .mon{font-size:10px;color:var(--dim);grid-column:span 1;overflow:visible;white-space:nowrap;height:12px}
+.rh-heat .lab{font-size:12px;color:var(--dim);text-align:right;padding-right:3px}.rh-heat .mon{font-size:12px;color:var(--dim);grid-column:span 1;overflow:visible;white-space:nowrap;height:12px}
 .rh-cell{display:block;width:100%;aspect-ratio:1/1;min-height:7px;padding:0;border:0;border-radius:2px;cursor:pointer}
 .rh-cell.sel{outline:1px solid var(--dim);outline-offset:-1px}
 .rh-l0{background:var(--heat-0)}.rh-l1{background:var(--heat-1)}.rh-l2{background:var(--heat-2)}.rh-l3{background:var(--heat-3)}.rh-l4{background:var(--heat-4)}
@@ -29,7 +29,7 @@ const CSS = `
 .rh-days{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 0}
 .rh-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
 .rh-stat{display:block;width:100%;text-align:left;border:1px solid var(--line);border-radius:8px;background:var(--card2);padding:10px 12px;cursor:pointer;color:var(--ink)}
-.rh-stat b{display:block;font-size:30px;line-height:1.15}.rh-stat span{display:block;font-size:13px;color:var(--dim);margin-top:2px}.rh-stat small{display:block;font-size:11px;color:var(--accent);margin-top:6px}
+.rh-stat b{display:block;font-size:30px;line-height:1.15}.rh-stat span{display:block;font-size:13px;color:var(--dim);margin-top:2px}.rh-stat small{display:block;font-size:12px;color:var(--accent);margin-top:6px}
 .rh-obs{list-style:none;margin:0;padding:0}.rh-obs li{margin:0}.rh-obs button{display:block;width:100%;text-align:left;border:0;border-top:1px solid var(--line);background:none;color:var(--ink);padding:10px 2px;font-size:16px;cursor:pointer}
 .rh-obs li:first-child button{border-top:0}
 .rh-chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}.rh-chip{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line-2);border-radius:999px;background:var(--card);color:var(--ink);padding:6px 12px;font-size:14px;cursor:pointer}

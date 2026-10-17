@@ -1,0 +1,13 @@
+[auth]
+site_url = "https://app.example.invalid"
+additional_redirect_urls = ["https://*", "http://app.example.invalid"]
+enable_signup = true
+
+[auth.email]
+enable_confirmations = false
+
+[functions.stripe-webhook]
+verify_jwt = false
+
+[storage.buckets.avatars]
+public = true

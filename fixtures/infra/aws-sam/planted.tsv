@@ -1,0 +1,7 @@
+AdministratorAccess	function runs with admin rights	prompt
+Path: /{proxy+}	API route with no authorizer	prompt
+fixture-sam-db-password	secret in function environment	prompt
+TableName: orders-v2	table renamed, so replaced and empty	prompt
+ReadCapacityUnits: 500	large provisioned capacity, cost	prompt
+LogGroupName: /aws/lambda/api	log group with no retention	prompt
+MemorySize: 10240	maximum memory with the longest timeout, cost	prompt

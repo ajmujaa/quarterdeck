@@ -1,0 +1,17 @@
+grant all on public.notes to anon	table opened to the anon role, no row level security	prompt
+anyone updates profiles	update policy with using (true)	prompt
+user_metadata	policy based on editable user_metadata	prompt
+create view public.note_counts	view without security_invoker	prompt
+security definer	definer function with no search_path or revoke	prompt
+'invoices', 'invoices', true	public storage bucket made in SQL	prompt
+sb_secret_FIXTUREKEY123	service key literal in a cron call	prompt
+drop column owner_id	irreversible column drop	prompt
+verify_jwt = false	edge function open to anyone	prompt
+public = true	public bucket in config	prompt
+https://*	wildcard redirect URL	prompt
+SUPABASE_SERVICE_ROLE_KEY	service role key in vercel.json env	prompt
+Access-Control-Allow-Origin	CORS star on API routes	prompt
+partner.example.invalid	rewrite to an outside host	prompt
+https://:target*	open redirect	prompt
+* * * * *	cron every minute on a public path	prompt
+hunter2-fixture-held-back	secret file contents must never reach the model	held	.env.production

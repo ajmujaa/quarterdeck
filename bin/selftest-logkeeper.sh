@@ -120,7 +120,7 @@ st_noreplies; st_reply default "$REC"; rm -f "$T/gh-calls" "$T"/body-*
 main_before=$(git -C "$T/origin.git" rev-parse refs/heads/main)
 st_duty logkeeper --panel tp-decision-1
 ck "report only: the record is shown, numbered after the ones on the trunk, and nothing is written" 'grep -q "docs/decisions/0004-sync-runs-on-the-device.md" <<<"$OUT" && grep -q "What would make this wrong" <<<"$OUT" && [ "$(last_verdict)" = DRY-RUN ] && no_gh_writes && [ -z "$(git -C "$T/origin.git" for-each-ref refs/heads/decision)" ]'
-ck "  the model is read only and asked for data, not a file" 'jq -e ".allow == \"Read,Grep,Glob\" and (.deny | contains(\"Write\"))" "$T/claude-calls" >/dev/null && grep -q "The harness renders the file" "$T/claude-calls"'
+ck "  the model is read only and asked for data, not a file" 'jq -e ".tools == \"Read,Grep,Glob\" and (.deny | contains(\"Write\"))" "$T/claude-calls" >/dev/null && grep -q "The harness renders the file" "$T/claude-calls"'
 st_duty logkeeper --panel tp-decision-1 --apply
 ck "--apply: a branch decision/0004-... holds exactly one new file and the trunk did not move" '[ "$(git -C "$T/origin.git" diff --name-only main decision/0004-sync-runs-on-the-device)" = "docs/decisions/0004-sync-runs-on-the-device.md" ] && [ "$(git -C "$T/origin.git" rev-parse refs/heads/main)" = "$main_before" ]'
 ck "  a pull request is opened against the trunk from that branch, never a push to it" 'grep -q "^gh pr create .*--base main --head decision/0004-sync-runs-on-the-device" "$T/gh-calls" && [ "$(last_verdict)" = RECORD ]'

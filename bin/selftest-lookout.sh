@@ -43,6 +43,7 @@ if st_have_browser; then
   ck "the author's own pictures are taken out of what it is told, and it is told not to look for them" '! grep -q "evil.example" "$T/claude-calls" && grep -q "must not look for them" "$T/claude-calls"'
   ck "it is read only, with only the tools to read pictures and code" '[ "$(jq -r .allow "$T/claude-calls" | head -1)" = "Read,Grep,Glob" ] && jq -e ".deny | contains(\"Write\") and contains(\"Edit\")" "$T/claude-calls" >/dev/null'
   ck "report only: a clean watch says CLEAN, records DRY-RUN and writes and posts nothing" 'grep -q "CLEAN" <<<"$OUT" && [ "$(last_verdict)" = DRY-RUN ] && no_gh_writes && [ -z "$(ls "$T"/state/findings 2>/dev/null)" ] && [ -z "$(ls "$T"/workspace/*lookout*.md 2>/dev/null)" ]'
+  ck "the report says which routes were covered and which were not" 'grep -q "Routes covered: /. Not covered: none." <<<"$OUT"'
   ck "  and the app and both worktrees are gone" 'st_gone "$MARK" && [ "$(git -C "$T/work" worktree list | wc -l | tr -d " ")" = 1 ]'
   rm -f "$T/gh-calls"; st_duty lookout --pr 1 --apply
   ck "--apply, clean: records CLEAN, comments once, writes the document and an empty findings file" '[ "$(last_verdict)" = CLEAN ] && [ "$(grep -c "^gh pr comment" "$T/gh-calls")" = 1 ] && [ -f "$T/workspace/tp-lookout-pr1.md" ] && jq -e ".verdict == \"CLEAN\" and (.findings | length) == 0" "$T/state/findings/tp-pr1-lookout.json" >/dev/null'

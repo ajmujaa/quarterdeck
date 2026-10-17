@@ -44,7 +44,8 @@ BROWSE="${QUARTERDECK_BROWSE:-$QUARTERDECK_DIR/bin/browse.mjs}"
 START=$(project_get "$PROJECT" qa.start)
 BUILD=$(project_get "$PROJECT" qa.build)
 NOTES_PATH=$(project_get "$PROJECT" lookout.notes)
-ROUTES=$(jq -c --arg p "$PROJECT" '(.[$p].lookout.routes // ["/"]) | .[0:5]' "$PROJECTS_FILE")   # at most five routes: the cap on one run
+ALLROUTES=$(jq -c --arg p "$PROJECT" '.[$p].lookout.routes // ["/"]' "$PROJECTS_FILE")
+ROUTES=$(jq -c '.[0:5]' <<<"$ALLROUTES")                 # at most five routes: the cap on one run
 WIDTHS='[390,768,1280]'                                  # phone, tablet, desktop
 PER_RUN="${QUARTERDECK_MAX_ITEMS:-8}"                        # findings in one run
 QA_TIMEOUT="${QUARTERDECK_QA_TIMEOUT:-600}"
@@ -54,7 +55,7 @@ APPLY=0 PR=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --apply) APPLY=1 ;;
-    --pr)    PR="${2:-}"; shift ;;
+    --pr)    PR="${2:-}"; need_num "--pr" "$PR"; shift ;;
     *) die "lookout: unknown argument '$1'" ;;
   esac
   shift
@@ -84,9 +85,9 @@ TMP="$(mktemp -d)"
 cleanup() {
   [ "${BASH_SUBSHELL:-0}" = 0 ] || return 0
   [ -n "$SERVER" ] && kill "$SERVER" 2>/dev/null
-  git -C "$SOURCE_REPO_DIR" worktree remove --force "$WT" >/dev/null 2>&1 || true
-  git -C "$SOURCE_REPO_DIR" worktree remove --force "$WTB" >/dev/null 2>&1 || true
-  rm -rf "$TMP"
+  safe_git -C "$SOURCE_REPO_DIR" worktree remove --force "$WT" >/dev/null 2>&1 || true
+  safe_git -C "$SOURCE_REPO_DIR" worktree remove --force "$WTB" >/dev/null 2>&1 || true
+  rm -rf "$TMP" ${PX_SCRATCH:+"$PX_SCRATCH"}
 }
 trap cleanup EXIT
 
@@ -103,8 +104,9 @@ listening() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
 command -v "$NODE" >/dev/null 2>&1 || blocked "node is not installed, so the browser driver cannot run"
 [ -f "$BROWSE" ] || blocked "bin/browse.mjs is missing"
 
-meta=$(guard 60 "$GH" pr view "$PR" -R "$REPO" --json number,title,body,state,headRefOid 2>>"$LOG_FILE") || die "cannot read $REPO#$PR"
-title=$(jq -r .title <<<"$meta"); sha=$(jq -r '.headRefOid // ""' <<<"$meta")
+meta=$(guard 60 "$GH" pr view "$PR" -R "$REPO" --json number,title,body,state,headRefOid,isCrossRepository 2>>"$LOG_FILE") || die "cannot read $REPO#$PR"
+why=$(fork_refuse "$meta") && blocked "$why"
+title=$(jq -r .title <<<"$meta" | python3 "$QUARTERDECK_DIR/bin/outscan.py" --redact); sha=$(jq -r '.headRefOid // ""' <<<"$meta")
 # What the author wrote, minus every picture they attached or linked: the lookout does not see those.
 body=$(jq -r .body <<<"$meta" | python3 -c '
 import re, sys
@@ -122,7 +124,9 @@ shoot_from() { # shoot_from <worktree> <prefix> -> fills $EVID/<prefix>/ ; retur
   local wt="$1" prefix="$2" port="" up=0 p
   for _ in 1 2 3 4 5 6 7 8; do p=$((20000 + RANDOM % 20000)); listening "$p" || { port=$p; break; }; done
   [ -n "$port" ] || return 1
-  env -i "${CLEAN[@]}" ${ENVA[@]+"${ENVA[@]}"} PORT="$port" perl -e "$RUN_GROUP" "$QA_TIMEOUT" bash -c 'cd "$1" && exec bash -c "$2"' _ "$wt" "$START" >>"$LOG_FILE" 2>&1 &
+  [ -z "${PX_SCRATCH:-}" ] || rm -rf "$PX_SCRATCH"
+  px_prepare check "$wt" || return 1                    # the sandbox's write rule is this worktree's own: head and base each get theirs
+  env -i "${PX_ENV[@]}" ${ENVA[@]+"${ENVA[@]}"} PORT="$port" perl -e "$RUN_GROUP" "$QA_TIMEOUT" ${PX_PRE[@]+"${PX_PRE[@]}"} bash -c 'cd "$1" && exec bash -c "$2"' _ "$wt" "$START" >>"$LOG_FILE" 2>&1 &
   SERVER=$!
   for _ in $(seq 1 "$READY_WAIT"); do kill -0 "$SERVER" 2>/dev/null || break; listening "$port" && { up=1; break; }; sleep 1; done
   if [ "$up" = 1 ]; then
@@ -135,11 +139,12 @@ shoot_from() { # shoot_from <worktree> <prefix> -> fills $EVID/<prefix>/ ; retur
 }
 
 rm -rf "$EVID"; mkdir -p "$EVID/head" "$EVID/base"
-guard 180 git -C "$SOURCE_REPO_DIR" fetch -q origin "pull/$PR/head" 2>>"$LOG_FILE" || blocked "could not fetch pull/$PR/head"
+guard 180 "${SAFE_GIT[@]}" -C "$SOURCE_REPO_DIR" fetch -q origin "pull/$PR/head" 2>>"$LOG_FILE" || blocked "could not fetch pull/$PR/head"
 worktree_at "$SOURCE_REPO_DIR" "$WT" FETCH_HEAD || blocked "could not create a worktree at $WT"
+px_prepare check "$WT" || blocked "${PX_WHY:-the macOS sandbox could not be applied}, and a pull request's code is never run without it"
 if [ -n "$BUILD" ]; then
-  say "  building: $BUILD"
-  (cd "$WT" && guard "${QUARTERDECK_CHECK_TIMEOUT:-900}" env -i "${CLEAN[@]}" ${ENVA[@]+"${ENVA[@]}"} bash -c "$BUILD" >>"$LOG_FILE" 2>&1) || blocked "the build failed: $BUILD"
+  say "  building: $BUILD  [sandbox: $RUN_SANDBOX]"
+  (cd "$WT" && guard "${QUARTERDECK_CHECK_TIMEOUT:-900}" env -i "${PX_ENV[@]}" ${ENVA[@]+"${ENVA[@]}"} ${PX_PRE[@]+"${PX_PRE[@]}"} bash -c "$BUILD" >>"$LOG_FILE" 2>&1) || blocked "the build failed: $BUILD"
 fi
 say "  taking the pictures from the head of #$PR"
 shoot_from "$WT" head || blocked "the app did not answer on its port within ${READY_WAIT}s: $START"
@@ -154,9 +159,11 @@ fi
 HEADSHOTS=$(jq -r '.shots[] | select(.file != "" and (.unusable // "") == "") | "\(.route)\t\(.width)\t\(.file)"' "$TMP/shots-head.json" 2>/dev/null)
 NOTAPP=$(jq -r '.shots[] | select(.file != "" and (.unusable // "") != "") | "  route \(.route), width \(.width): \(.unusable)"' "$TMP/shots-head.json" 2>/dev/null)
 [ -n "$HEADSHOTS" ] || blocked "the browser took no picture of any route"
+COVERED=$(awk -F'\t' '!s[$1]++ {print $1}' <<<"$HEADSHOTS" | jq -R . | jq -sc .)
+COVERAGE=$(jq -nr --argjson a "$ALLROUTES" --argjson c "$COVERED" '"Routes covered: " + ($c | join(", ")) + ". Not covered: " + (($a - $c) | if length == 0 then "none" else join(", ") end) + "."')
 
 # The same routes on the trunk, as the nearest existing screen. If the trunk will not start, say so and go on without.
-guard 120 git -C "$SOURCE_REPO_DIR" fetch -q origin "$BASE" 2>>"$LOG_FILE" || true
+guard 120 "${SAFE_GIT[@]}" -C "$SOURCE_REPO_DIR" fetch -q origin "$BASE" 2>>"$LOG_FILE" || true
 BASESHOTS=""
 if worktree_at "$SOURCE_REPO_DIR" "$WTB" "origin/$BASE" || worktree_at "$SOURCE_REPO_DIR" "$WTB" "$BASE"; then
   say "  and from the trunk, as the nearest existing screen"
@@ -251,7 +258,7 @@ if [ "$n" = 0 ]; then verdict="CLEAN"; detail="no finding in $(wc -l <<<"$HEADSH
 
 report="**Lookout — #$PR**
 
-**$verdict.** $detail. Pictures taken by the harness from the head ${sha:0:12}, at 390, 768 and 1280.
+**$verdict.** $detail. Pictures taken by the harness from the head ${sha:0:12}, at 390, 768 and 1280. $COVERAGE
 $(jq -r '.[] | "\n### \(.severity | ascii_upcase): \(.title)\n`\(.route)` at \(.width) px, picture: `\(.image)`\n\n\(.body)"' <<<"$findings")
 $ADR_NOTE
 
@@ -268,7 +275,7 @@ printf '%s\n' "$report" > "$DOC"
 mkdir -p "$QUARTERDECK_HOME/state/findings"
 jq -n --arg d lookout --arg p "$PROJECT" --argjson pr "$PR" --arg h "$sha" --arg at "$(date -u +%FT%TZ)" --arg v "$verdict" --argjson f "$findings" \
   '{duty:$d, project:$p, pr:$pr, head:$h, at:$at, verdict:$v, findings:$f}' > "$QUARTERDECK_HOME/state/findings/${PROJECT}-pr${PR}-lookout.json"
-guard 60 "$GH" pr comment "$PR" -R "$REPO" --body "$report" >/dev/null 2>>"$LOG_FILE" || { record_run "$PROJECT" lookout ERROR "could not comment on #$PR"; die "could not post"; }
+gh_post 60 pr comment "$PR" -R "$REPO" --body "$report" >/dev/null 2>>"$LOG_FILE" || { record_run "$PROJECT" lookout ERROR "could not comment on #$PR"; die "could not post"; }
 record_run "$PROJECT" lookout "$verdict" "#$PR — $detail" "https://github.com/$REPO/pull/$PR"
 
 exit

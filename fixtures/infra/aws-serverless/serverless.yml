@@ -1,0 +1,28 @@
+# FIXTURE: invented. No real account.
+service: shop
+provider:
+  name: aws
+  runtime: nodejs22.x
+  stage: ${opt:stage, 'prod'}
+  environment:
+    STRIPE_KEY: sk_live_FIXTUREserverless
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action: "*"
+          Resource: "*"
+functions:
+  hello:
+    handler: handler.hello
+    events:
+      - httpApi: "*"
+      - schedule: rate(1 minute)
+resources:
+  Resources:
+    Uploads:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: shop-uploads-fixture
+        AccessControl: PublicRead
+        PublicAccessBlockConfiguration: { BlockPublicAcls: false, BlockPublicPolicy: false }

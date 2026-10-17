@@ -1,0 +1,33 @@
+# FIXTURE: invented. No real account.
+name = "orders-api"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+workers_dev = true
+route = "*example.invalid/*"
+
+[vars]
+STRIPE_API_KEY = "sk_live_FIXTUREvalue"
+
+[[kv_namespaces]]
+binding = "SESSIONS"
+id = "aaaabbbbccccddddeeeeffff00001111"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "orders"
+database_id = "11111111-2222-3333-4444-555555555555"
+
+[[r2_buckets]]
+binding = "UPLOADS"
+bucket_name = "orders-uploads"
+
+[triggers]
+crons = ["* * * * *"]
+
+[env.staging]
+name = "orders-api-staging"
+
+[[env.staging.d1_databases]]
+binding = "DB"
+database_name = "orders"
+database_id = "11111111-2222-3333-4444-555555555555"

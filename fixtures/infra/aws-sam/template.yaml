@@ -1,0 +1,34 @@
+# FIXTURE: invented. No real account.
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Resources:
+  Api:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: app.handler
+      Runtime: python3.12
+      Timeout: 900
+      MemorySize: 10240
+      Policies:
+        - AdministratorAccess
+      Events:
+        Any:
+          Type: Api
+          Properties:
+            Path: /{proxy+}
+            Method: ANY
+      Environment:
+        Variables:
+          DB_PASSWORD: fixture-sam-db-password
+  Orders:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: orders-v2
+      BillingMode: PROVISIONED
+      ProvisionedThroughput: { ReadCapacityUnits: 500, WriteCapacityUnits: 500 }
+      AttributeDefinitions: [{ AttributeName: id, AttributeType: S }]
+      KeySchema: [{ AttributeName: id, KeyType: HASH }]
+  Logs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/api

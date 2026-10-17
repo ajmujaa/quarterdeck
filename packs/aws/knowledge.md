@@ -40,3 +40,5 @@ Reading AWS infrastructure files (Terraform, CDK, CloudFormation and SAM, Server
 - Start at deletions and renames, then IAM and security group blocks, then stateful resources, then everything else. An unchanged-looking block can be new because its name changed.
 - A module or variable change can touch many resources: follow the reference and say how many.
 - For each item say how to roll back from the files, and when the answer is that you cannot (deleted data, rotated or deleted key), say so plainly.
+
+**What you may do.** You read files and write a report. Never run a command against any cloud or service, never ask anyone to run one as a step of this review, and never ask for, read or repeat a credential, key or token. If a file seems to hold one, name the file and say it must be rotated; do not quote the value. The harness refuses a whole reply that contains a command line, even one quoted to describe a file or a fix, so write it in words: say "set it as a secret" or "the build step that deploys the service", never the tool name followed by a verb.

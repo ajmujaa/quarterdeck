@@ -14,8 +14,12 @@
 #   quarterdeck run <p> pilot --pr 218 --apply    also write workspace/<p>-pilot-pr218.md and the findings file
 #
 # The project says how to start its app in config/projects.json:
-#   "qa": {"start": "npm run dev -- --port $PORT", "ready": "/", "build": "npm run build", "env": {"SUPABASE_URL": "http://127.0.0.1:54321"}}
-# (build and env are optional). qa.env is name -> value, SYNTHETIC values only, passed to the build and to the start command. The app
+#   "qa": {"start": "npm run dev -- --port $PORT", "ready": "/", "build": "npm run build", "env": {"SUPABASE_URL": "http://127.0.0.1:54321"}, "routes": ["/settings"]}
+# (build, env and routes are optional).
+# Routes: bin/routes.py chooses which paths the crew may open: "/", qa.routes, the routes this pull request touches, the framework's router
+# files, a sitemap and the links on the home page, capped (QUARTERDECK_QA_ROUTES, default 8). Only same-origin paths on the local server are
+# allowed; a flow that opens any other path is refused, external links are never followed and no derived route submits a form. The report
+# lists the routes covered and not covered. qa.env is name -> value, SYNTHETIC values only, passed to the build and to the start command. The app
 # runs in a clean environment: PATH, HOME, TMPDIR, LANG, PORT and qa.env, and nothing else. No .env file and none of the owner's own
 # variables are read or passed on.
 #
@@ -52,7 +56,7 @@ APPLY=0 PR=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --apply) APPLY=1 ;;
-    --pr)    PR="${2:-}"; shift ;;
+    --pr)    PR="${2:-}"; need_num "--pr" "$PR"; shift ;;
     *) die "pilot: unknown argument '$1'" ;;
   esac
   shift
@@ -83,8 +87,8 @@ TMP="$(mktemp -d)"
 cleanup() {
   [ "${BASH_SUBSHELL:-0}" = 0 ] || return 0      # only the duty itself cleans up, never a subshell it started
   [ -n "$SERVER" ] && kill "$SERVER" 2>/dev/null
-  git -C "$SOURCE_REPO_DIR" worktree remove --force "$WT" >/dev/null 2>&1 || true
-  rm -rf "$TMP"
+  safe_git -C "$SOURCE_REPO_DIR" worktree remove --force "$WT" >/dev/null 2>&1 || true
+  rm -rf "$TMP" ${PX_SCRATCH:+"$PX_SCRATCH"}
 }
 trap cleanup EXIT
 
@@ -106,19 +110,23 @@ blocked() { # blocked <reason>
 command -v "$NODE" >/dev/null 2>&1 || blocked "node is not installed, so the browser driver cannot run"
 [ -f "$BROWSE" ] || blocked "bin/browse.mjs is missing"
 
-meta=$(guard 60 "$GH" pr view "$PR" -R "$REPO" --json number,title,body,state,headRefOid 2>>"$LOG_FILE") \
+meta=$(guard 60 "$GH" pr view "$PR" -R "$REPO" --json number,title,body,state,headRefOid,isCrossRepository 2>>"$LOG_FILE") \
   || die "cannot read $REPO#$PR"
+why=$(fork_refuse "$meta") && blocked "$why"
 title=$(jq -r .title <<<"$meta"); body=$(jq -r .body <<<"$meta"); sha=$(jq -r '.headRefOid // ""' <<<"$meta")
 changed=$(guard 60 "$GH" pr diff "$PR" -R "$REPO" --name-only 2>>"$LOG_FILE" || true)
 working_on "PR #$PR — $title"
 say "quarterdeck: pilot on $REPO#$PR — $title"
 
 # ---- build the pull request's own head, not a branch name ---------------------------------------
-guard 180 git -C "$SOURCE_REPO_DIR" fetch -q origin "pull/$PR/head" 2>>"$LOG_FILE" || blocked "could not fetch pull/$PR/head"
+guard 180 "${SAFE_GIT[@]}" -C "$SOURCE_REPO_DIR" fetch -q origin "pull/$PR/head" 2>>"$LOG_FILE" || blocked "could not fetch pull/$PR/head"
 worktree_at "$SOURCE_REPO_DIR" "$WT" FETCH_HEAD || blocked "could not create a worktree at $WT"
+# The pull request's own build and start commands run as every project command does: a scratch HOME, no secrets, and on a Mac inside the sandbox
+# (files private, writes in the worktree only, loopback network only).
+px_prepare check "$WT" || blocked "${PX_WHY:-the macOS sandbox could not be applied}, and a pull request's code is never run without it"
 if [ -n "$BUILD" ]; then
-  say "  building: $BUILD"
-  (cd "$WT" && guard "${QUARTERDECK_CHECK_TIMEOUT:-900}" env -i "${CLEAN[@]}" ${ENVA[@]+"${ENVA[@]}"} bash -c "$BUILD" >>"$LOG_FILE" 2>&1) || blocked "the build failed: $BUILD"
+  say "  building: $BUILD  [sandbox: $RUN_SANDBOX]"
+  (cd "$WT" && guard "${QUARTERDECK_CHECK_TIMEOUT:-900}" env -i "${PX_ENV[@]}" ${ENVA[@]+"${ENVA[@]}"} ${PX_PRE[@]+"${PX_PRE[@]}"} bash -c "$BUILD" >>"$LOG_FILE" 2>&1) || blocked "the build failed: $BUILD"
 fi
 
 # ---- start the app on a free local port ---------------------------------------------------------
@@ -129,7 +137,7 @@ for _ in 1 2 3 4 5 6 7 8; do
 done
 [ -n "$PORT" ] || blocked "no free local port to start the app on"
 say "  starting the app on 127.0.0.1:$PORT"
-env -i "${CLEAN[@]}" ${ENVA[@]+"${ENVA[@]}"} PORT="$PORT" perl -e "$RUN_GROUP" "$QA_TIMEOUT" bash -c 'cd "$1" && exec bash -c "$2"' _ "$WT" "$START" >>"$LOG_FILE" 2>&1 &
+env -i "${PX_ENV[@]}" ${ENVA[@]+"${ENVA[@]}"} PORT="$PORT" perl -e "$RUN_GROUP" "$QA_TIMEOUT" ${PX_PRE[@]+"${PX_PRE[@]}"} bash -c 'cd "$1" && exec bash -c "$2"' _ "$WT" "$START" >>"$LOG_FILE" 2>&1 &
 SERVER=$!
 up=0
 for _ in $(seq 1 "$READY_WAIT"); do
@@ -150,6 +158,14 @@ if [ "$prc" = 3 ] || [ -n "$(jq -r '.error // empty' <<<"$pre")" ]; then blocked
 if [ -n "$(jq -r '.blocked.reason // empty' <<<"$pre")" ]; then
   blocked "$(jq -r '.blocked.reason' <<<"$pre") (screenshot: $(jq -r '.blocked.screenshot // ""' <<<"$pre")). If the app needs settings to start, give it synthetic ones in qa.env in config/projects.json."
 fi
+
+# ---- which routes may be sailed: derived from the checkout, the diff and the home page, capped --------------------------
+printf '%s\n' "$changed" > "$TMP/changed.txt"
+guard 30 curl -s -m 20 --max-filesize 2000000 "$BASEURL$READY" > "$TMP/home.html" 2>>"$LOG_FILE" || : > "$TMP/home.html"
+jq -c --arg p "$PROJECT" '(.[$p].qa.routes // []) | if type == "array" then map(select(type == "string")) else [] end' "$PROJECTS_FILE" > "$TMP/explicit.json" 2>/dev/null || echo '[]' > "$TMP/explicit.json"
+ROUTES=$(python3 "$QUARTERDECK_DIR/bin/routes.py" "$WT" "$TMP/changed.txt" "$TMP/home.html" "${QUARTERDECK_QA_ROUTES:-8}" "$TMP/explicit.json" "127.0.0.1:$PORT" 2>>"$LOG_FILE")
+jq -e 'type == "array" and length > 0' <<<"$ROUTES" >/dev/null 2>&1 || ROUTES='["/"]'
+say "  routes the crew may open: $(jq -r 'join(" ")' <<<"$ROUTES")"
 
 # ---- the crew writes plans ---------------------------------------------------------------------------
 SEATS=$(crew_by_discipline qa | tr '\n' ' '); SEATS="$(xargs <<<"$SEATS")"
@@ -192,6 +208,10 @@ $(printf 'Pull request #%s: %s\n\n%s\n' "$PR" "$title" "$body" | untrusted "pull
 Files this pull request changes:
 $changed
 
+Routes you may open (a goto to any other path is refused; start with the ones this pull request touches, and open as many as your flows honestly need):
+$(jq -r '.[]' <<<"$ROUTES")
+Never submit a form just to cover a route: open it, look at it, expect something on it.
+
 The pull request is checked out around you and the app is running from it. You have read-only tools and you
 cannot run it yourself: write the flows, and the harness will drive a real browser through them and report.
 Use invented data only (made-up names, amounts and receipts), never a real person, account or sum of money.
@@ -231,6 +251,10 @@ jq -n --arg b "$BASEURL" --slurpfile f "$TMP/flows.json" '{base:$b, flows:$f[0]}
 EMPTY='{}'
 chk=$("$NODE" "$BROWSE" check "$TMP/plan.json" 2>>"$LOG_FILE") || chk=""
 jq -e 'type == "object"' <<<"$chk" >/dev/null 2>&1 || chk="$EMPTY"
+# A goto may only open a route on the list. Anything else is refused here, whatever the driver would have allowed.
+chk=$(jq --argjson r "$ROUTES" '(.valid // []) as $v
+  | [$v[] | select(all(.steps[]; .op != "goto" or ((.path | sub("[?#].*$"; "") | if length > 1 then rtrimstr("/") else . end) as $p | $r | index($p))))] as $ok
+  | . + {valid: $ok, errors: ((.errors // []) + [$v[] | select(. as $f | $ok | index($f) | not) | "\"\(.title)\" opens a path that is not on the route list"])}' <<<"$chk") || chk="$EMPTY"
 if [ "$(jq '(.valid // []) | length' <<<"$chk")" = 0 ]; then
   record_run "$PROJECT" pilot ERROR "#$PR every flow was refused: $(jq -r '(.errors // []) | join("; ")' <<<"$chk" | cut -c1-200)"
   die "pilot: no valid flow — nothing written"
@@ -271,6 +295,12 @@ render_steps() { # render_steps <flow-index> <failed-step> — the steps up to a
      elif .op == "shot" then "Take picture \(.name)"
      else "Network \(if .on then "off" else "on" end)" end)' "$TMP/plan.json" | nl -ba -w1 -s'. ' | sed 's/^/   /'
 }
+# Coverage: a route is covered when a step the browser actually ran opened it (a failed flow counts up to the step that failed).
+COVERED=$(jq -nc --argjson r "$ROUTES" --slurpfile pl "$TMP/plan.json" --argjson rs "$res" '
+  [range(0; ($rs.flows | length)) as $i | $rs.flows[$i] as $f | $pl[0].flows[$i].steps as $st
+   | $st[0:(if $f.ok == false then ($f.failed_step // 0) else ($st | length) end)][] | select(.op == "goto")
+   | .path | sub("[?#].*$"; "") | if length > 1 then rtrimstr("/") else . end | select(. as $p | $r | index($p))] | unique')
+COVERAGE="Routes covered: $(jq -r 'if length == 0 then "none" else join(", ") end' <<<"$COVERED"). Not covered: $(jq -nr --argjson a "$ROUTES" --argjson c "$COVERED" '($a - $c) | if length == 0 then "none" else join(", ") end')."
 DOC="$QUARTERDECK_HOME/workspace/${PROJECT}-pilot-pr${PR}.md"
 report() {
   echo "# Pilot: #$PR $title"
@@ -278,6 +308,8 @@ report() {
   echo "_Head ${sha:0:12}. $nflows flow(s) from the qa crew, driven by the harness in a headless browser against a build of this head. Invented data only._"
   echo
   echo "**$verdict.** $detail."
+  echo
+  echo "$COVERAGE"
   # flows are in the plan in order; the browser's results keep that order, so a flow's index is its place in the plan
   idx=0
   while read -r f; do
@@ -322,7 +354,7 @@ done < <(jq -c '.flows[]' <<<"$res")
 jq -n --arg d pilot --arg p "$PROJECT" --argjson pr "$PR" --arg h "$sha" --arg at "$(date -u +%FT%TZ)" --arg v "$verdict" --argjson f "$fj" \
   '{duty:$d, project:$p, pr:$pr, head:$h, at:$at, verdict:$v, findings:$f}' > "$QUARTERDECK_HOME/state/findings/${PROJECT}-pr${PR}-pilot.json"
 say "quarterdeck: findings document written to $(basename "$DOC")"
-record_run "$PROJECT" pilot "$verdict" "#$PR — $detail" "https://github.com/$REPO/pull/$PR"
+record_run "$PROJECT" pilot "$verdict" "#$PR — $detail. $COVERAGE" "https://github.com/$REPO/pull/$PR"
 
 exit
 }

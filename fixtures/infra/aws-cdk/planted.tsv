@@ -1,0 +1,8 @@
+publicReadAccess: true	public bucket	prompt
+RemovalPolicy.DESTROY	bucket destroyed with the stack, objects auto-deleted	prompt
+actions: ["s3:*"], resources: ["*"]	wildcard IAM policy	prompt
+natGateways: 3	three NAT gateways, cost	prompt
+ec2.Peer.anyIpv4()	database port open to the internet	prompt
+"Orders2"	database renamed, so replaced and empty	prompt
+storageEncrypted: false	database unencrypted	prompt
+deletionProtection: false	database without deletion protection	prompt

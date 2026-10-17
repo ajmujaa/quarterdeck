@@ -90,7 +90,8 @@ async function launch(base) {
   let pw;
   try { pw = createRequire(import.meta.url)("playwright"); } catch { return {error: "playwright is not installed (run it where `npx playwright install chromium` has been done)"}; }
   try {
-    const browser = await pw.chromium.launch({executablePath: process.env.QUARTERDECK_CHROMIUM || undefined});
+    // the renderer keeps its own sandbox (Playwright turns it off by default): the page is a pull request's code
+    const browser = await pw.chromium.launch({executablePath: process.env.QUARTERDECK_CHROMIUM || undefined, chromiumSandbox: true});
     return {browser};
   } catch (e) { return {error: "no browser could be started: " + String(e.message).split("\n")[0]}; }
 }
@@ -101,6 +102,11 @@ async function context(browser, base, viewport) {
   const ctx = await browser.newContext({viewport, serviceWorkers: "block", acceptDownloads: false, permissions: []});
   const origin = new URL(base).origin;
   await ctx.route("**/*", r => (r.request().url().startsWith(origin + "/") || r.request().url() === origin || r.request().url().startsWith("data:") ? r.continue() : r.abort()));
+  // route() never sees a WebSocket (round 5: one reached another port with the page's data). Any socket not to the app's own host:port is answered
+  // here and closed, never connected. A Playwright too old to do that is refused rather than run without it.
+  if (typeof ctx.routeWebSocket !== "function") throw new Error("this Playwright cannot block WebSockets (1.48 or later is needed)");
+  const host = new URL(base).host;
+  await ctx.routeWebSocket(u => new URL(String(u)).host !== host, ws => ws.close());
   return ctx;
 }
 

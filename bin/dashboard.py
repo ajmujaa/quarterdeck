@@ -25,7 +25,9 @@ import json
 import os
 import re
 import secrets
+import hmac
 import shutil
+import socket
 import struct
 import sys
 import signal
@@ -35,11 +37,13 @@ import threading
 import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
-from http.server import HTTPServer, ThreadingHTTPServer, SimpleHTTPRequestHandler
+from http.cookies import SimpleCookie
+from http.server import HTTPServer, ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs, quote
 
 import home as _home
+import safegit as _safegit
 
 ROOT = Path(__file__).resolve().parent.parent           # the program: bin/, duties/, crew/, dashboard/
 HOME = _home.resolve()                                  # YOUR data: state/, logs/, workspace/, config/ (see bin/home.py)
@@ -70,9 +74,217 @@ PROGRESS_CACHE = {}
 
 SAFE_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,40}$")
 SAFE_FLAG = re.compile(r"^--[a-z][a-z-]{0,20}$")
-SAFE_VALUE = re.compile(r"^[\w .,/#:@+=-]{1,200}$", re.UNICODE)
+SAFE_VALUE = re.compile(r"^[\w.,/#:@+=][\w .,/#:@+=-]{0,199}$", re.UNICODE)     # never starts with a dash or a space: a value cannot pass for a flag
 SAFE_LOCK = re.compile(r"^[a-z0-9_-]{1,60}$")
 SAFE_ID = re.compile(r"^[\w.-]{1,80}$")        # a panel id: a file name under state/panels
+
+
+# ---- pairing: how a browser tab earns the right to read and drive this dashboard --------------------------------------------
+# Loopback is not a secret: any program, and any other user on this computer, can open 127.0.0.1:PORT. So the page itself carries
+# nothing. `quarterdeck dashboard` (or `quarterdeck dashboard link`, or `python3 bin/dashboard.py link`) writes a one-time nonce into
+# state/pair/ (a folder only the owner can read) and prints a link with the nonce in its #fragment, which no server and no log ever
+# sees. The page POSTs the nonce to /api/pair; the server checks it (single use: whoever deletes the file wins; constant-time
+# compare; five minutes), then sets an HttpOnly, SameSite=Strict cookie bound to a random session and hands the page that session's
+# API token in the response body. The tab keeps it in sessionStorage, which is per origin AND port, so a server on another loopback
+# port (which does receive the cookie: cookies are not per port) cannot read it. The token is never given out again: /api/session
+# only checks a tab's token, so a reload keeps working and a new tab pairs with a new link. A nonce can only be made by something that can write into
+# state/, never over HTTP. The older credential, TOKEN (state/dashboard.token, 0600), still opens READS for the owner's own
+# command-line tools and the two Helm endpoints in CLI_WRITES, but only for a request with no Origin header, which a browser always
+# sends on a write. Every other write needs a paired session. The file is on the private list (bin/lib.sh), so neither a model's
+# shell nor a project command can read it.
+PAIR_TTL = 300                  # seconds a one-time link stays good
+SESSION_TTL = 86400             # a paired browser stays paired for a day, across dashboard restarts; its own tab (cookie and token) renews it past half-life
+SESSIONS_MAX = 20
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost")
+_SESSIONS = {"map": None}       # sha256(session id) -> {"token", "exp"}; loaded from state/dashboard.sessions.json on first use
+_SESSIONS_LOCK = threading.Lock()
+_PAIR_FAILS = []                # times of recent bad nonces: a guesser is slowed to nothing
+_PAIR_LOCK = threading.Lock()
+# What a process that only READ state/dashboard.token may write: the two Helm endpoints the owner's evaluation tools (bin/chat-eval.py,
+# bin/helm-eval.py) post to. Every other write (run, merge, attach, newproject, connections, capture ...) needs a paired browser session.
+CLI_WRITES = ("/api/chat", "/api/understand")
+
+
+def _sha(x):
+    return hashlib.sha256(str(x).encode()).hexdigest()
+
+
+def _private_write(path, text):
+    """Write text so that no one but the owner could ever have read it: a 0600 temp file, then rename."""
+    tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+    os.replace(tmp, path)
+
+
+def pair_mint():
+    """A fresh one-time nonce. Needs write access to state/pair/, which is the whole point."""
+    d = STATE / "pair"
+    d.mkdir(parents=True, exist_ok=True)
+    os.chmod(d, 0o700)
+    now = time.time()
+    for f in d.iterdir():                                                  # the unused and the stale go
+        try:
+            if float(f.read_text() or 0) < now:
+                f.unlink()
+        except (OSError, ValueError):
+            pass
+    nonce = secrets.token_urlsafe(24)
+    fd = os.open(d / _sha(nonce), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(str(now + PAIR_TTL))
+    return nonce
+
+
+def pair_link(nonce=None):
+    return f"http://127.0.0.1:{PORT}/#pair={nonce or pair_mint()}"
+
+
+def pair_redeem(nonce):
+    """True once for a good, unexpired nonce; False for anything else (the nonce is gone either way); None when too many wrong ones came lately."""
+    now = time.time()
+    d = STATE / "pair"
+    want, hit = _sha(nonce), None
+    try:
+        for f in d.iterdir():
+            if hmac.compare_digest(f.name, want):                          # constant time over every pending nonce
+                hit = f
+    except OSError:
+        pass
+    # The counter slows GUESSING; it must never lock the owner out. Any page can POST junk nonces to this port, so a real link is
+    # always tried first and the counter only answers the ones that matched nothing (round-2 audit: a 10-per-minute lockout was a DoS).
+    with _PAIR_LOCK:
+        _PAIR_FAILS[:] = [t for t in _PAIR_FAILS if now - t < 60]
+        if hit is None and len(_PAIR_FAILS) >= 10:
+            return None
+    ok = False
+    if hit is not None:
+        try:
+            exp = float(hit.read_text() or 0)
+            hit.unlink()                                                   # single use: if two requests race, one unlink fails
+            ok = exp >= now
+        except (OSError, ValueError):
+            ok = False
+    if not ok:
+        with _PAIR_LOCK:
+            _PAIR_FAILS.append(now)
+    return ok
+
+
+def _sessions():
+    """The sessions, re-read whenever the file changed: `quarterdeck dashboard sessions revoke` (another process) rewrites it, and a running server must obey at once."""
+    f = STATE / "dashboard.sessions.json"
+    try:
+        st = f.stat()
+        stamp = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        stamp = None
+    if _SESSIONS["map"] is None or _SESSIONS.get("stamp") != stamp:
+        try:
+            m = json.loads(f.read_text(errors="replace"))                  # not read_json: sessions are not project data, and pairing must work in demo mode
+        except Exception:
+            m = {}
+        _SESSIONS["map"] = m if isinstance(m, dict) else {}
+        _SESSIONS["stamp"] = stamp
+    return _SESSIONS["map"]
+
+
+def _sessions_save(m):
+    try:
+        STATE.mkdir(parents=True, exist_ok=True)
+        _private_write(STATE / "dashboard.sessions.json", json.dumps(m))
+        st = (STATE / "dashboard.sessions.json").stat()
+        _SESSIONS["stamp"] = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        pass                                                           # the session still works until the next restart
+
+
+def sessions_revoke():
+    """End every paired session: the file is emptied. A running server notices (see _sessions); `quarterdeck dashboard sessions revoke` calls this."""
+    STATE.mkdir(parents=True, exist_ok=True)
+    _private_write(STATE / "dashboard.sessions.json", "{}")
+
+
+def session_end(sid):
+    with _SESSIONS_LOCK:
+        m = _sessions()
+        m.pop(_sha(sid), None)
+        _sessions_save(m)
+
+
+def session_renew(sid):
+    with _SESSIONS_LOCK:
+        v = _sessions().get(_sha(sid))
+        if isinstance(v, dict):
+            v["exp"] = time.time() + SESSION_TTL
+            _sessions_save(_sessions())
+
+
+def session_new():
+    """-> (session id for the cookie, API token for the page). Only a hash of the id is kept."""
+    sid, token = secrets.token_urlsafe(32), secrets.token_urlsafe(24)
+    with _SESSIONS_LOCK:
+        m, now = _sessions(), time.time()
+        for k in [k for k, v in m.items() if not isinstance(v, dict) or v.get("exp", 0) < now]:
+            del m[k]
+        while len(m) >= SESSIONS_MAX:
+            del m[min(m, key=lambda k: m[k].get("exp", 0))]
+        m[_sha(sid)] = {"token": token, "exp": now + SESSION_TTL}
+        _sessions_save(m)
+    return sid, token
+
+
+def session_get(sid):
+    """The session behind a cookie value, or None."""
+    if not sid or len(sid) > 200:
+        return None
+    with _SESSIONS_LOCK:
+        v = _sessions().get(_sha(sid))
+    return v if isinstance(v, dict) and v.get("exp", 0) >= time.time() else None
+
+
+def project_roots():
+    """The folders a project may live under: QUARTERDECK_PROJECT_ROOTS in config/quarterdeck.env (colon-separated), else your home directory."""
+    raw = env_flag("QUARTERDECK_PROJECT_ROOTS", "")
+    out = []
+    for part in [x for x in raw.split(":") if x.strip()] or [str(Path.home())]:
+        try:
+            out.append(Path(part.strip()).expanduser().resolve())
+        except OSError:
+            pass
+    return out
+
+
+def check_project_folder(raw, what="a project", whole=True):
+    """The real folder `raw` names, or ValueError saying where projects may live. It must sit under an allowed root and no part of
+    the path below that root may be a dot folder (.ssh, .aws, .config ...). Symlinks are followed first, so a link cannot lead out.
+    With whole (the project folder itself, not the folder a new one goes in): not an allowed root, not the home folder, and neither
+    the program folder, the data folder, nor a folder that holds either of them."""
+    roots = project_roots()
+    try:
+        real = Path(raw).expanduser().resolve()
+    except (OSError, RuntimeError, ValueError):
+        raise ValueError(f"{raw} is not a usable folder name")
+    for r in roots:
+        try:
+            rel = real.relative_to(r)
+        except ValueError:
+            continue
+        if any(part.startswith(".") for part in rel.parts):
+            raise ValueError(f"{raw} is inside a hidden folder, which {what} may not be")
+        if whole and (real == r or real == Path.home().resolve()):
+            raise ValueError(f"{raw} is a whole folder of projects, not one project. Choose the project's own folder inside it")
+        if any(real == x or x in real.parents or (whole and real in x.parents) for x in (ROOT.resolve(), HOME.resolve())):
+            raise ValueError(f"{raw} is, holds or sits inside Quarterdeck's own program or data folder, which {what} may not be")
+        return real
+    where = ", ".join(str(r) for r in roots)
+    raise ValueError(f"{raw} is outside the places {what} may live ({where}). To allow another, set QUARTERDECK_PROJECT_ROOTS in your config/quarterdeck.env (folders separated by a colon)")
+
+
+def log_field(x):
+    """One log line stays one line: control characters and line breaks become a space, and the field is cut short."""
+    return re.sub(r"[\x00-\x1f\x7f  ]+", " ", str(x))[:120]
 
 
 # Demo mode: a made-up world (bin/demo.py) answers every /api request instead of
@@ -245,13 +457,23 @@ def free_bytes(path):
         return None
 
 
+_COMMIT = {"at": 0.0, "v": None}
+
+
 def git_commit():
+    """The short commit this program runs. /api/health is answered to any page without pairing, so the answer is kept for 30 seconds instead of
+    starting a git process per request (and git runs with the safe flags, in the program's own folder)."""
+    now = time.time()
+    if now - _COMMIT["at"] < 30:
+        return _COMMIT["v"]
     try:
-        r = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, capture_output=True,
+        r = subprocess.run(["git", *_safegit.flags(), "rev-parse", "--short", "HEAD"], cwd=ROOT, capture_output=True,
                            text=True, timeout=2)
-        return r.stdout.strip() or None if r.returncode == 0 else None
+        v = r.stdout.strip() or None if r.returncode == 0 else None
     except Exception:
-        return None
+        v = None
+    _COMMIT.update(at=now, v=v)
+    return v
 
 
 def health():
@@ -1544,21 +1766,21 @@ def brief_mission(r, out):
     state = ("running" if st == "drafting" or ms == "working" else "blocked" if st == "failed" or ms == "failed"
              else "awaiting" if st in ("proposed", "changes_requested") or ms == "ready" else "done")
     words = {
-        "drafting": ("Writing the brief", "The draughtsman is writing the brief. It takes a minute or two and appears here when it is ready."),
-        "failed": ("The brief did not get written", r.get("error") or "No reason was recorded."),
+        "drafting": ("Writing the brief", "Quarterdeck is writing the brief. It takes a minute or two and appears here when it is ready."),
+        "failed": ("The brief did not get written", r.get("error") or plain_failure("")),
         "proposed": ("Waiting for you", "Read the brief below. Approve it, or ask for changes. Nothing is drawn or built until you approve."),
         "changes_requested": ("You asked for changes", "Your notes are kept. Write the next version and it will take them into account."),
         "superseded": ("Replaced by a newer version", "A newer version of this brief was written from your notes."),
-        "approved": ("Approved", "This brief is approved. You can have mock-ups made from it: static pictures of each screen."),
+        "approved": ("Approved", "The brief is approved. Next, you can have a mock-up made of each screen: a picture to look at, not a working page."),
     }[st if st in ("drafting", "failed", "proposed", "changes_requested", "superseded", "approved") else "failed"]
     if st == "approved" and ms == "working":
-        words = ("Making the mock-ups", "The modelmaker is drawing one page for each screen. They appear here when they are ready.")
+        words = ("Making the mock-ups", "Quarterdeck is drawing one page for each screen. They appear here when they are ready.")
     elif st == "approved" and ms == "failed":
-        words = ("The mock-ups did not get made", m.get("error") or "No reason was recorded.")
+        words = ("The mock-ups did not get made", m.get("error") or plain_failure(""))
     elif st == "approved" and ms == "ready":
         words = ("Mock-ups ready to look at", "Look at each screen below, then approve the set or ask for changes.")
     elif st == "approved" and ms == "approved":
-        words = ("Brief and mock-ups approved", "Both are approved. Nothing was built and nothing in any project changed.")
+        words = ("Brief and mock-ups approved", "You are done here. Nothing has been built and nothing in your project has changed. The brief and the pictures stay on this page for whoever builds it.")
     elif st == "approved" and ms == "changes_requested":
         words = ("You asked for changes to the mock-ups", "Your notes are kept. Make the mock-ups again and they will take them into account.")
     node = lambda i, lab, s, note="": {"id": i, "label": lab, "state": s, "note": note}
@@ -2663,8 +2885,9 @@ def captures_view(limit=200):
 # talking. Nothing here reaches a network.
 HELM_HOME = Path.home() / ".cache" / "quarterdeck"
 LLM_MODEL = HELM_HOME / "models" / "qwen2.5-3b-instruct-q4_k_m.gguf"
-LLM_PORT = 8089
+LLM_PORT = 0            # chosen afresh each time the helper starts (an unused port, not a well-known one)
 LLM_KEY = ""
+LLM_CHECKED = {"at": 0.0}
 TTS_PYTHON = HELM_HOME / "venv" / "bin" / "python"
 TTS_MODEL = HELM_HOME / "models" / "kokoro-v1.0.onnx"
 TTS_SCRIPT = ROOT / "tools" / "helm" / "tts.py"
@@ -2701,13 +2924,53 @@ class Sidecar:
             self.proc = None
 
 
+def _free_port():
+    with socket.socket() as sk:
+        sk.bind(("127.0.0.1", 0))
+        return sk.getsockname()[1]
+
+
+def listener_pids(port):
+    """The process ids listening on this TCP port on this computer, by asking the system (lsof, else ss). None when neither could answer."""
+    for argv, parse in ((["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-Fp"], lambda out: {int(x[1:]) for x in out.split() if x[:1] == "p" and x[1:].isdigit()}),
+                        (["ss", "-ltnpH", f"sport = :{port}"], lambda out: {int(x) for x in re.findall(r"pid=(\d+)", out)})):
+        if not shutil.which(argv[0]):
+            continue
+        try:
+            r = subprocess.run(argv, capture_output=True, text=True, timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if r.returncode in (0, 1):                     # lsof exits 1 when nothing listens
+            return parse(r.stdout)
+    return None
+
+
+def llm_ours(p, port):
+    """True only if the one process listening on `port` is the helper we started. Anything else (or not knowing) means the key stays unsent."""
+    pids = listener_pids(port)
+    return pids is not None and pids == {p.pid}
+
+
+def llm_base():
+    """The helper's address, once it is up and is certainly ours. The key and the facts digest are never sent to anything else."""
+    p = LLM.up()
+    if time.time() - LLM_CHECKED["at"] > 30:
+        if not llm_ours(p, LLM_PORT):
+            LLM.stop()
+            raise RuntimeError("something other than the language model is listening on its port, so nothing was sent")
+        LLM_CHECKED["at"] = time.time()
+    return f"http://127.0.0.1:{LLM_PORT}"
+
+
 def _start_llm():
     exe = shutil.which("llama-server") or "/opt/homebrew/bin/llama-server"
     model = Path(env_flag("QUARTERDECK_HELM_MODEL", "") or LLM_MODEL).expanduser()
     if not (Path(exe).is_file() and model.is_file()):
         raise RuntimeError("the local language model is not set up: brew install llama.cpp and put a GGUF model at " + str(model))
-    global LLM_KEY
+    global LLM_KEY, LLM_PORT
     LLM_KEY = secrets.token_hex(16)                 # nothing else on this machine can use the model
+    LLM_PORT = _free_port()
+    LLM_CHECKED["at"] = 0.0
     env = {k: v for k, v in os.environ.items() if not k.startswith("LLAMA_")}
     env["LLAMA_API_KEY"] = LLM_KEY                  # in the environment, not the arguments, so ps does not show it
     p = subprocess.Popen([exe, "-m", str(model), "--host", "127.0.0.1", "--port", str(LLM_PORT), "-c", "4096", "-ngl", "99", "-np", "1", "--no-slots"],
@@ -2716,8 +2979,14 @@ def _start_llm():
         if p.poll() is not None:
             raise RuntimeError("the language model failed to start")
         try:
-            urllib.request.urlopen(f"http://127.0.0.1:{LLM_PORT}/health", timeout=1).read()
+            urllib.request.urlopen(f"http://127.0.0.1:{LLM_PORT}/health", timeout=1).read()    # a plain health check: no key, no data
+            if not llm_ours(p, LLM_PORT):               # the answer must come from the child, not from whatever grabbed the port first
+                p.terminate()
+                raise RuntimeError("something other than the language model answered on its port, so nothing was sent")
+            LLM_CHECKED["at"] = time.time()
             return p
+        except RuntimeError:
+            raise
         except Exception:
             time.sleep(1)
     p.terminate()
@@ -2986,8 +3255,7 @@ def understand(text, views, projects=None, duties_of=None):
     msgs.append({"role": "user", "content": text})
     body = json.dumps({"messages": msgs, "temperature": 0, "max_tokens": 140,
                        "response_format": {"type": "json_schema", "json_schema": {"name": "cmd", "schema": {"anyOf": HELM_SCHEMA["anyOf"] + EXT["schema"]}}}}).encode()
-    LLM.up()
-    req = urllib.request.Request(f"http://127.0.0.1:{LLM_PORT}/v1/chat/completions", body,
+    req = urllib.request.Request(llm_base() + "/v1/chat/completions", body,
                                  {"Content-Type": "application/json", "Authorization": "Bearer " + LLM_KEY})
     with urllib.request.urlopen(req, timeout=40) as r:
         out = json.loads(r.read())["choices"][0]["message"]["content"]
@@ -3042,7 +3310,7 @@ def fleet_action(b):
     ok, msg = fleetview.run_action(cfg, str(b.get("source", "")), str(b.get("job", "")), str(b.get("action", "")), STATE)
     try:
         with open(LOGS / "fleet-actions.log", "a") as f:                       # who did what, never what the agents read
-            f.write(f"{iso(now_utc())} {b.get('source')} {b.get('job')} {b.get('action')} {'ok' if ok else 'failed'}\n")
+            f.write(f"{iso(now_utc())} {log_field(b.get('source'))} {log_field(b.get('job'))} {log_field(b.get('action'))} {'ok' if ok else 'failed'}\n")
     except OSError:
         pass
     with FLEET_LOCK:
@@ -3065,6 +3333,22 @@ def settings_view():
 MAX_BODY = 2_000_000
 
 
+class BodyError(Exception):
+    """A write's body that cannot be read as the small JSON object every route expects."""
+    def __init__(self, code, msg):
+        super().__init__(msg)
+        self.code = code
+
+
+def csp(nonce=None):
+    """The page's Content-Security-Policy. Scripts run only from this server's own files, plus the page's own inline scripts by their
+    per-response nonce. Nothing is allowed to load from another site, to be framed, to submit a form anywhere, or to set a base URL.
+    Relaxations, each deliberate: style-src 'unsafe-inline' (Shoelace sets styles on its parts and the page styles by attribute; styles
+    cannot run code), img-src data: (the favicon and Shoelace's inline icons are data: images), connect-src data: (Shoelace reads those same inline icons back with fetch(); a data: URL holds its own bytes and reaches no host)."""
+    return ("default-src 'self'; script-src 'self'" + (f" 'nonce-{nonce}'" if nonce else "") + "; style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; font-src 'self'; connect-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'")
+
+
 def connections_api(b):
     """Put a credential in the private store (never read back), or switch a service's feed on or off. Both need the owner's confirm."""
     if b.get("confirm") is not True:
@@ -3076,8 +3360,10 @@ def connections_api(b):
             result = {"key": b.get("key"), "present": present}
         elif action == "enable":
             result = {"enabled": integrations_manifest.set_enabled(sid, b.get("on") is True)}
+        elif action == "store":                                          # move every credential to the file or the keychain, verified, then switch
+            result = {"moved": integrations_manifest.move_store(str(b.get("to") or "")), "store": integrations_manifest.store_info()["kind"]}
         else:
-            return 400, {"error": "action must be credential or enable"}
+            return 400, {"error": "action must be credential, enable or store"}
     except ValueError as e:
         return 400, {"error": str(e)}
     except OSError as e:
@@ -3085,7 +3371,7 @@ def connections_api(b):
     try:
         LOGS.mkdir(parents=True, exist_ok=True)
         with open(LOGS / "connections.log", "a") as f:                  # which key or service changed, never a value
-            f.write(f"{iso(now_utc())} {action} {sid or b.get('key')}\n")
+            f.write(f"{iso(now_utc())} {log_field(action)} {log_field(sid or b.get('key') or b.get('to'))}\n")
     except OSError:
         pass
     return 200, result
@@ -3097,7 +3383,10 @@ def newproject_api(b):
     if b.get("confirm") is not True:
         return 400, {"error": "confirm is required: this creates a folder on this computer"}
     try:
-        dest = _np.create(str(b.get("name") or "").strip(), str(b.get("folder") or "").strip() or None, b.get("about"))
+        parent = check_project_folder(str(b.get("folder") or "").strip() or Path.home() / "Projects", "a new project", whole=False)
+        if str(b.get("name") or "").strip():
+            check_project_folder(str(parent / str(b.get("name")).strip()), "a new project")
+        dest = _np.create(str(b.get("name") or "").strip(), str(parent), b.get("about"))
     except ValueError as e:
         return 400, {"error": str(e)}
     except OSError as e:
@@ -3111,27 +3400,38 @@ def attach_api(b):
     raw = str(b.get("path") or "").strip()
     if not raw:
         return 400, {"error": "say which folder"}
-    path = Path(raw).expanduser()
+    try:
+        path = check_project_folder(raw)
+    except ValueError as e:
+        return 400, {"error": str(e)}
     if not path.is_dir():
         return 400, {"error": f"{raw} is not a folder"}
     try:
         prof = _scan.scan(path)
-        prop = _attach.propose(prof, str(b.get("name") or "").strip() or None)
+        prop = proposed = _attach.propose(prof, str(b.get("name") or "").strip() or None)
+        agents = None
+        if b.get("edits") is not None:
+            prop = _attach.edit(prop, b["edits"])
         if b.get("apply"):
             if b.get("confirm") is not True:
                 return 400, {"error": "confirm is required: this adds the project to your registry"}
-            _attach.apply(prop, prof, PROJECTS_FILE)
+            _attach.apply(prop, prof, PROJECTS_FILE, proposed, "owner, reviewed in the dashboard" if b.get("edits") is not None else "owner, with --apply")
+            if b.get("agents_md") is True:                  # opt-in, and only inside the confirmed apply
+                try:
+                    agents = _attach.write_agents_md(prop, path)
+                except (OSError, ValueError):
+                    agents = "failed"
             try:
                 LOGS.mkdir(parents=True, exist_ok=True)
                 with open(LOGS / "attach.log", "a") as f:
-                    f.write(f"{iso(now_utc())} registered {prop['name']}\n")
+                    f.write(f"{iso(now_utc())} registered {log_field(prop['name'])}\n")
             except OSError:
                 pass                                   # a note that could not be written never undoes the registration
     except ValueError as e:
         return 400, {"error": str(e)}
     except OSError as e:
         return 500, {"error": str(e)[:200]}
-    return 200, {"profile": prof, "proposal": prop, "applied": bool(b.get("apply"))}
+    return 200, {"profile": prof, "proposal": prop, "applied": bool(b.get("apply")), "agents_md": agents, "duty_options": [{"name": x["name"], "role": x["role"]} for x in duty_list() if x["name"] in _attach.known_duties()], "guardrail_options": _attach.GUARDRAILS}
 
 
 # ---- design briefs, mock-ups and sprint plans: the owner's approval screens ------------------------------------------
@@ -3156,14 +3456,34 @@ def _age(ts):
         return 0
 
 
+def plain_failure(raw):
+    """A stored failure reason (the duties write short technical ones) as a sentence a person who is not a developer can act on."""
+    t = " ".join(str(raw or "").split())
+    if not t:
+        return "Something went wrong and no reason was recorded. Try again."
+    if t.startswith("needs a person:"):
+        return "There is not enough to go on yet:" + t[len("needs a person:"):].rstrip(".") + ". Add a few more sentences and try again."
+    if t.startswith("brief refused"):
+        return "The draft did not pass Quarterdeck's checks, so nothing was kept. Try again; a new draft usually does."
+    if t.startswith("mock-ups refused"):
+        return "The drawn pages did not pass Quarterdeck's safety checks, so none were kept. Try again."
+    if t in ("the model call failed", "empty reply", "hit the per-call cap") or t.startswith(("could not write", "could not save")):
+        return "The run did not finish and nothing was kept. Try again; if it keeps happening, look at the log under Operations."
+    return t
+
+
 def brief_public(rec):
     """The record as the page needs it. A run that died (working for too long) is reported as stopped, not as still going."""
     m = dict(rec.get("mockups") or {"state": "none"})
     if m.get("state") == "working" and _age(m.get("started")) > STALE_AFTER:
         m["state"], m["error"] = "failed", "The run stopped before it finished. Try again."
+    elif m.get("state") == "failed":
+        m["error"] = plain_failure(m.get("error"))
     st, err = rec.get("status"), rec.get("error")
     if st == "drafting" and _age(rec.get("created")) > STALE_AFTER:
         st, err = "failed", "The run stopped before it finished. Try again."
+    elif st == "failed":
+        err = plain_failure(err)
     out = {k: rec.get(k) for k in ("id", "source", "project", "issue", "idea", "audience_hint", "brief", "notes", "doc", "revises",
                                    "superseded_by", "created", "updated", "added_to_project")}
     out.update(status=st, error=err, mockups=m)
@@ -3359,9 +3679,9 @@ CHAT_TOKENS, CHAT_TOKENS_MORE, CHAT_TEMP = 160, 300, 0.3
 
 def llm_stream(messages, max_tokens=CHAT_TOKENS, temperature=CHAT_TEMP):
     """Text deltas from the local model, as they are written."""
-    LLM.up()
+    base = llm_base()
     body = json.dumps({"messages": messages, "temperature": temperature, "max_tokens": max_tokens, "stream": True}).encode()
-    req = urllib.request.Request(f"http://127.0.0.1:{LLM_PORT}/v1/chat/completions", body,
+    req = urllib.request.Request(base + "/v1/chat/completions", body,
                                  {"Content-Type": "application/json", "Authorization": "Bearer " + LLM_KEY})
     with urllib.request.urlopen(req, timeout=90) as r:
         for raw in r:
@@ -3437,12 +3757,12 @@ def claude_chat(system, prompt, budget, model):
     exe = os.environ.get("CLAUDE_BIN") or shutil.which("claude")
     if not exe:
         raise RuntimeError("the claude command was not found")
-    argv = chatctx.claude_argv(exe, prompt, system, model, budget)
+    argv = chatctx.claude_argv(exe, system, model, budget)
     book = lambda cost, out, stopped: _book_chat_spend(cost, out, stopped, model)
 
     try:
         with tempfile.TemporaryDirectory() as work:
-            r = subprocess.run(argv, capture_output=True, text=True, timeout=chatctx.CLAUDE_TIMEOUT, cwd=work, stdin=subprocess.DEVNULL)
+            r = subprocess.run(argv, input=str(prompt), capture_output=True, text=True, timeout=chatctx.CLAUDE_TIMEOUT, cwd=work, env=claudeproc.clean_env())
     except subprocess.TimeoutExpired:
         book(float(budget), {}, "timeout")          # killed mid-turn: count the most it could have spent, so the daily cap still bites
         raise RuntimeError("it took too long")
@@ -3814,7 +4134,12 @@ def dedupe_events(items):
 
 def brain_connectors():
     out = []
-    for name, label in KNOWN_CONNECTORS:
+    known = {n for n, _ in KNOWN_CONNECTORS}
+    try:        # a connection the user added is just a snapshot file with a plain name; the Brain shows it with no code edit
+        extra = sorted(p.stem for p in CONNECTORS.glob("*.json") if p.stem not in known and re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,30}", p.stem))
+    except OSError:
+        extra = []
+    for name, label in list(KNOWN_CONNECTORS) + [(n, n) for n in extra[:20]]:
         d = read_json(CONNECTORS / f"{name}.json", None)
         if not isinstance(d, dict):
             out.append({"name": name, "label": label, "connected": False})
@@ -3916,8 +4241,7 @@ def memory_view():
               for d in (Path.home() / h / "skills").glob("*/SKILL.md")}
     backup = None
     try:
-        r = subprocess.run(["git", "-C", str(MEMORY_BACKUP), "log", "-1", "--format=%ct"],
-                           capture_output=True, text=True, timeout=5)
+        r = _safegit.run(MEMORY_BACKUP, "log", "-1", "--format=%ct", text=True, timeout=5)
         last = int(r.stdout.strip()) if r.returncode == 0 and r.stdout.strip() else 0
         if not last and MEMORY_BACKUP.exists():
             last = 1
@@ -4060,12 +4384,39 @@ def build_state():
     return out
 
 
-class Handler(SimpleHTTPRequestHandler):
+class Handler(BaseHTTPRequestHandler):
+    timeout = 15                    # seconds a socket may sit idle: a half-open connection cannot hold a thread and a file descriptor for ever
+
+    DEADLINE = 20                   # seconds for the whole request line, headers and body: a client that drips one header line at a time never goes idle, so the idle timeout alone would let 96 of them hold every slot
+
     def log_message(self, *args):
         pass
 
+    def handle_one_request(self):
+        self._deadline = threading.Timer(self.DEADLINE, self._deadline_hit)
+        self._deadline.daemon = True
+        self._deadline.start()
+        try:
+            return super().handle_one_request()
+        except OSError:
+            self.close_connection = True                                       # the deadline cut the socket under a half-read request, or the client went away
+        finally:
+            self._deadline.cancel()
+
+    def _deadline_hit(self):
+        try:
+            self.connection.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+
+    def parse_request(self):
+        ok = super().parse_request()
+        if not ok or self.command != "POST" or (self.headers.get("Content-Length") or "0").strip() in ("", "0"):
+            self._deadline.cancel()                                            # nothing more to read: the handler may take as long as it needs
+        return ok
+
     # ---- plumbing ----
-    def _send(self, code, body, ctype="application/json"):
+    def _send(self, code, body, ctype="application/json", nonce=None, cookie=None):
         data = body.encode() if isinstance(body, str) else body
         self.send_response(code)
         self.send_header("Content-Type", ctype)
@@ -4073,7 +4424,10 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")                            # nothing may frame this page (clickjacking)
-        self.send_header("Content-Security-Policy", "frame-ancestors 'none'")
+        self.send_header("Content-Security-Policy", csp(nonce))
+        self.send_header("Referrer-Policy", "no-referrer")
+        if cookie:
+            self.send_header("Set-Cookie", cookie)
         self.end_headers()
         try:
             self.wfile.write(data)
@@ -4092,23 +4446,80 @@ class Handler(SimpleHTTPRequestHandler):
         host = (self.headers.get("Host") or "").rsplit(":", 1)[0]
         return host in ("127.0.0.1", "localhost")
 
-    def _authorised(self):
-        """Loopback is not authorisation: any page in the browser can reach it.
-        The token is only ever handed to a page this process served, and an
-        Origin from anywhere else is refused outright."""
-        origin = self.headers.get("Origin")
-        if origin and urlparse(origin).hostname not in ("127.0.0.1", "localhost"):
+    def _origin_ok(self):
+        """A browser names the page a request came from. Only this server's own address counts (not another port on localhost,
+        which is another program), and a request the browser says came from another site is refused."""
+        if self.headers.get("Sec-Fetch-Site") in ("cross-site", "same-site"):
             return False
-        return secrets.compare_digest(self.headers.get("X-Quarterdeck-Token", ""), TOKEN)
+        origin = self.headers.get("Origin")
+        return not origin or origin == "http://" + (self.headers.get("Host") or "")
+
+    def _cli(self):
+        """The owner's own command-line tools: the token in state/dashboard.token (0600), sent with no Origin header. A browser
+        always sends an Origin on a write, so a web page cannot pass as this."""
+        t = self.headers.get("X-Quarterdeck-Token", "")
+        return bool(t) and not self.headers.get("Origin") and secrets.compare_digest(t, TOKEN)
+
+    def _session(self):
+        """The paired browser session this request's cookie names, or None."""
+        try:
+            m = SimpleCookie(self.headers.get("Cookie") or "").get("qd_session")
+        except Exception:
+            return None
+        return session_get(m.value) if m else None
+
+    def _read_ok(self):
+        """A read of anything but the page shell, the assets and /api/health needs a paired browser (cookie) or the owner's CLI token."""
+        return self._cli() or (self._session() is not None and self._origin_ok())
+
+    def _same_origin(self):
+        """The browser says this request came from this server's own page: an Origin equal to it, or (no Origin) Sec-Fetch-Site
+        same-origin. A request that says neither is not a browser on this page, so a session write is refused."""
+        if not self._origin_ok():
+            return False
+        return bool(self.headers.get("Origin")) or self.headers.get("Sec-Fetch-Site") == "same-origin"
+
+    def _tab(self):
+        """The paired session, if this request carries its cookie AND the token only that tab holds (sessionStorage), else None."""
+        s = self._session()
+        return s if s is not None and secrets.compare_digest(self.headers.get("X-Quarterdeck-Token", ""), s["token"]) else None
+
+    def _authorised(self):
+        """A write needs more than a cookie: the cookie's session token in a header (which another site cannot add without a
+        preflight this server never answers, and which is never handed out for a cookie), and the browser saying it came from
+        this server's own page. Or the owner's CLI token."""
+        if self._cli() and urlparse(self.path).path in CLI_WRITES:
+            return True
+        return self._tab() is not None and self._same_origin()
 
     def _body(self):
+        """The JSON object a write sent. A body that is too big, not JSON or not an object is refused, not read as empty."""
         try:
-            n = int(self.headers.get("Content-Length", "0"))
-            if n > MAX_BODY:
-                return {}                                                       # a request body is small; audio has its own limit
-            return json.loads(self.rfile.read(n) or "{}")
-        except Exception:
+            n = int(self.headers.get("Content-Length", "0") or 0)
+        except ValueError:
+            raise BodyError(400, "bad Content-Length")
+        if n < 0:
+            raise BodyError(400, "bad Content-Length")
+        if n > MAX_BODY:
+            self.close_connection = True
+            raise BodyError(413, "that request is too large")                  # a request body is small; audio has its own limit
+        raw = self.rfile.read(n) if n else b""
+        self._deadline.cancel()
+        if not raw.strip():
             return {}
+        try:
+            v = json.loads(raw)
+        except ValueError:
+            raise BodyError(400, "the request body is not JSON")
+        if not isinstance(v, dict):
+            raise BodyError(400, "the request body must be a JSON object")
+        return v
+
+    def do_HEAD(self):
+        self.send_response(405)                                                # nothing here is served to a HEAD, and nothing is read from disk
+        self.send_header("Allow", "GET, POST")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     # ---- reads ----
     def do_GET(self):
@@ -4123,10 +4534,25 @@ class Handler(SimpleHTTPRequestHandler):
             except Exception:
                 return self._send(500, "dashboard/index.html is missing", "text/plain")
             html = html.replace("__QUARTERDECK_EXT__", "".join(f'<script src="{u}"></script>\n' for u in EXT["scripts"]))
-            return self._send(200, html.replace("__QUARTERDECK_TOKEN__", TOKEN), "text/html; charset=utf-8")
+            nonce = secrets.token_urlsafe(16)                                  # this response's scripts, and no one else's, may run
+            return self._send(200, html.replace("__QUARTERDECK_NONCE__", nonce), "text/html; charset=utf-8", nonce=nonce)
 
         if u.path == "/api/health":                 # liveness only (no state, no real data), so it answers in Demo mode too
             return self._send(200, json.dumps(health()))
+
+        if u.path == "/api/session":                # a reloaded tab checking that its own token (sessionStorage) still opens its session
+            s = self._tab()                         # the cookie alone proves nothing: any server on 127.0.0.1 the browser visits receives it
+            if s is None or not self._origin_ok():
+                return self._send(401, json.dumps({"error": "unpaired"}))
+            if s.get("exp", 0) - time.time() > SESSION_TTL / 2:
+                return self._send(200, json.dumps({"ok": True}))
+            m = SimpleCookie(self.headers.get("Cookie") or "").get("qd_session")
+            session_renew(m.value)                                        # in use and past half its day: another day
+            return self._send(200, json.dumps({"ok": True}),
+                              cookie=f"qd_session={m.value}; HttpOnly; SameSite=Strict; Path=/; Max-Age={SESSION_TTL}")
+
+        if u.path.startswith("/api/") and not self._read_ok():
+            return self._send(401, json.dumps({"error": "unpaired: open Quarterdeck from the link that `quarterdeck dashboard` prints"}))
 
         if u.path.startswith("/api/") and demo_on():
             # Answered entirely from the made-up world; a path it does not know is a 404,
@@ -4171,7 +4597,7 @@ class Handler(SimpleHTTPRequestHandler):
         if u.path == "/api/rhythm":
             return self._send(200, json.dumps(rhythm_view()))
         if u.path == "/api/connections":
-            return self._send(200, json.dumps({"services": integrations_manifest.status()}))
+            return self._send(200, json.dumps({"services": integrations_manifest.status(), "store": integrations_manifest.store_info()}))
         if u.path == "/api/settings":
             return self._send(200, json.dumps(settings_view()))
         if u.path == "/api/fleet/projects":
@@ -4352,9 +4778,42 @@ class Handler(SimpleHTTPRequestHandler):
 
     # ---- writes ----
     def do_POST(self):
-        if not self._local_host() or not self._authorised():
+        try:
+            return self._post()
+        except BodyError as e:
+            return self._send(e.code, json.dumps({"error": str(e)}))
+
+    def _pair(self):
+        """Trade a one-time nonce for a session: an HttpOnly, SameSite=Strict cookie, and the API token for the page's memory."""
+        if not self._origin_ok():
+            return self._send(403, json.dumps({"error": "forbidden"}))
+        nonce = self._body().get("nonce")
+        if not isinstance(nonce, str) or not re.fullmatch(r"[A-Za-z0-9_-]{16,128}", nonce):
+            return self._send(400, json.dumps({"error": "that is not a pairing link"}))
+        ok = pair_redeem(nonce)
+        if ok is None:
+            return self._send(429, json.dumps({"error": "too many wrong links: wait a minute"}))
+        if not ok:
+            return self._send(401, json.dumps({"error": "that link has been used or has expired: run `quarterdeck dashboard` for a new one"}))
+        sid, token = session_new()
+        cookie = f"qd_session={sid}; HttpOnly; SameSite=Strict; Path=/; Max-Age={SESSION_TTL}"
+        return self._send(200, json.dumps({"token": token}), cookie=cookie)
+
+    def _post(self):
+        if not self._local_host():
             return self._send(403, json.dumps({"error": "forbidden"}))
         u = urlparse(self.path)
+        if u.path == "/api/pair":
+            return self._pair()
+        if not self._authorised():
+            unpaired = not self._cli() and self._session() is None
+            return self._send(401 if unpaired else 403, json.dumps({"error": "unpaired" if unpaired else "forbidden"}))
+
+        if u.path == "/api/logout":                 # the page's way of ending its own session
+            m = SimpleCookie(self.headers.get("Cookie") or "").get("qd_session")
+            if m:
+                session_end(m.value)
+            return self._send(200, json.dumps({"ok": True}), cookie="qd_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0")
 
         if u.path == "/api/demo":
             b = self._body()
@@ -4376,6 +4835,7 @@ class Handler(SimpleHTTPRequestHandler):
             if not 44 < n <= MAX_AUDIO:
                 return self._send(400, json.dumps({"error": "no audio, or too much of it"}))
             wav = self.rfile.read(n)
+            self._deadline.cancel()
             try:
                 vocab = speech_vocab(names if names is not None else sorted(read_json(PROJECTS_FILE, {})))
                 return self._send(200, json.dumps({"text": transcribe(wav, vocab)}))
@@ -4667,13 +5127,35 @@ class Handler(SimpleHTTPRequestHandler):
         return self._send(404, json.dumps({"error": "not found"}))
 
 
+MAX_CONNECTIONS = 96                # served at once; launchd gives the dashboard 256 file descriptors, and the rest are its own
+
+
 def make_server(port):
+    slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
+
     class Server(ThreadingHTTPServer):
         request_queue_size = 128        # the default of 5 resets connections when a burst arrives on macOS (found by smoke.py)
+
+        def process_request(self, request, client_address):
+            if not slots.acquire(blocking=False):
+                return self.shutdown_request(request)                  # full: closed at once, never queued behind idle sockets
+            try:
+                super().process_request(request, client_address)
+            except Exception:
+                slots.release()
+                raise
+
+        def process_request_thread(self, request, client_address):
+            try:
+                super().process_request_thread(request, client_address)
+            finally:
+                slots.release()
+    sessions_revoke()               # a process that held this port while the dashboard was down may have the old cookie and token: they stop working. The owner pairs again with `quarterdeck dashboard link`
     return Server(("127.0.0.1", port), Handler)
 
 
 def main():
+    os.umask(0o077)                                          # everything this server writes (state, logs, notes, pairing) is owner-only
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))   # atexit stops the helpers; non-zero so launchd restarts us
     if os.environ.get("QUARTERDECK_DEMO") == "1":
         demo_set(True)
@@ -4719,4 +5201,12 @@ EXTENSIONS = load_extensions()
 
 
 if __name__ == "__main__":
+    if sys.argv[1:3] == ["sessions", "revoke"]:      # `quarterdeck dashboard sessions revoke`: every paired browser is signed out, in a running dashboard too
+        sessions_revoke()
+        print("every paired browser is signed out; `quarterdeck dashboard link` pairs one again")
+        sys.exit(0)
+    if sys.argv[1:2] == ["link"]:           # `quarterdeck dashboard link`: a fresh one-time link, made by writing into state/, never over HTTP
+        STATE.mkdir(parents=True, exist_ok=True)
+        print(pair_link())
+        sys.exit(0)
     main()

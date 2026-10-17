@@ -23,7 +23,7 @@ import home as _home
 ROOT = Path(__file__).resolve().parent.parent
 SAFE_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,40}$")
 KEYS = ("languages", "frameworks", "package_managers", "deploy_targets", "infrastructure")
-MAX_KNOWLEDGE = 6000          # characters per pack: a note, not a manual
+MAX_KNOWLEDGE = 8000          # characters per pack: a note, not a manual
 
 
 def dirs():
@@ -41,7 +41,7 @@ def _clean(raw, folder):
         text = (folder / "knowledge.md").read_text()[:MAX_KNOWLEDGE]
     except OSError:
         return None
-    return {"id": raw["id"], "label": str(raw.get("label") or raw["id"])[:60], "about": str(raw.get("about") or "")[:200], "tested": str(raw.get("tested") or "")[:600], "match": m, "knowledge": text.strip(), "source": str(folder)}
+    return {"id": raw["id"], "label": str(raw.get("label") or raw["id"])[:60], "about": str(raw.get("about") or "")[:200], "tested": str(raw.get("tested") or "")[:1200], "match": m, "knowledge": text.strip(), "source": str(folder)}
 
 
 def load(extra=None):

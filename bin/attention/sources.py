@@ -13,8 +13,12 @@ import json
 import os
 import re
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import safegit as _sg
 
 EMAIL = re.compile(r"[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,120}")
 AGENT_TRAILER = "Co-Authored-By: Claude"      # commits the agents make under his name carry this trailer; git drops them, so no message ever reaches this program
@@ -39,7 +43,9 @@ def parse_ts(value):
 # ---- git ----------------------------------------------------------------------------
 def repo_email(path, run=subprocess.run):
     try:
-        r = run(["git", "-C", str(path), "config", "user.email"], capture_output=True, text=True, timeout=10)
+        if _sg.refusal(path):
+            return ""
+        r = run(["git", *_sg.flags(), "-C", str(path), "config", "user.email"], capture_output=True, text=True, timeout=10)
         e = (r.stdout or "").strip()
         return e if r.returncode == 0 and EMAIL.fullmatch(e) else ""
     except (OSError, subprocess.SubprocessError):
@@ -72,8 +78,10 @@ def git_days(path, email, since_day, run=subprocess.run):
     p = Path(str(path)).expanduser()
     if not (p / ".git").exists() or not EMAIL.fullmatch(email or "") or not DAY.fullmatch(since_day or ""):
         return {}
+    if _sg.refusal(p):
+        return {}
     try:
-        r = run(["git", "-c", "log.showSignature=false", "-c", "core.fsmonitor=false", "-C", str(p), "log", "--no-merges", "--fixed-strings", "--regexp-ignore-case",
+        r = run(["git", *_sg.flags(), "-c", "log.showSignature=false", "-C", str(p), "log", "--no-merges", "--fixed-strings", "--regexp-ignore-case",
                  "--author=" + email, "--invert-grep", "--grep=" + AGENT_TRAILER, "--since=" + since_day,
                  "--date=format-local:%Y-%m-%d %H", "--pretty=format:%ad", "--shortstat"], capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.SubprocessError):

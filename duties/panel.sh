@@ -45,7 +45,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --panel)  PANEL="${2:-}"; shift ;;
     --target|--path) TARGET="${2:-}"; shift ;;
-    --issue)  ISSUE="${2:-}"; shift ;;
+    --issue)  ISSUE="${2:-}"; need_num "--issue" "$ISSUE"; shift ;;
     --idea|--question) IDEA="${2:-}"; shift ;;
     --from)   FROM="${2:-}"; shift ;;
     --seats)  SEATS="$(tr ',' ' ' <<<"${2:-}")"; shift ;;
@@ -71,7 +71,7 @@ if [ -n "$RESUME" ]; then
   SEATS="$(jq -r '[.seats[].name] | join(" ")' "$RTX")"
   case "$(jq -r .mode "$RTX")" in
     findings) ;;
-    plan) ISSUE="${TARGET#issue #}" ;;
+    plan) ISSUE="${TARGET#issue #}"; need_num "the resumed issue" "$ISSUE" ;;
     *) die "panel: only a findings or plan panel can be resumed" ;;
   esac
 fi

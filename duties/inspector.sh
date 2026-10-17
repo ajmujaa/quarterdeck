@@ -40,8 +40,8 @@ APPLY=0 PR="" ISSUE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --apply) APPLY=1 ;;
-    --pr)    PR="${2:-}"; shift ;;
-    --issue) ISSUE="${2:-}"; shift ;;
+    --pr)    PR="${2:-}"; need_num "--pr" "$PR"; shift ;;
+    --issue) ISSUE="${2:-}"; need_num "--issue" "$ISSUE"; shift ;;
     *) die "inspector: unknown argument '$1'" ;;
   esac
   shift
@@ -55,8 +55,11 @@ done
 acquire_lock "inspector-$PROJECT-$PR"
 export QUARTERDECK_RUN_ID="$(tr '/' '_' <<<"$REPO")-inspect-$PR"
 
-meta=$(guard 60 "$GH" pr view "$PR" -R "$REPO" --json number,title,body,state,headRefName 2>>"$LOG_FILE") \
+meta=$(guard 60 "$GH" pr view "$PR" -R "$REPO" --json number,title,body,state,headRefName,isCrossRepository 2>>"$LOG_FILE") \
   || die "cannot read $REPO#$PR"
+if why=$(fork_refuse "$meta"); then
+  say "quarterdeck: BLOCKED — $why"; record_run "$PROJECT" inspector BLOCKED "#$PR — $why"; exit 0
+fi
 title=$(jq -r .title <<<"$meta")
 body=$(jq -r .body <<<"$meta")
 [ "$(jq -r .state <<<"$meta")" = OPEN ] || say "quarterdeck: note — #$PR is $(jq -r .state <<<"$meta")"
@@ -87,12 +90,12 @@ working_on "PR #$PR — $title"
 say "quarterdeck: inspector on $REPO#$PR — $title"
 
 WT="$QUARTERDECK_HOME/workspace/wt-inspect-${PROJECT}-${PR}"
-cleanup_wt() { git -C "$SOURCE_REPO_DIR" worktree remove --force "$WT" >/dev/null 2>&1 || true; }
+cleanup_wt() { safe_git -C "$SOURCE_REPO_DIR" worktree remove --force "$WT" >/dev/null 2>&1 || true; }
 trap 'cleanup_wt' EXIT
 
 # Build the pull request's own head, not the branch name — a fork's branch does
 # not exist locally, and refs/pull/N/head always does.
-guard 180 git -C "$SOURCE_REPO_DIR" fetch -q origin "pull/$PR/head" 2>>"$LOG_FILE" \
+guard 180 "${SAFE_GIT[@]}" -C "$SOURCE_REPO_DIR" fetch -q origin "pull/$PR/head" 2>>"$LOG_FILE" \
   || die "could not fetch pull/$PR/head"
 worktree_at "$SOURCE_REPO_DIR" "$WT" FETCH_HEAD || die "could not create a worktree at $WT"
 
@@ -101,7 +104,7 @@ worktree_at "$SOURCE_REPO_DIR" "$WT" FETCH_HEAD || die "could not create a workt
 verify_out="not configured" verify_rc="-"
 if [ -n "$VERIFY" ]; then
   say "  running: $VERIFY"
-  verify_out=$(cd "$WT" && guard 900 bash -c "$VERIFY" 2>&1); verify_rc=$?
+  project_exec check 900 "$WT" "$VERIFY"; verify_rc=$?; verify_out=$EXEC_OUT      # the pull request's own code: minimal environment, sandboxed
   verify_out=$(tail -40 <<<"$verify_out")
   say "  verify exit $verify_rc"
 fi
@@ -148,7 +151,9 @@ $(crew_role inspector)
 --- THIS INSPECTION ---
 
 You are looking at the working tree of pull request #$PR, checked out at its own
-head. The change is already applied around you: \`git diff origin/$(project_get "$PROJECT" default_branch main)...HEAD\` shows it.
+head. The change is already applied around you, and its diff is below (read by the harness; you have no git).
+
+$(wt_diff "$WT" "origin/$(project_get "$PROJECT" default_branch main)" | untrusted "diff of pull request #$PR")
 
 $(printf '%s\n' "$claim" | untrusted "pull request and issue text")
 
@@ -241,7 +246,7 @@ say "  $state — $detail"
 say ""
 
 if [ "$APPLY" = 1 ]; then
-  if guard 60 "$GH" pr comment "$PR" -R "$REPO" --body "$body_out" >/dev/null 2>>"$LOG_FILE"; then
+  if gh_post 60 pr comment "$PR" -R "$REPO" --body "$body_out" >/dev/null 2>>"$LOG_FILE"; then
     say "quarterdeck: verdict posted to $REPO#$PR"
     record_run "$PROJECT" inspector "$state" "#$PR — $detail" "https://github.com/$REPO/pull/$PR"
   else

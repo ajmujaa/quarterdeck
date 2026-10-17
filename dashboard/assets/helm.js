@@ -5,11 +5,6 @@
 
 import {createSegmenter, listenParams} from "./turns.js";
 
-const TAP = `class Tap extends AudioWorkletProcessor {
-  process(inputs){ const ch = inputs[0][0]; if(ch) this.port.postMessage(ch.slice()); return true; }
-}
-registerProcessor("tap", Tap);`;
-
 export function toWav16k(chunks, rate) {
   let n = 0; for (const c of chunks) n += c.length;
   const all = new Float32Array(n); let o = 0;
@@ -36,7 +31,7 @@ export async function openMic({onLevel, onSegment, onOnset, onPeek, timing = () 
   const stream = await navigator.mediaDevices.getUserMedia({audio: {channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true}});
   const ctx = new AudioContext();
   await Promise.race([ctx.resume(), new Promise(r => setTimeout(r, 400))]);
-  await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([TAP], {type: "text/javascript"})));
+  await ctx.audioWorklet.addModule("/assets/helm-tap.js");
   const node = new AudioWorkletNode(ctx, "tap"), mute = ctx.createGain();
   mute.gain.value = 0;
   ctx.createMediaStreamSource(stream).connect(node);

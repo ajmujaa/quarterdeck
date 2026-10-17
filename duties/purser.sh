@@ -46,7 +46,7 @@ GH="${QUARTERDECK_GH:-gh}"   # a seam for the self-test: lib.sh puts the real gh
 ISSUE="" APPLY=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --issue) ISSUE="${2:-}"; shift ;;
+    --issue) ISSUE="${2:-}"; need_num "--issue" "$ISSUE"; shift ;;
     --apply) APPLY=1 ;;
     *) die "purser: unknown argument '$1'" ;;
   esac
@@ -105,6 +105,11 @@ check is one a person can run: press Tab until it is focused, see the
 indicator, then activate it with Enter or Space. This is a requirement, not an
 extra: a control that cannot be seen or reached by keyboard is not finished.
 
+At least one acceptance check exercises the behaviour: it names the action (press,
+type, call, run) and what must then be seen or returned. A check that only says an
+element, selector, id or string exists is never only that: it passes while the
+feature does nothing. Write the existence check only beside one that does something.
+
 If it cannot be started — it is really several pieces of work, it hinges on a
 product or pricing decision only a person can make, it is research or an epic
 with no code to write, or you cannot tell what done looks like — do NOT invent
@@ -159,6 +164,16 @@ if ! grep -q '^RESULT: READY' <<<"$result" || ! jq -e '
   exit 1
 fi
 json=$(jq -c '.requirements |= .[0:8]' <<<"$json")
+# #86: a check that only looks for a thing (grep for an id, the string is on the page) passes while the feature does nothing.
+# At least one acceptance check has to make the thing do something and say what then happens.
+acts=0
+while IFS= read -r a; do printf '%s' "$a" | python3 "$QUARTERDECK_DIR/bin/behaviour.py" accept && acts=1; done < <(jq -r '.requirements[].accept' <<<"$json")
+if [ "$acts" = 0 ]; then
+  log "$PROJECT: purser: every acceptance check only looks for something to exist — logs/runs/$QUARTERDECK_RUN_ID.json"
+  say "quarterdeck: every acceptance check only proves that something exists (a grep, a selector, a string); at least one has to exercise the behaviour — nothing written"
+  record_run "$PROJECT" purser ERROR "#$ISSUE acceptance checks only prove existence"
+  exit 1
+fi
 n=$(jq '.requirements | length' <<<"$json")
 
 block=$(jq -r --arg o "$MARK_OPEN" --arg c "$MARK_CLOSE" '
@@ -188,7 +203,7 @@ fresh=$(guard 60 "$GH" issue view "$ISSUE" -R "$REPO" --json body --jq .body 2>>
 # second trap would replace it.)
 tmp=$(mktemp)
 printf '%s\n\n%s\n' "$(without_block <<<"$fresh")" "$block" > "$tmp"
-guard 60 "$GH" issue edit "$ISSUE" -R "$REPO" --body-file "$tmp" >/dev/null 2>>"$LOG_FILE"; rc=$?
+gh_post 60 issue edit "$ISSUE" -R "$REPO" --body-file "$tmp" >/dev/null 2>>"$LOG_FILE"; rc=$?
 rm -f "$tmp"
 [ $rc = 0 ] || { record_run "$PROJECT" purser ERROR "#$ISSUE could not update the issue"; die "purser: could not update #$ISSUE (see $LOG_FILE)"; }
 say "  requirements added to #$ISSUE"

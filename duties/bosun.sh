@@ -67,7 +67,7 @@ WT="$QUARTERDECK_HOME/workspace/wt-bosun-${PROJECT}"
 TMP="$(mktemp -d)"
 cleanup() {
   [ "${BASH_SUBSHELL:-0}" = 0 ] || return 0
-  git -C "$SOURCE_REPO_DIR" worktree remove --force "$WT" >/dev/null 2>&1 || true
+  safe_git -C "$SOURCE_REPO_DIR" worktree remove --force "$WT" >/dev/null 2>&1 || true
   rm -rf "$TMP"
 }
 trap cleanup EXIT
@@ -85,8 +85,8 @@ working_on "walking the deck of $PROJECT"
 say "quarterdeck: bosun on $REPO"
 
 # ---- the harness walks the deck ---------------------------------------------------------------------------------------------------------
-guard 120 git -C "$SOURCE_REPO_DIR" fetch -q origin 2>>"$LOG_FILE" || log "fetch failed; walking what is local"   # remote-tracking refs only
-BASEREF="origin/$BASE"; git -C "$SOURCE_REPO_DIR" rev-parse -q --verify "$BASEREF" >/dev/null || BASEREF="$BASE"
+guard 120 "${SAFE_GIT[@]}" -C "$SOURCE_REPO_DIR" fetch -q origin 2>>"$LOG_FILE" || log "fetch failed; walking what is local"   # remote-tracking refs only
+BASEREF="origin/$BASE"; safe_git -C "$SOURCE_REPO_DIR" rev-parse -q --verify "$BASEREF" >/dev/null || BASEREF="$BASE"
 worktree_at "$SOURCE_REPO_DIR" "$WT" "$BASEREF" || die "could not create a worktree at $WT"
 
 skipped=""
@@ -190,13 +190,13 @@ fi
 existing=$(guard 60 "$GH" issue list -R "$REPO" --state open --limit 100 --json number,title --jq "[.[] | select(.title == \"$TITLE\")] | first | .number // empty" 2>>"$LOG_FILE" || true)
 body_for "$ranked" | head -c 60000 > "$TMP/issue-body.md"
 if [ -n "$existing" ]; then
-  guard 60 "$GH" issue edit "$existing" -R "$REPO" --body-file "$TMP/issue-body.md" >/dev/null 2>>"$LOG_FILE" \
+  gh_post 60 issue edit "$existing" -R "$REPO" --body-file "$TMP/issue-body.md" >/dev/null 2>>"$LOG_FILE" \
     || { record_run "$PROJECT" bosun ERROR "could not update issue #$existing"; die "could not update the summary issue"; }
   record_run "$PROJECT" bosun DECK "${verdict#DECK } — summary issue #$existing updated" "https://github.com/$REPO/issues/$existing"
 elif [ "$n" = 0 ]; then
   record_run "$PROJECT" bosun DECK "CLEAR — no summary issue to update, none created"
 else
-  url=$(guard 60 "$GH" issue create -R "$REPO" --title "$TITLE" --body-file "$TMP/issue-body.md" 2>>"$LOG_FILE") \
+  url=$(gh_post 60 issue create -R "$REPO" --title "$TITLE" --body-file "$TMP/issue-body.md" 2>>"$LOG_FILE") \
     || { record_run "$PROJECT" bosun ERROR "could not create the summary issue"; die "could not create the summary issue"; }
   record_run "$PROJECT" bosun DECK "${verdict#DECK } — summary issue created" "$url"
 fi

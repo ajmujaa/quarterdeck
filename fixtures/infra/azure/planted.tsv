@@ -1,0 +1,9 @@
+8e3af657	Owner role at subscription scope	prompt
+allowBlobPublicAccess: true	public blob access	prompt
+supportsHttpsTrafficOnly: false	plain HTTP allowed on storage	prompt
+sourceAddressPrefix: '*'	SSH open to any source	prompt
+enableSoftDelete: false	Key Vault without soft delete or purge protection	prompt
+listKeys()	storage key written to deployment outputs	prompt
+Fixture-Password-1	secret as a parameter default	prompt
+Fixture-Prod-Password-2	secret in a parameter file	prompt
+--mode Complete	Complete mode deletes unlisted resources	prompt

@@ -111,7 +111,7 @@ def main():
         print("  skip  Helm phrases and feed panels: node is not installed")
     N = lambda s: node["seconds"][str(s)] if node else None
 
-    check("demo world: five made-up projects and nine kinds of agent (slide 2)", len(PROJECTS) == 5 and len(DUTIES) == 9, (len(PROJECTS), DUTIES))
+    check("demo world: five made-up projects and twenty-one kinds of agent (slide 2)", len(PROJECTS) == 5 and len(DUTIES) == 21, (len(PROJECTS), DUTIES))
     s0 = running(0)
     check(f"{talk(0)} restart: one agent already building mobile issue 14, four pull requests open",
           len(s0) == 1 and s0[0][0] == "wayfarer-mobile" and "#14" in s0[0][2] and len(prs(0)) == 4, (s0, prs(0)))

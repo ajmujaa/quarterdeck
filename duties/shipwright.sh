@@ -31,7 +31,7 @@ APPLY=0 ISSUE="" PLAN=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --apply) APPLY=1 ;;
-    --issue) ISSUE="${2:-}"; shift ;;
+    --issue) ISSUE="${2:-}"; need_num "--issue" "$ISSUE"; shift ;;
     --plan)  PLAN="${2:-}"; shift ;;
     *) die "shipwright: unknown argument '$1'" ;;
   esac
@@ -76,7 +76,7 @@ slug=$(tr '[:upper:]' '[:lower:]' <<<"$title" | sed -E 's/[^a-z0-9]+/-/g; s/^-+|
 BRANCH="fix/${ISSUE}-${slug}"
 WT="$QUARTERDECK_HOME/workspace/wt-${PROJECT}-${ISSUE}"
 
-cleanup_wt() { git -C "$SOURCE_REPO_DIR" worktree remove --force "$WT" >/dev/null 2>&1 || true; }
+cleanup_wt() { safe_git -C "$SOURCE_REPO_DIR" worktree remove --force "$WT" >/dev/null 2>&1 || true; }
 trap 'cleanup_wt' EXIT
 
 working_on "issue #$ISSUE — $title"
@@ -84,26 +84,30 @@ say "quarterdeck: shipwright on $REPO#$ISSUE — $title"
 
 # Always branch from the freshest base, never from whatever the working copy
 # happens to be sitting on.
-guard 120 git -C "$SOURCE_REPO_DIR" fetch -q origin "$BASE" 2>>"$LOG_FILE" || log "fetch failed; using local $BASE"
+guard 120 "${SAFE_GIT[@]}" -C "$SOURCE_REPO_DIR" fetch -q origin "$BASE" 2>>"$LOG_FILE" || log "fetch failed; using local $BASE"
 cleanup_wt
-git -C "$SOURCE_REPO_DIR" worktree add -q --detach "$WT" "origin/$BASE" 2>>"$LOG_FILE" \
-  || git -C "$SOURCE_REPO_DIR" worktree add -q --detach "$WT" "$BASE" 2>>"$LOG_FILE" \
+safe_git -C "$SOURCE_REPO_DIR" worktree add -q --detach "$WT" "origin/$BASE" 2>>"$LOG_FILE" \
+  || safe_git -C "$SOURCE_REPO_DIR" worktree add -q --detach "$WT" "$BASE" 2>>"$LOG_FILE" \
   || die "could not create a worktree at $WT"
+worktree_pin "$WT" || die "could not pin the worktree's .git file"
 # -B, not -b: a previous dry run on this issue leaves the branch behind, and a
 # re-run should start again from base rather than refuse to run at all.
-git -C "$WT" checkout -q -B "$BRANCH" 2>>"$LOG_FILE" || die "could not create branch $BRANCH"
+safe_git -C "$WT" checkout -q -B "$BRANCH" 2>>"$LOG_FILE" || die "could not create branch $BRANCH"
 
 # A worktree has no node_modules, so any verify command that needs them fails
 # for a reason that has nothing to do with the change. Borrow the real one.
-if [ -d "$SOURCE_REPO_DIR/node_modules" ] && [ ! -e "$WT/node_modules" ]; then
-  ln -s "$SOURCE_REPO_DIR/node_modules" "$WT/node_modules"
-fi
+# Recorded (<wt>.nmlink) the way worktree_at does it, or the check sandbox would not let the link in (round 6).
+worktree_nm_borrow "$SOURCE_REPO_DIR" "$WT"
+
+# What the verify command is made of, before the model has touched anything (see model_diff_gate).
+INPUTS_BEFORE="$(verify_inputs "$WT")"
 
 # Baseline every gate the project declares BEFORE touching anything. A repo
 # with pre-existing failures would otherwise block every change on faults it
 # already had.
 say "  baselining local checks"
 BASE_CHECKS="$(run_checks "$PROJECT" "$WT")"
+wt_mark "$WT"          # what git ignores now (the node_modules link, build output): the gate examines every ignored file added after this
 CHECK_LIST="$(jq -rs 'if length == 0 then "" else map("  " + .cmd + "   (currently exit " + (.rc|tostring) + ")") | join("\n") end' <<<"$BASE_CHECKS")"
 
 prompt="$(preamble "$PROJECT")
@@ -149,7 +153,7 @@ RESULT: NEEDS_HUMAN <what you need decided>
 RESULT: NO_CHANGE <why nothing should change>"
 
 result=$(claude_run "$WT" "$prompt" \
-  "Read,Edit,Write,Grep,Glob,Bash(npx tsc*),Bash(npm run*),Bash(node*),Bash(git diff*),Bash(git status*),Bash(git log*)" \
+  "Read,Edit,Write,Grep,Glob,Bash(npx tsc*),Bash(npm run*),Bash(node*)" \
   "WebFetch,WebSearch,Bash(git push*),Bash(git commit*),Bash(git checkout*),Bash(git reset*),Bash(gh *),Bash(rm -rf*),Bash(curl*),Bash(ssh*),Bash(npm publish*),Bash(npm install*)")
 rc=$?
 [ $rc = 2 ] && { say "quarterdeck: usage limit reached — worktree discarded"; exit 0; }
@@ -176,7 +180,7 @@ esac
 # Final paths of everything changed, one per line. Not `status --porcelain`:
 # its second field is a rename's OLD name, so a file moved into a forbidden
 # path was checked under the name it left.
-changed=$( { git -C "$WT" diff --name-only HEAD; git -C "$WT" ls-files --others --exclude-standard; } | sort -u)
+changed=$(wt_changed "$WT") || { record_run "$PROJECT" shipwright REFUSED "#$ISSUE — the worktree's .git file was changed"; die "refused: the worktree's .git file was changed"; }
 [ -n "$changed" ] || {
   say "  claimed FIXED but changed nothing"
   record_run "$PROJECT" shipwright ERROR "#$ISSUE claimed FIXED with an empty diff"
@@ -189,15 +193,29 @@ while read -r forbidden; do
   [ -n "$forbidden" ] || continue
   # A literal prefix, not a regex: a '.' or '[' in a path must mean itself.
   # Passed through the environment: awk -v would read backslashes as escapes.
-  if F="$forbidden" awk 'index($0, ENVIRON["F"]) == 1 { hit = 1 } END { exit !hit }' <<<"$changed"; then
+  if F="$forbidden" awk 'index(tolower($0), tolower(ENVIRON["F"])) == 1 { hit = 1 } END { exit !hit }' <<<"$changed"; then
     say "  REFUSED: touched a forbidden path ($forbidden)"
     record_run "$PROJECT" shipwright REFUSED "#$ISSUE touched $forbidden"
     die "refused: the change touches $forbidden"
   fi
 done < <(jq -r --arg p "$PROJECT" '(.[$p].forbidden_paths // [])[]' "$PROJECTS_FILE")
 
+# A model-made change to CI, dependencies, tool config or the verify command's own inputs is refused BEFORE any check runs: the checks
+# are the next thing the harness executes, and what they run is exactly what such a change would control.
+if ! why=$(printf '%s\n' "$changed" | model_diff_gate "$PROJECT" "$WT" "$INPUTS_BEFORE" "$PLAN"); then
+  say "  REFUSED: $why"
+  record_run "$PROJECT" shipwright REFUSED "#$ISSUE — $why"
+  die "refused: $why"
+fi
+
 say "  re-running local checks"
 AFTER_CHECKS="$(run_checks "$PROJECT" "$WT")"
+# The checks ran project code that may write in the worktree: the gate again, on what is there now (S1), before anything can be committed.
+if ! why=$(post_checks_gate "$PROJECT" "$WT" "$INPUTS_BEFORE" "$changed" "$PLAN"); then
+  say "  REFUSED: $why"
+  record_run "$PROJECT" shipwright REFUSED "#$ISSUE — $why"
+  die "refused: $why"
+fi
 REGRESSIONS="$(check_regressions "$BASE_CHECKS" "$AFTER_CHECKS")"
 if [ "$(jq length <<<"$REGRESSIONS")" != 0 ]; then
   say ""
@@ -213,7 +231,7 @@ fi
 
 say ""
 say "── $REPO#$ISSUE — $summary ──"
-git -C "$WT" --no-pager diff --stat | sed 's/^/  /' >&2
+safe_git -C "$WT" --no-pager diff --cached --stat | sed 's/^/  /' >&2
 
 if [ "$APPLY" != 1 ]; then
   say ""
@@ -224,18 +242,17 @@ if [ "$APPLY" != 1 ]; then
   exit 0
 fi
 
-git -C "$WT" add -A
+# post_checks_gate staged exactly what passed (and checked the staged blobs); nothing is staged again here
 # Commit as whoever this checkout is configured as — the same identity as
 # every other commit on the repository. A made-up "quarterdeck" address is not a
 # GitHub account, and Vercel refuses to deploy a preview for a commit it cannot
 # tie to one: both of Quarterdeck's first open pull requests were blocked for
 # exactly that, while every human one deployed. Quarterdeck stays credited in the
 # message and the pull request body.
-ident_email=$(git -C "$WT" config user.email || true)
-[ -n "$ident_email" ] || die "no git identity configured for $PROJECT — set user.name and user.email in $(project_path "$PROJECT") so commits can be tied to a GitHub account"
-git -C "$WT" commit -q -m "$(printf 'fix: %s\n\nCloses #%s\n\nOpened by the Quarterdeck shipwright.\n' "$title" "$ISSUE")" \
+commit_identity "$PROJECT" "$WT" || die "no commit identity for $PROJECT: GitHub could not be asked for the account's no-reply address and the checkout has no user.email (set \"git\": {\"name\", \"email\"} in the registry)"
+safe_git -C "$WT" ${COMMIT_ID[@]+"${COMMIT_ID[@]}"} commit -q -m "$(printf 'fix: %s\n\nCloses #%s\n\nOpened by the Quarterdeck shipwright.\n' "$title" "$ISSUE")" \
   || die "commit failed"
-guard 180 git -C "$WT" push -q -u origin "$BRANCH" 2>>"$LOG_FILE" || die "push failed"
+safe_git_guard 180 -C "$WT" push -q -u origin "$BRANCH" 2>>"$LOG_FILE" || die "push failed"
 
 pr_body=$(cat <<EOF
 $summary
@@ -252,7 +269,7 @@ $(checks_summary "$AFTER_CHECKS")
 Every one of those was also run on an untouched tree first, and the harness refuses to commit anything that makes one of them worse. That is the whole of what has been proven — it is not a claim that the change was exercised by hand or looked at in a browser.
 EOF
 )
-if url=$(guard 90 "$GH" pr create -R "$REPO" --base "$BASE" --head "$BRANCH" \
+if url=$(gh_post 90 pr create -R "$REPO" --base "$BASE" --head "$BRANCH" \
            --title "fix: $title" --body "$pr_body" 2>>"$LOG_FILE"); then
   say "  ✓ $url"
   record_run "$PROJECT" shipwright "PR" "#$ISSUE → $url" "$url"

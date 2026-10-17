@@ -5,6 +5,7 @@
     bin/guard.py --names            also the names in your denylist, and any e-mail address that is not an obvious placeholder
     bin/guard.py --staged           only what is staged for the next commit (for a pre-commit hook)
     bin/guard.py --history          every line ever added in any commit, secrets (and names with --names)
+    bin/guard.py --worktree-secrets DIR   paths in DIR (tracked or not) whose content has a credential shape, one per line
     bin/guard.py install-hook       a pre-commit hook that runs `guard.py --staged --names` and refuses the commit on a hit
 
 The denylist is a plain text file in YOUR data folder (guard-denylist.txt, one term per line, # for comments, matched whole word, ignoring case),
@@ -20,17 +21,18 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import home as _home
+import safegit as _safegit
 
 SECRETS = [
     ("an Anthropic API key", r"sk-ant-[A-Za-z0-9_-]{20,}"),
-    ("an API key (sk-)", r"\bsk-[A-Za-z0-9]{32,}"),
-    ("a GitHub token", r"\bgh[pousr]_[A-Za-z0-9]{30,}"),
-    ("a GitHub fine-grained token", r"\bgithub_pat_[A-Za-z0-9_]{40,}"),
-    ("a Slack token", r"\bxox[abprs]-[A-Za-z0-9-]{10,}"),
+    ("an API key (sk-)", r"sk-[A-Za-z0-9]{32,}"),
+    ("a GitHub token", r"gh[pousr]_[A-Za-z0-9]{30,}"),
+    ("a GitHub fine-grained token", r"github_pat_[A-Za-z0-9_]{40,}"),
+    ("a Slack token", r"xox[abprs]-[A-Za-z0-9-]{10,}"),
     ("a Slack webhook", r"hooks\.slack\.com/services/T[A-Z0-9]+/B[A-Z0-9]+/[A-Za-z0-9]+"),
-    ("an AWS access key id", r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"),
-    ("a Google API key", r"\bAIza[0-9A-Za-z_-]{35}"),
-    ("a Stripe live key", r"\b[sr]k_live_[0-9a-zA-Z]{20,}"),
+    ("an AWS access key id", r"(?<![A-Z0-9])(?:AKIA|ASIA)[0-9A-Z]{16}"),
+    ("a Google API key", r"AIza[0-9A-Za-z_-]{35}"),
+    ("a Stripe live key", r"[sr]k_live_[0-9a-zA-Z]{20,}"),
     ("a private key", r"-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP |ENCRYPTED )?PRIVATE KEY"),
 ]
 EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@([A-Za-z0-9.-]+\.[A-Za-z]{2,})")
@@ -38,7 +40,7 @@ OK_MAIL_DOMAINS = ("example.com", "example.org", "example.net", "example", "test
 SKIP_DIRS = ("dashboard/assets/vendor/", ".git/", "node_modules/")
 SKIP_EXT = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".woff", ".woff2", ".ttf", ".pdf", ".zip", ".onnx", ".bin", ".gguf", ".mp3", ".wav")
 MAX_BYTES = 1_000_000
-HOOK = "#!/bin/sh\n# installed by bin/guard.py: refuse a commit that holds a secret or a private name\nexec python3 \"%s\" --staged --names\n"
+HOOK = "#!/bin/sh\n# installed by bin/guard.py: refuse a commit that holds a secret or a private name\nexec python3 \"%s\" --staged --names \"$(git rev-parse --show-toplevel)\"\n"
 
 
 def mask(s):
@@ -79,14 +81,21 @@ def scan_line(line, names, check_mail):
     return hits
 
 
+# core.quotepath=false and -z: git writes a non-ASCII or special file name C-quoted ("cl\\303\\251.txt", with the quotes), a name no file or `git show :name` opens, so such a
+# file was silently skipped. Names are read NUL-separated and spelled as they are on disk. No hook, fsmonitor, pager or external diff either.
+GIT_FLAGS = ["-c", "core.quotepath=false", "-c", "core.fsmonitor=false", "-c", "core.pager=cat"]
+
+
 def git(root, *args):
-    r = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True)
+    if _safegit.refusal(root):          # a folder whose own git settings make git run programs is not touched
+        return ""
+    r = subprocess.run(["git", *GIT_FLAGS, "-C", str(root), *args], capture_output=True, text=True, errors="replace")
     return r.stdout if r.returncode == 0 else ""
 
 
 def tracked_files(root, staged=False):
-    out = git(root, "diff", "--cached", "--name-only", "--diff-filter=ACM") if staged else git(root, "ls-files")
-    return [f for f in out.splitlines() if f and not f.startswith(SKIP_DIRS) and not f.lower().endswith(SKIP_EXT)]
+    out = git(root, "diff", "--cached", "--name-only", "-z", "--no-renames", "--diff-filter=ACM") if staged else git(root, "ls-files", "-z")
+    return [f for f in out.split("\0") if f and not f.startswith(SKIP_DIRS) and not f.lower().endswith(SKIP_EXT)]
 
 
 def file_text(root, rel, staged):
@@ -112,7 +121,9 @@ def scan(root, names=(), check_mail=False, staged=False):
 
 def scan_history(root, names=(), check_mail=False, limit=3_000_000):
     out, commit, path, seen = [], "", "", 0
-    log = subprocess.Popen(["git", "-C", str(root), "log", "--all", "-p", "--no-color", "-U0", "--format=@@COMMIT %h"], stdout=subprocess.PIPE, text=True, errors="replace")
+    if _safegit.refusal(root):
+        return out
+    log = subprocess.Popen(["git", *GIT_FLAGS, *_safegit.flags(), "-C", str(root), "log", "--all", "-p", "--no-textconv", "--no-ext-diff", "--no-color", "-U0", "--format=@@COMMIT %h"], stdout=subprocess.PIPE, text=True, errors="replace")
     for line in log.stdout:
         seen += 1
         if seen > limit:
@@ -126,6 +137,91 @@ def scan_history(root, names=(), check_mail=False, limit=3_000_000):
                 out.append((f"{path} @{commit}", 0, kind, shown))
     log.terminate()
     return out
+
+
+SCREEN_MAX_BYTES = 64_000_000     # a file bigger than this is not read through: it is denied unscreened
+# dependency and build-output folders: screened after the project's own files, and denied whole if the budget runs out inside them
+LATER = {"node_modules", ".venv", "venv", "target", "vendor", ".next", "dist", "build", ".gradle", "Pods", "__pycache__", ".cache"}
+
+
+def _has_secret(path):
+    """True when the file holds a credential shape. Read in 1 MB pieces with an overlap, so a key past the first megabyte is found too."""
+    rx = re.compile("|".join(f"(?:{pat})" for _, pat in SECRETS))
+    tail = ""
+    with open(path, "rb") as fh:
+        while True:
+            chunk = fh.read(MAX_BYTES)
+            if not chunk:
+                return False
+            text = tail + chunk.decode("utf-8", "replace")
+            if rx.search(text):
+                return True
+            tail = text[-200:]
+
+
+def worktree_secrets(root, max_files=200_000, max_secs=60.0):
+    """(hits, deny_dirs, complete) for root (G11). hits: relative paths whose CONTENT has a credential shape, tracked or not, whatever they are called,
+    plus every file the screen could not judge (it could not be opened, it is too big to read through, or it is a link that leads out of root).
+    The project's own files are screened first and node_modules folders last. Past the file or time budget: a node_modules folder not finished is
+    returned in deny_dirs (to be denied whole); if the project's own files were not finished, complete is False and the caller must not go on."""
+    import time
+    root = os.path.realpath(root)
+    stop = time.monotonic() + max_secs
+    hits, later, seen, outlinks = [], [], 0, []
+    try:
+        borrowed = Path(root + ".nmlink").read_text()     # the node_modules link worktree_at made (bin/lib.sh), the one folder link let out
+    except OSError:
+        borrowed = None
+
+    def look(d, f):
+        p = os.path.join(d, f)
+        rel = os.path.relpath(p, root)
+        try:
+            if os.path.islink(p):
+                t = os.path.realpath(p)
+                # a file outside is not followed, so the link is denied; one inside is denied under the link's name too when it holds a secret
+                if os.path.isfile(t) and (not t.startswith(root + os.sep) or _has_secret(t)):
+                    hits.append(rel)
+                return
+            st = os.stat(p)
+            if not os.path.isfile(p):
+                return
+            if st.st_size > SCREEN_MAX_BYTES or _has_secret(p):
+                hits.append(rel)
+        except OSError:
+            hits.append(rel)                             # could not be opened: not called clean
+
+    def walk(top, outer):
+        nonlocal seen
+        for d, dirs, files in os.walk(top):
+            keep = []
+            for x in dirs:
+                if x == ".git":
+                    continue
+                lp = os.path.join(d, x)
+                if os.path.islink(lp):                   # not walked; one that leads out of the worktree is denied whole
+                    t = os.path.realpath(lp)
+                    if not t.startswith(root + os.sep) and not (lp == os.path.join(root, "node_modules") and os.readlink(lp) == borrowed):
+                        outlinks.append(os.path.relpath(lp, root))
+                    continue
+                if outer and x in LATER:
+                    later.append(os.path.join(d, x))
+                    continue
+                keep.append(x)
+            dirs[:] = keep
+            for f in files:
+                seen += 1
+                if seen > max_files or time.monotonic() > stop:
+                    return False
+                look(d, f)
+        return True
+
+    if not walk(root, True):
+        return sorted(hits), outlinks, False
+    for i, nm in enumerate(later):
+        if not walk(nm, False):
+            return sorted(hits), outlinks + [os.path.relpath(x, root) for x in later[i:]], True
+    return sorted(hits), outlinks, True
 
 
 def report(hits):
@@ -156,6 +252,18 @@ def main(argv):
         hook.chmod(0o755)
         print(f"installed {hook}")
         return 0
+    if args[:1] == ["--worktree-secrets"]:
+        # -z (what claude_run reads): NUL-separated records, F<path> a file to deny, D<folder> a folder to deny whole; a name may hold a newline.
+        # Exit 3: the project's own files were not all screened, and nothing may be run on that folder.
+        z = "-z" in args[1:]
+        rest = [a for a in args[1:] if a != "-z"]
+        hits, dirs, complete = worktree_secrets(rest[0] if rest else ".", int(os.environ.get("QUARTERDECK_SCREEN_MAX_FILES", "200000")),
+                                                float(os.environ.get("QUARTERDECK_SCREEN_SECS", "60")))
+        if z:
+            sys.stdout.write("".join(f"F{h}\0" for h in hits) + "".join(f"D{d}\0" for d in dirs))
+        else:
+            print("\n".join(hits + [f"(not finished, denied whole) {d}/" for d in dirs]))
+        return 0 if complete else 3
     while args:
         a = args.pop(0)
         if a == "--names":

@@ -82,6 +82,13 @@ ck "QUARTERDECK_MAX_ITEMS caps the files in one run" '[ "$(last_verdict)" = REFU
 fresh; st_reply default 'I wrote the tests.'; hook "$GOODTEST"; before=$(refs)
 st_duty assayer --issue 7 --pr 3 --apply
 ck "an unparseable reply is an ERROR run that commits and posts nothing" '[ "$(last_verdict)" = ERROR ] && [ "$(refs)" = "$before" ] && no_gh_writes'
+# ---- #86: tests that only prove a thing exists are not tests of the behaviour ---------------------------------------------------------------
+EXIST='mkdir -p tests; printf "src = open(\"calc.py\").read()\nassert \"def add\" in src\nassert \"return\" in src and \"mul\" in src\n" > tests/test_add.py'
+refused "#86 a test that only greps the source for a string" "$EXIST" "only checks that something exists"
+fresh; st_reply default "$W"; hook "$GOODTEST"; st_duty assayer --issue 7 --pr 3 --apply
+ck "#86 a test that calls the code is still accepted" '! grep -q "only checks that something exists" <<<"$(last_detail)"'
+ck "#86 the Assayer is told a check that only looks for an element or string is not enough" 'grep -q "exercises the behaviour" "$T/claude-calls" && grep -q "never only that" "$T/claude-calls"'
+
 fresh; st_reply default 'RESULT: NO_TESTS the issue has no acceptance check that can be run'; st_duty assayer --issue 7 --pr 3 --apply
 ck "NO_TESTS is a real answer: recorded, nothing written" '[ "$(last_verdict)" = NO_TESTS ] && no_gh_writes'
 

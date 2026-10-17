@@ -120,7 +120,29 @@ def env_path():
     return CONFIG_DIR / ENV_NAME
 
 
+def store_kind():
+    """Where credentials live: "file" (the default) or "keychain" (opt-in, config/integrations.json credential_store)."""
+    try:
+        d = json.loads((HOME / "config" / "integrations.json").read_text())
+    except Exception:
+        return "file"
+    return "keychain" if isinstance(d, dict) and d.get("credential_store") == "keychain" else "file"
+
+
 def load_env():
+    if store_kind() != "keychain":
+        return read_env_file()
+    from integrations import keychain, manifest          # lazy: manifest imports this module
+    try:
+        out = {k: v for k in sorted(manifest.known_keys()) for v in [keychain.get(k)] if v}
+    except keychain.KeychainError as e:
+        raise IntegrationError(f"the credential store is the macOS Keychain: {e}")
+    if not out:
+        raise IntegrationError("needs credentials: none are saved in the macOS Keychain (Connections page)")
+    return out
+
+
+def read_env_file():
     p = env_path()
     if not p.is_file():
         raise IntegrationError(f"needs credentials: create ~/.config/quarterdeck/{ENV_NAME} (see the README)")

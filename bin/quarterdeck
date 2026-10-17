@@ -51,7 +51,7 @@ Usage: quarterdeck <command>
   brief approve <id> | changes <id> "note" | list     answer a brief; brief --revise <id> writes the next version
   mockup <brief-id> [--apply] the modelmaker: static pages, one per screen, from an APPROVED brief; checked by the harness
   mockup approve <brief-id> | changes <brief-id> "note"     answer a set of mock-ups
-  dashboard [stop]            start and open the live dashboard (loopback only)
+  dashboard [stop|link|sessions revoke]  start and open the live dashboard (loopback only); link prints a new one-time pairing link; sessions revoke signs every paired browser out
   logs [name] [-f]            tail a log
   runs [n]                    last n entries of the run ledger
 
@@ -144,6 +144,7 @@ case "$cmd" in
     jq -e . "$PROJECTS_FILE" >/dev/null 2>&1 \
       && chk "projects.json" ok "$(project_names | wc -l | tr -d ' ') project(s)" \
       || chk "projects.json" no "does not parse"
+    sb=$(qd_sandbox_status); chk "project sandbox" "${sb%% *}" "${sb#* }"
     echo
     while read -r p; do
       d=$(project_path "$p")
@@ -161,7 +162,7 @@ case "$cmd" in
     echo
     # The wiring above is files and binaries. This is the logic that decides
     # when something runs unattended and what a loopback POST may start.
-    for st_file in selftest.py selftest.sh selftest-fix.sh selftest-panel.sh selftest-harbourmaster.sh selftest-purser.sh selftest-planner.sh selftest-untrusted.sh selftest-pilot.sh selftest-portable.sh selftest-lookout.sh selftest-marshal.sh selftest-caulker.sh selftest-assayer.sh selftest-logkeeper.sh selftest-quartermaster.sh selftest-bosun.sh selftest-packs.sh selftest-cycle.sh selftest-infra.sh selftest-brief.sh selftest-mockup.sh; do
+    for st_file in selftest.py selftest.sh selftest-fix.sh selftest-panel.sh selftest-harbourmaster.sh selftest-purser.sh selftest-planner.sh selftest-untrusted.sh selftest-pilot.sh selftest-portable.sh selftest-lookout.sh selftest-marshal.sh selftest-caulker.sh selftest-assayer.sh selftest-logkeeper.sh selftest-quartermaster.sh selftest-bosun.sh selftest-packs.sh selftest-cycle.sh selftest-infra.sh selftest-brief.sh selftest-mockup.sh selftest-security.sh selftest-checks.sh selftest-injection.sh; do
       [ -f "$QUARTERDECK_DIR/bin/$st_file" ] || continue
       case "$st_file" in
         # the tests build their own throwaway folders: they must not inherit this installation's data folder, which would take precedence
@@ -191,6 +192,9 @@ case "$cmd" in
         selftest-infra.sh) label="self-check (the infra duty: files only, no cloud tool, no credential, report-only writes nothing)" ;;
         selftest-brief.sh) label="self-check (the brief: plain words, bounded, no code, written only to the data folder)" ;;
         selftest-mockup.sh) label="self-check (the mock-ups: only an approved brief, pages parsed against an allowlist, nothing that runs or loads)" ;;
+        selftest-checks.sh) label="self-check (project commands: minimal environment, sandbox, protected paths refused before any check)" ;;
+        selftest-injection.sh) label="self-check (prompt injection: hostile text stays data in every prompt; a model that obeys is contained)" ;;
+        selftest-security.sh) label="self-check (security: the harness checks, one per fix, each written to fail before it)" ;;
         selftest-cycle.sh) label="self-check (the cycle: stage order, caps, resume, report-only writes nothing)" ;;
       esac
       if [ "$strc" = 0 ]; then
@@ -293,20 +297,20 @@ case "$cmd" in
       shift
     done
 
-    [ -n "$path" ] || path="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+    [ -n "$path" ] || path="$(safe_git rev-parse --show-toplevel 2>/dev/null || true)"
     [ -n "$path" ] || die "not inside a git checkout — pass --path <dir>"
     path="${path/#$HOME/~}"
     abs="${path/#\~/$HOME}"
     [ -d "$abs/.git" ] || die "$abs is not a git checkout"
 
     if [ -z "$repo" ]; then
-      url="$(git -C "$abs" remote get-url origin 2>/dev/null || true)"
+      url="$(safe_git -C "$abs" remote get-url origin 2>/dev/null || true)"
       repo="$(sed -E 's#^(git@[^:]+:|https?://[^/]+/)##; s#\.git$##' <<<"$url")"
     fi
     [ -n "$repo" ] || die "could not infer the GitHub repo — pass --repo owner/name"
     [ -n "$name" ] || name="$(basename "$abs" | tr '[:upper:]' '[:lower:]')"
 
-    branch="$(git -C "$abs" symbolic-ref --short HEAD 2>/dev/null || echo main)"
+    branch="$(safe_git -C "$abs" symbolic-ref --short HEAD 2>/dev/null || echo main)"
 
     project_exists "$name" && die "'$name' is already registered — edit config/projects.json or: quarterdeck remove $name"
 
@@ -400,6 +404,14 @@ case "$cmd" in
       rm -f "$pidfile"
       exit 0
     fi
+    if [ "${1:-}" = sessions ] && [ "${2:-}" = revoke ]; then      # sign every paired browser out (a running dashboard obeys at once)
+      python3 "$QUARTERDECK_DIR/bin/dashboard.py" sessions revoke
+      exit 0
+    fi
+    if [ "${1:-}" = link ]; then      # a fresh one-time link for a dashboard that is already running (or about to be): pairs one browser, good for five minutes
+      python3 "$QUARTERDECK_DIR/bin/dashboard.py" link
+      exit 0
+    fi
     pid=$(cat "$pidfile" 2>/dev/null || true)
     if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
       echo "dashboard already running: http://127.0.0.1:$port"
@@ -407,14 +419,31 @@ case "$cmd" in
       rm -f "$pidfile"
       nohup python3 "$QUARTERDECK_DIR/bin/dashboard.py" >>"$QUARTERDECK_HOME/logs/dashboard-server.log" 2>&1 &
       for _ in 1 2 3 4 5 6 7 8 9 10; do
-        curl -sf -m 1 -o /dev/null "http://127.0.0.1:$port/api/state" && break
+        curl -sf -m 1 -o /dev/null "http://127.0.0.1:$port/api/health" && break
         sleep 0.3
       done
-      echo "dashboard: http://127.0.0.1:$port"
     fi
+    # The page holds no secret. This one-time link (the code is after the #, which never leaves the browser) pairs the tab it opens in.
+    link=$(python3 "$QUARTERDECK_DIR/bin/dashboard.py" link) || { echo "could not make a link; is the data folder writable?"; exit 1; }
+    echo "dashboard: $link"
+    echo "  (a one-time link, good for 5 minutes; \`quarterdeck dashboard link\` makes another)"
     if [ "${1:-}" != "--no-open" ]; then
-      if [ "$(uname -s)" = Darwin ]; then open "http://127.0.0.1:$port"
-      elif command -v xdg-open >/dev/null 2>&1 && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then xdg-open "http://127.0.0.1:$port" >/dev/null 2>&1 || true
+      # The code is never given to a program as an argument: every process of this user can read the arguments of every other (ps, pgrep, and a
+      # sandbox cannot hide them), so `open "$link"` published the one-time code for as long as the browser took to start (round-3 S4). The browser
+      # is handed a path instead, to a 0600 page inside a 0700 folder of the private data folder whose only content is a redirect, removed again shortly.
+      opener="${QUARTERDECK_OPEN_CMD:-}"        # the program that opens a file; a test points it at a stand-in
+      if [ -n "$opener" ]; then :
+      elif [ "$(uname -s)" = Darwin ]; then opener=open
+      elif command -v xdg-open >/dev/null 2>&1 && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then opener=xdg-open
+      fi
+      if [ -n "$opener" ] && [[ "$link" =~ ^http://127\.0\.0\.1:[0-9]+/#pair=[A-Za-z0-9_-]+$ ]]; then
+        find "$QUARTERDECK_HOME/state" -maxdepth 1 -name 'open.*' -mmin +10 -exec rm -rf {} + 2>/dev/null   # one a killed shell left behind
+        pdir=$(mktemp -d "$QUARTERDECK_HOME/state/open.XXXXXX") && chmod 700 "$pdir" && {
+          printf '<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=%s"><title>Opening Quarterdeck</title><script>location.replace(%s)</script>\n' "$link" "\"$link\"" > "$pdir/go.html"
+          chmod 600 "$pdir/go.html"
+          "$opener" "$pdir/go.html" >/dev/null 2>&1 || true
+          ( sleep "${QUARTERDECK_OPEN_KEEP:-60}"; rm -rf "$pdir" ) >/dev/null 2>&1 &
+        }
       fi
     fi
     ;;

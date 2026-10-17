@@ -19,12 +19,18 @@ import re
 import subprocess
 import sys
 
+import safegit as _safegit
+
 DIR = "docs/decisions"
 NAME = re.compile(r"^docs/decisions/(\d{4})-[a-z0-9-]+\.md$")
 
 
 def git(repo, *args):
-    r = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, timeout=60)
+    """git against the project's repository, through bin/safegit.py; None for any failure, including a repository it refuses to touch."""
+    try:
+        r = _safegit.run(repo, *args, text=True, timeout=60)
+    except (_safegit.Untrusted, OSError, subprocess.SubprocessError):
+        return None
     return r.stdout if r.returncode == 0 else None
 
 

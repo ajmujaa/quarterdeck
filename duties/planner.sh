@@ -126,7 +126,7 @@ RESULT: PLANNED <n> items
   or, instead of both lines, the single line
 RESULT: NOTHING_TO_PLAN"
 
-result=$(claude_run "$WORKDIR" "$prompt" "Read,Grep,Glob,Bash(git log*)"); rc=$?
+result=$(claude_run "$WORKDIR" "$prompt" "Read,Grep,Glob"); rc=$?
 case $rc in
   0) : ;;
   2) say "quarterdeck: usage limit reached — nothing written"; exit 0 ;;

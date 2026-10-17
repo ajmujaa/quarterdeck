@@ -29,7 +29,7 @@ PR=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --apply) APPLY=1 ;;
-    --pr) PR="${2:-}"; shift ;;
+    --pr) PR="${2:-}"; need_num "--pr" "$PR"; shift ;;
     *) die "surveyor: unknown argument '$1'" ;;
   esac
   shift
@@ -91,13 +91,15 @@ for num in $targets; do
 
 Review pull request #$num of $REPO at depth ${QUARTERDECK_REVIEW_EFFORT:-medium}.
 
-Read the diff (gh pr diff $num -R $REPO) and the surrounding code before judging
-anything. Report only defects this diff introduces: a wrong result, a crash, a
+The diff is below, read by the harness (you have no gh and no git). Read the surrounding
+code in the working folder before judging anything. Report only defects this diff introduces: a wrong result, a crash, a
 security or data-integrity hole, a broken contract with another part of the
 system. Pre-existing debt, style preference and refactor wishes are not
 findings. Prefer three real findings over ten padded ones; zero is a normal and
 good outcome.
 ${ADR_BLOCK:-}
+$(pr_diff_text "$REPO" "$num" | untrusted "diff of pull request #$num")
+
 End your reply with exactly these lines and nothing after them:
 FINDINGS_JSON: <one-line JSON array; [] when clean. Each item: {\"file\":\"path from repo root\",\"line\":<line on the NEW side of the diff>,\"severity\":\"critical|major|minor\",\"title\":\"one short claim\",\"body\":\"markdown: the failure scenario, then the fix\"}>
 ${ADR_SPEC}VERDICT: CLEAN
@@ -147,14 +149,14 @@ VERDICT: FINDINGS <count>"
   fi
 
   if [ "$n" = 0 ]; then
-    guard 60 "$GH" pr comment "$num" -R "$REPO" \
+    gh_post 60 pr comment "$num" -R "$REPO" \
       --body "Quarterdeck reviewed \`${sha:0:8}\` and found nothing worth raising.${ADR_NOTE}" >/dev/null 2>>"$LOG_FILE" \
       && say "quarterdeck: #$num clean — comment posted"
     record_run "$PROJECT" surveyor CLEAN "#$num"
   else
     body=$(jq -r '"Quarterdeck review — \(length) finding(s).\n\n" + (map("### \(.severity | ascii_upcase) — \(.title)\n`\(.file):\(.line)`\n\n\(.body)") | join("\n\n"))' <<<"$findings")
     body="$body$ADR_NOTE"
-    if guard 60 "$GH" pr comment "$num" -R "$REPO" --body "$body" >/dev/null 2>>"$LOG_FILE"; then
+    if gh_post 60 pr comment "$num" -R "$REPO" --body "$body" >/dev/null 2>>"$LOG_FILE"; then
       say "quarterdeck: #$num — $n finding(s) posted"
       record_run "$PROJECT" surveyor "FINDINGS" "$n on #$num"
     else

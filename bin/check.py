@@ -56,7 +56,7 @@ def health():
 
 
 def main():
-    steps = [("selftest", [sys.executable, "bin/selftest.py"]), ("privacy limit", [sys.executable, "bin/forbidden_signals.py"]), ("secrets", [sys.executable, "bin/guard.py"]), ("smoke test", [sys.executable, "bin/smoke.py"]),
+    steps = [("selftest", [sys.executable, "bin/selftest.py"]), ("privacy limit", [sys.executable, "bin/forbidden_signals.py"]), ("secrets", [sys.executable, "bin/guard.py"]), ("vendor files", [sys.executable, "bin/vendor-verify.py"]), ("smoke test", [sys.executable, "bin/smoke.py"]),
              ("rehearsal", [sys.executable, "bin/rehearse.py"])]
     if nodeok.path():
         steps.insert(1, ("assistant test", ["node", "--no-warnings", "bin/selftest-assistant.mjs"]))

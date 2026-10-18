@@ -6,7 +6,7 @@
 # requirements — each one an observable behaviour with an acceptance check a
 # stranger could run, plus what is out of scope — or says what a person must
 # settle first. It is the step between "someone wrote a ticket" and
-# `quarterdeck fix --issue`, which builds from whatever the issue says.
+# `qtdeck fix --issue`, which builds from whatever the issue says.
 #
 # What it writes, and where:
 #   * The requirements go into the issue BODY, between two markers, and nowhere
@@ -19,8 +19,8 @@
 #   * The card moves Backlog -> Ready, and only from Backlog: analysing an issue
 #     someone is already working on must not pull it backwards.
 #
-#   quarterdeck run <p> purser --issue 204            # report only
-#   quarterdeck run <p> purser --issue 204 --apply    # write it, move the card
+#   qtdeck run <p> purser --issue 204            # report only
+#   qtdeck run <p> purser --issue 204 --apply    # write it, move the card
 #
 # Contract:
 #   REQUIREMENTS_JSON: {"summary","requirements":[{"what","accept"}],"out_of_scope":[]}
@@ -37,7 +37,7 @@ set -uo pipefail
 {
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)/lib.sh"
 
-PROJECT="${QUARTERDECK_PROJECT:?run me through: quarterdeck run <project> purser --issue <n>}"
+PROJECT="${QUARTERDECK_PROJECT:?run me through: qtdeck run <project> purser --issue <n>}"
 WORKDIR="${QUARTERDECK_WORKDIR:?}"
 LOG_FILE="$QUARTERDECK_HOME/logs/purser-$PROJECT.log"
 REPO=$(project_get "$PROJECT" repo)
@@ -68,11 +68,10 @@ say "quarterdeck: purser on $REPO#$ISSUE — $title"
 
 MARK_OPEN='<!-- quarterdeck:requirements -->'
 MARK_CLOSE='<!-- /quarterdeck:requirements -->'
-# The issue with our own block taken out, and nothing else touched. A block with
-# only one marker (someone edited it) is left exactly as it is rather than
-# guessed at: better a stale duplicate than a deleted paragraph.
+# The issue with our own block taken out (in any form it was ever written: bin/markers.py), and nothing else touched. A block
+# with only one marker (someone edited it) is left exactly as it is rather than guessed at: better a stale duplicate than a deleted paragraph.
 without_block() {
-  python3 -c 'import re,sys; print(re.sub(r"\n*<!-- quarterdeck:requirements -->.*?<!-- /quarterdeck:requirements -->\n*", "\n", sys.stdin.read(), flags=re.S).strip())'
+  python3 "$QUARTERDECK_DIR/bin/markers.py" strip
 }
 
 prompt="$(preamble "$PROJECT")

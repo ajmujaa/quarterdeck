@@ -180,7 +180,7 @@ try:
           and call("GET", "/api/state", headers=S2)[0] == 401 and call("GET", "/api/state")[0] == 200)
     _c3, _j3, _ck3 = _pair(d.pair_mint()); S3 = {"Cookie": _ck3.split(";")[0]}
     check("a third browser is paired", call("GET", "/api/state", headers=S3)[0] == 200)
-    d.sessions_revoke()                                                      # what `quarterdeck dashboard sessions revoke` does: writes the file, touches nothing in memory
+    d.sessions_revoke()                                                      # what `qtdeck dashboard sessions revoke` does: writes the file, touches nothing in memory
     check("revoking from the command line ends every session at once, in the running server (the file is re-read when it changes)",
           call("GET", "/api/state", headers=S3)[0] == 401 and call("GET", "/api/state")[0] == 401)
     _c4, _j4, _ck4 = _pair(d.pair_mint())
@@ -348,7 +348,7 @@ try:
     call("POST", "/api/demo", {"on": True}, tok)
     code, body = call("GET", "/api/health")
     call("POST", "/api/demo", {"on": False}, tok)
-    check("/api/health answers while Demo mode is on (quarterdeck check runs during a rehearsal)",
+    check("/api/health answers while Demo mode is on (qtdeck check runs during a rehearsal)",
           code == 200 and "loops" in json.loads(body or b"{}"), code)
 
 
@@ -441,11 +441,11 @@ try:
           and pj("/api/brief/new", {"project": "tp", "issue": -1, "confirm": True})[0] == 400 and pj("/api/brief/new", {"idea": "a" * 12, "project": "../x", "confirm": True})[0] == 400
           and pj("/api/brief/new", {"project": "nb", "issue": 4, "confirm": True})[0] == 400 and len(spawned) == n0)
     code, r = pj("/api/brief/new", {"idea": "a page for my neighbourhood book swap", "audience": "neighbours", "project": "newapp", "confirm": True})
-    check("  an idea starts `quarterdeck brief --idea ... --id ... --apply` by argv and leaves a drafting record the page can watch",
+    check("  an idea starts `qtdeck brief --idea ... --id ... --apply` by argv and leaves a drafting record the page can watch",
           code == 200 and B.id_ok(r["id"]) and spawned[-1][1:4] == ["brief", "--idea", "a page for my neighbourhood book swap"] and "--apply" in spawned[-1] and "--project" in spawned[-1]
           and jget(f"/api/brief?id={r['id']}")[1]["status"] == "drafting")
     code, r = pj("/api/brief/new", {"project": "tp", "issue": 12, "confirm": True})
-    check("  an issue of a project with the duty on starts `quarterdeck run tp brief --issue 12 --id ... --apply`", code == 200 and spawned[-1][1:6] == ["run", "tp", "brief", "--issue", "12"] and "--apply" in spawned[-1])
+    check("  an issue of a project with the duty on starts `qtdeck run tp brief --issue 12 --id ... --apply`", code == 200 and spawned[-1][1:6] == ["run", "tp", "brief", "--issue", "12"] and "--apply" in spawned[-1])
     d._spawn_detached = _sp_saved
     _, ms = jget(f"/api/mission?id=brief:{b2}")
     check("the mission page composes a brief (kind, plain-words state, pipeline) and refuses a bad id", ms["kind"] == "brief" and ms["state"] == "awaiting" and len(ms["pipeline"]) == 4

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """inject-eval: measure whether hostile text in third-party input steers a model, and whether the harness contains it when it does.
 
-    bin/selftest-injection.sh                      structural checks with a stub model (offline; part of `quarterdeck doctor`)
+    bin/selftest-injection.sh                      structural checks with a stub model (offline; part of `qtdeck doctor`)
     QUARTERDECK_INJECT_REAL=1 bin/inject-eval.py real [--duties a,b] [--fixtures x,y] [--model haiku] [--jobs 4] [--max-cost 20] [--out DIR]
                                                    a REAL model, once per duty and fixture; costs money; writes DIR/results.json and a report
     bin/inject-eval.py report DIR [--out FILE]     turn DIR/results.json into the Markdown report (docs/injection-report-<date>.md)

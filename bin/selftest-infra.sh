@@ -52,6 +52,7 @@ reply "[$(ITEM aws_s3_bucket.assets high false),$(ITEM aws_db_instance.main high
 before=$(git -C "$T/work" status --porcelain | wc -l | tr -d ' ')
 st_duty infra --pr 2
 ck "a Terraform change goes to the rigger and comes back as a report with every item" 'grep -q "REVIEWED 4" <<<"$OUT" && grep -q "aws_db_instance.main" <<<"$OUT" && grep -q "HIGH: aws_s3_bucket.assets" <<<"$OUT"'
+ck "  the footer says, while the AWS pack is experimental, that the report is a second opinion and not a verdict" 'grep -q "Experimental: Tested on small examples only. Read the report as a second opinion, not a verdict." <<<"$OUT"'
 ck "  the verdict is recorded by the harness: DRY-RUN in report-only, with REVIEWED 4 in the detail" '[ "$(last_verdict)" = DRY-RUN ] && grep -q "REVIEWED 4" <<<"$(last_detail)"'
 ck "  the report says plainly that drift between the files and the live account cannot be seen" 'grep -q "cannot see drift" <<<"$OUT" && grep -q "ran nothing against any cloud" <<<"$OUT"'
 ck "  the model was given the diff and the file text" 'grep -q "public-read" "$T/claude-calls" && grep -q "fixture-db-v2" "$T/claude-calls" && grep -q "0.0.0.0/0" "$T/claude-calls"'

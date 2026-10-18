@@ -10,8 +10,8 @@
 # verdict with the test that would prove it. It writes nothing to the branch —
 # the verdict goes on the pull request, and only with --apply.
 #
-#   quarterdeck run <p> inspector --pr 218
-#   quarterdeck run <p> inspector --pr 218 --issue 204 --apply
+#   qtdeck run <p> inspector --pr 218
+#   qtdeck run <p> inspector --pr 218 --issue 204 --apply
 #
 # Contract:
 #   TEST_JSON: {"exists":bool,"name":"","given":"","when":"","then":"","where":""}
@@ -26,7 +26,7 @@ set -uo pipefail
 {
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)/lib.sh"
 
-PROJECT="${QUARTERDECK_PROJECT:?run me through: quarterdeck run <project> inspector --pr <n>}"
+PROJECT="${QUARTERDECK_PROJECT:?run me through: qtdeck run <project> inspector --pr <n>}"
 SOURCE_REPO_DIR="${QUARTERDECK_WORKDIR:?}"
 LOG_FILE="$QUARTERDECK_HOME/logs/inspector-$PROJECT.log"
 REPO=$(project_get "$PROJECT" repo)

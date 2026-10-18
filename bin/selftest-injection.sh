@@ -2,7 +2,7 @@
 # Prompt injection: does hostile text in an issue, a pull request, a diff or a document reach a model only as data, and what
 # happens when a model obeys it anyway? Two modes.
 #
-#   bin/selftest-injection.sh                 STRUCTURAL (default; offline; runs in `quarterdeck doctor`). For each duty that takes someone
+#   bin/selftest-injection.sh                 STRUCTURAL (default; offline; runs in `qtdeck doctor`). For each duty that takes someone
 #                                             else's text, the REAL duty code builds its prompt with every hostile fixture (injection/
 #                                             fixtures.py, all of them joined, plus the fake-closing-marker ones one by one) in every
 #                                             place the duty takes third-party text, and a STUB model records the prompt, the tool list

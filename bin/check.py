@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""quarterdeck check: one command that says whether everything is fine.
+"""qtdeck check: one command that says whether everything is fine.
 
 Runs the selftest, the node assistant test, the smoke test and the rehearsal, then asks the live
 dashboard (127.0.0.1, QUARTERDECK_DASHBOARD_PORT or 7878) for /api/health. Prints a green or red summary
@@ -46,7 +46,7 @@ def health():
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/health", timeout=4) as r:
             h = json.loads(r.read().decode())
     except Exception:
-        return None, f"not running on 127.0.0.1:{port} (start it with: quarterdeck dashboard)", ""
+        return None, f"not running on 127.0.0.1:{port} (start it with: qtdeck dashboard)", ""
     if not isinstance(h, dict):
         return False, "answered, but not with a health object", "/api/health"
     if h.get("ok") is True:

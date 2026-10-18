@@ -216,8 +216,8 @@ ck "F3 the surveyor, told by the model to post a key it saw, posts nothing: no g
 ck "F3 the surveyor puts the diff in the prompt as untrusted data (the model has no gh)" 'grep -q "BEGIN UNTRUSTED diff of pull request #1" "$T/claude-calls" && ! grep -q "gh pr diff" <<<"$(jq -r .allow "$T/claude-calls" | head -1)"'
 
 # ---- no duty calls plain git on a project folder --------------------------------------------------------------------
-raw=$(grep -nE '(^|[ (;&|"{`])git (-C|-c|fetch|push|pull|worktree|rev-parse|clone|add|commit|reset|clean|ls-remote|ls-files|config|status|diff|log|show|for-each-ref|grep|remote|symbolic-ref|branch|merge|apply|stash|init)( |$)' "$REAL"/duties/*.sh "$REAL"/bin/fix "$REAL"/bin/cycle "$REAL"/bin/decisions.sh "$REAL"/bin/quarterdeck | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' | grep -vE '(say|die|log|echo|printf) .*git (-C|diff|log|status|config|checkout|commit)' | grep -vE 'Bash\(git' | cut -c1-140)
-ck "F6 every git command a duty, bin/fix, bin/cycle or bin/quarterdeck runs goes through safe_git or SAFE_GIT (no hooks, no fsmonitor, no repo ssh command or credential helper)${raw:+: $(head -3 <<<"$raw")}" '[ -z "$raw" ]'
+raw=$(grep -nE '(^|[ (;&|"{`])git (-C|-c|fetch|push|pull|worktree|rev-parse|clone|add|commit|reset|clean|ls-remote|ls-files|config|status|diff|log|show|for-each-ref|grep|remote|symbolic-ref|branch|merge|apply|stash|init)( |$)' "$REAL"/duties/*.sh "$REAL"/bin/fix "$REAL"/bin/cycle "$REAL"/bin/decisions.sh "$REAL"/bin/qtdeck | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' | grep -vE '(say|die|log|echo|printf) .*git (-C|diff|log|status|config|checkout|commit)' | grep -vE 'Bash\(git' | cut -c1-140)
+ck "F6 every git command a duty, bin/fix, bin/cycle or bin/qtdeck runs goes through safe_git or SAFE_GIT (no hooks, no fsmonitor, no repo ssh command or credential helper)${raw:+: $(head -3 <<<"$raw")}" '[ -z "$raw" ]'
 
 
 # ---- F2/F6: what attaching a folder proposes, and what it says about the folder ----------------------------------
@@ -578,7 +578,7 @@ if [ "$(uname -s)" = Darwin ] && /usr/bin/sandbox-exec -p '(version 1)(allow def
   mkdir -p "$T/l7wt"; echo "gitdir: $S5F" > "$T/l7wt/.git"
   ( export HOME="$S5F" QUARTERDECK_HOME="$S5D"; source "$T/bin/lib.sh"; _qd_sb_profile check "$T/l7wt" "$S5S" ) > "$T/l7.sb"; grep -qF "(allow file-read* file-read-data (subpath \"$S5F\"))" "$T/l7.sb" && r6="$r6 L7:home-let-in"; [ -s "$T/l7.sb" ] || r6="$r6 L7:no-profile"
   ck "R6 a check cannot read another worktree in the workspace, the main checkout's stash or reflogs, the checkout around a PATH folder, or /private/tmp/claude-*; a .git file naming the home folder lets nothing in${r6:+ (FAILED:$r6)}" '[ -z "$r6" ]'
-  # the data folder may itself sit in a closed tree (~/Projects/Quarterdeck): a worktree inside it still works from inside, the tree around it does not read
+  # the data folder may itself sit in a closed tree (such as ~/Projects/tools): a worktree inside it still works from inside, the tree around it does not read
   IW="$S5F/Projects/qd/workspace/wt"; IS="$S5F/Projects/qd/workspace/scr"; mkdir -p "$S5F/Projects/qd/state" "$IS/home" "$IS/tmp"; echo QDDECOY-qd > "$S5F/Projects/qd/notes.txt"
   git -C "$S5F/Projects/app" worktree add -q --detach "$IW" >/dev/null 2>&1
   ( export HOME="$S5F" QUARTERDECK_HOME="$S5F/Projects/qd" PROJECTS_FILE="$S5D/config/projects.json"; source "$T/bin/lib.sh"; _qd_sb_profile check "$IW" "$IS" ) > "$T/s5in.sb"
@@ -624,7 +624,7 @@ JS
   ck "S2 to S5 ordinary builds still work under the same profiles: node --test and npm test (child processes, loopback by address and by localhost), python unittest, git add/commit/diff/status${bb:+ (FAILED:$bb)}" '[ -z "$bb" ]'
 else st_skip "S2 to S5 sandbox-profile checks (macOS sandbox-exec only)"; fi
 
-# ---- S4: the one-time pairing code is never in a process argument (the real `quarterdeck dashboard`, a stand-in `open` that looks at what any process can see) ------------------
+# ---- S4: the one-time pairing code is never in a process argument (the real `qtdeck dashboard`, a stand-in `open` that looks at what any process can see) ------------------
 if [ "$(uname -s)" = Darwin ]; then
   LH="$T/linkhome"; LHH="$T/linkfakehome"; LS="$T/linkstub"; mkdir -p "$LH/state" "$LH/logs" "$LH/config" "$LH/workspace" "$LHH" "$LS"; touch "$LH/.quarterdeck-home"
   cat > "$LS/open" <<'STUB'
@@ -636,17 +636,17 @@ STUB
   chmod +x "$LS/open"
   LPORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
   lenv() { env HOME="$LHH" QUARTERDECK_OPEN_CMD="$LS/open" STUBDIR="$LS" QUARTERDECK_HOME="$LH" QUARTERDECK_DIR="$REAL" QUARTERDECK_DASHBOARD_PORT="$LPORT" QUARTERDECK_OPEN_KEEP=3 "$@"; }
-  lout=$(lenv "$REAL/bin/quarterdeck" dashboard 2>&1)
+  lout=$(lenv "$REAL/bin/qtdeck" dashboard 2>&1)
   lnonce=$(sed -n 's/.*#pair=\([A-Za-z0-9_-]*\).*/\1/p' <<<"$lout" | head -1)
   lpage=$(cat "$LS/page" 2>/dev/null); lpath=$(cat "$LS/path" 2>/dev/null)
-  ck "S4 quarterdeck dashboard still prints a one-time link to the owner and hands the browser a page (a path), not the link" '[ -n "$lnonce" ] && grep -q "dashboard: http://127.0.0.1:$LPORT/#pair=" <<<"$lout" && [ -s "$LS/argv" ] && [ "$(cat "$LS/argv")" = "$lpath" ] && [[ "$lpath" == "$LH/state/open."*"/go.html" ]]'
+  ck "S4 qtdeck dashboard still prints a one-time link to the owner and hands the browser a page (a path), not the link" '[ -n "$lnonce" ] && grep -q "dashboard: http://127.0.0.1:$LPORT/#pair=" <<<"$lout" && [ -s "$LS/argv" ] && [ "$(cat "$LS/argv")" = "$lpath" ] && [[ "$lpath" == "$LH/state/open."*"/go.html" ]]'
   ck "S4 the pairing code is in no process's arguments while the browser starts (open's own, and every command line ps and pgrep list)" '[ -n "$lnonce" ] && ! grep -qF "$lnonce" "$LS/argv" "$LS/ps" "$LS/pgrep" && ! grep -qF "pair=" "$LS/argv"'
   ck "S4 the page is 0600, is a redirect to the dashboard with the code, and is gone again within seconds" '[ "$(cat "$LS/mode")" = 600 ] && grep -qF "http://127.0.0.1:$LPORT/#pair=$lnonce" <<<"$lpage" && grep -q "location.replace" <<<"$lpage" && { for _ in $(seq 1 40); do [ -e "$lpath" ] || break; sleep 0.25; done; [ ! -e "$lpath" ]; }'
-  lenv "$REAL/bin/quarterdeck" dashboard stop >/dev/null 2>&1
-  lenv "$REAL/bin/quarterdeck" dashboard --no-open >/dev/null 2>&1; rm -f "$LS/argv"
-  lenv "$REAL/bin/quarterdeck" dashboard --no-open >/dev/null 2>&1
+  lenv "$REAL/bin/qtdeck" dashboard stop >/dev/null 2>&1
+  lenv "$REAL/bin/qtdeck" dashboard --no-open >/dev/null 2>&1; rm -f "$LS/argv"
+  lenv "$REAL/bin/qtdeck" dashboard --no-open >/dev/null 2>&1
   ck "S4 --no-open opens nothing" '[ ! -e "$LS/argv" ]'
-  lenv "$REAL/bin/quarterdeck" dashboard stop >/dev/null 2>&1
+  lenv "$REAL/bin/qtdeck" dashboard stop >/dev/null 2>&1
 else st_skip "S4 pairing link (macOS open only)"; fi
 
 st_done

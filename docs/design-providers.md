@@ -163,7 +163,7 @@ A panel may mix providers across seats. That is a feature (different views) and 
 
 ## Doctor checks
 
-`quarterdeck doctor` already checks binaries and runs the self-tests. For each provider that is configured on any seat:
+`qtdeck doctor` already checks binaries and runs the self-tests. For each provider that is configured on any seat:
 
 1. The program or endpoint is present and its version is recorded. A version outside the range the adapter was tested against is a warning, because flags are the safety boundary (this is also on the list in [MODEL-PROVIDER-NOTES.md](../MODEL-PROVIDER-NOTES.md)).
 2. Sign-in works, using the cheapest possible call. No prompt content from a project.
@@ -211,7 +211,7 @@ Local models are expected to obey more often than the large hosted ones. The sui
 
 - A key is held in the credential store that connections already use: the 0600 file in a 0700 folder under `~/.config/quarterdeck/` by default, or the macOS Keychain when the owner opted in (`bin/integrations/keychain.py`: the secret goes in on standard input, hex-encoded, to `security -i`, never as an argument). Linux without a secret service uses the file.
 - A key is **never** a process argument, never in `config/*.env`, never in the registry, a log, the run envelope or the dashboard page (the page shows only "set" or "not set" and the last four characters).
-- Entering a key: `quarterdeck key set <name>` reads it from a hidden prompt on the terminal, or from standard input.
+- Entering a key: `qtdeck key set <name>` reads it from a hidden prompt on the terminal, or from standard input.
 - Using a key: the adapter reads it at spawn time, in the harness process. For an agent CLI that wants it in an environment variable (Gemini documents `GEMINI_API_KEY`), the harness puts that one variable into the clean environment of that one child for that one call. Because the child's shell commands could print its environment, a call that has both a key in its environment and a shell is only allowed under the harness's sandbox, and `printenv`, `env` and `set` join the shell deny list. For the HTTP helper the key is read by the helper from a file descriptor or standard input and sent in a header; it is never in the helper's arguments or environment.
 - The key's file path is added to the private path list, so the deny list, the sandbox read rules and the project-command sandbox all cover it from the one list (a test already fails if the lists differ).
 - A hosted-provider call gets the outgoing prompt scan described above.

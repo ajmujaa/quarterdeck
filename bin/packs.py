@@ -8,8 +8,9 @@ replace a built-in with the same id. Packs are instructions the agents will foll
     bin/packs.py list                    the packs found
     bin/packs.py match PATH              which packs fit the project folder at PATH (uses the project scan)
     bin/packs.py text ID [ID ...]        the knowledge of those packs, as the crew would read it
+    bin/packs.py notice ID [ID ...]      the experimental sentence if any of those packs is experimental
 
-pack.json: {"id", "label", "about", "tested" (optional: what was and was not verified), "match": {"languages": [], "frameworks": [], "package_managers": [], "deploy_targets": [], "infrastructure": []}}
+pack.json: {"id", "label", "about", "tested" (optional: what was and was not verified), "status" (optional: "experimental" shows a tag everywhere the pack appears), "match": {"languages": [], "frameworks": [], "package_managers": [], "deploy_targets": [], "infrastructure": []}}
 A pack fits when any one of its match names appears in the project's profile; more matches rank it higher. Standard library only.
 """
 import json
@@ -23,6 +24,7 @@ import home as _home
 ROOT = Path(__file__).resolve().parent.parent
 SAFE_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,40}$")
 KEYS = ("languages", "frameworks", "package_managers", "deploy_targets", "infrastructure")
+EXPERIMENTAL_NOTE = "Tested on small examples only. Read the report as a second opinion, not a verdict."
 MAX_KNOWLEDGE = 8000          # characters per pack: a note, not a manual
 
 
@@ -41,7 +43,7 @@ def _clean(raw, folder):
         text = (folder / "knowledge.md").read_text()[:MAX_KNOWLEDGE]
     except OSError:
         return None
-    return {"id": raw["id"], "label": str(raw.get("label") or raw["id"])[:60], "about": str(raw.get("about") or "")[:200], "tested": str(raw.get("tested") or "")[:1200], "match": m, "knowledge": text.strip(), "source": str(folder)}
+    return {"id": raw["id"], "label": str(raw.get("label") or raw["id"])[:60], "about": str(raw.get("about") or "")[:200], "tested": str(raw.get("tested") or "")[:1200], "status": "experimental" if raw.get("status") == "experimental" else "", "match": m, "knowledge": text.strip(), "source": str(folder)}
 
 
 def load(extra=None):
@@ -76,11 +78,17 @@ def text(ids, packs=None):
     return "\n\n".join(f"## Stack notes: {by[i]['label']}\n{by[i]['knowledge']}" for i in ids if i in by)
 
 
+def notice(ids, packs=None):
+    """The experimental sentence when any named pack is experimental, else an empty string (the infra report footer)."""
+    by = {p["id"]: p for p in (load() if packs is None else packs)}
+    return EXPERIMENTAL_NOTE if any(by.get(i, {}).get("status") == "experimental" for i in ids) else ""
+
+
 def main(argv):
     cmd, rest = (argv[0] if argv else ""), argv[1:]
     if cmd == "list":
         for p in load():
-            print(f"  {p['id']:<20} {p['label']}  ({p['about']})")
+            print(f"  {p['id']:<20} {p['label']}{'  [' + p['status'] + ']' if p['status'] else ''}  ({p['about']})")
             if p["tested"]:
                 print(f"  {'':<20} tested: {p['tested']}")
         return 0
@@ -96,6 +104,9 @@ def main(argv):
             print(f"  {p['id']:<20} {', '.join(hit)}")
         if not got:
             print("  no pack fits this project")
+        return 0
+    if cmd == "notice" and rest:
+        print(notice(rest))
         return 0
     if cmd == "text" and rest:
         print(text(rest))

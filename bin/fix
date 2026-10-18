@@ -1,16 +1,16 @@
 #!/bin/bash
-# quarterdeck fix — take one item out of a panel's ruling and carry it through the
+# qtdeck fix — take one item out of a panel's ruling and carry it through the
 # crew to a reviewed, verified pull request, by running the commands you would
 # have run yourself, in order.
 #
 # This is NOT a fifth abstraction and it is NOT a duty: it holds no prompt, makes
 # no model call of its own, and decides nothing. It is the harness typing:
 #
-#   quarterdeck run <p> foreman    --from <that one item> --apply     -> an issue
-#   quarterdeck run <p> panel      --panel dev --issue <n>            -> the crew's plan
-#   quarterdeck run <p> shipwright --issue <n> --plan <plan> --apply  -> a branch, a PR
-#   quarterdeck run <p> surveyor   --pr <n> --apply                   -> a code review
-#   quarterdeck run <p> inspector  --pr <n> --apply                   -> does it fix it?
+#   qtdeck run <p> foreman    --from <that one item> --apply     -> an issue
+#   qtdeck run <p> panel      --panel dev --issue <n>            -> the crew's plan
+#   qtdeck run <p> shipwright --issue <n> --plan <plan> --apply  -> a branch, a PR
+#   qtdeck run <p> surveyor   --pr <n> --apply                   -> a code review
+#   qtdeck run <p> inspector  --pr <n> --apply                   -> does it fix it?
 #
 # and stopping at the first step that refuses. A step that cannot run stops the
 # fix rather than being skipped: the reason to press the button is that the work
@@ -18,14 +18,14 @@
 # paths, local checks that must not regress, contracts that must parse, and an
 # issue someone else already has a pull request for is left alone.
 #
-#   quarterdeck fix harvest-pipeline --panel harvest-pipeline-design-1790122096 --item 3          # report only
-#   quarterdeck fix harvest-pipeline --panel harvest-pipeline-design-1790122096 --item 3 --apply
-#   quarterdeck fix harvest-pipeline --panel harvest-pipeline-design-1790122096 --item 12,13,22 --apply   # one batch, one PR
+#   qtdeck fix harvest-pipeline --panel harvest-pipeline-design-1790122096 --item 3          # report only
+#   qtdeck fix harvest-pipeline --panel harvest-pipeline-design-1790122096 --item 3 --apply
+#   qtdeck fix harvest-pipeline --panel harvest-pipeline-design-1790122096 --item 12,13,22 --apply   # one batch, one PR
 #
 # A batch is several related items built on one branch as one pull request:
 # one issue, one plan, one review. Its tier is the hardest of its items.
 #
-#   quarterdeck fix harvest-pipeline --issue 247 --apply     # an issue that already exists
+#   qtdeck fix harvest-pipeline --issue 247 --apply     # an issue that already exists
 #
 # An issue that is already filed — a card on the project board — is the same
 # pipeline from step 2, since there is nothing to file. The card follows the
@@ -47,7 +47,7 @@ done
 source "$(cd "$(dirname "$SELF")" && pwd)/lib.sh"
 
 PROJECT="${1:-}"; shift || true
-[ -n "$PROJECT" ] || die "usage: quarterdeck fix <project> --panel <id> --item <n> [--apply]"
+[ -n "$PROJECT" ] || die "usage: qtdeck fix <project> --panel <id> --item <n> [--apply]"
 project_exists "$PROJECT" || die "unknown project '$PROJECT'"
 
 PANEL_ID="" ITEM="" ISSUE_ARG="" FROM="" APPLY=0 INSPECT=1
@@ -143,7 +143,7 @@ title=$(jq -r .title <<<"$info")
 KIND=change TIER=routine BATCH="" UNLABELLED=""
 build=$(jq -nc --argjson n "$ISSUE" --arg t "$title" '[{n: $n, title: $t}]')
 fi
-say "quarterdeck fix: $PROJECT — $title"
+say "qtdeck fix: $PROJECT — $title"
 PLANTIER=$TIER; [ "${QUARTERDECK_FIX_PLANNING:-tiered}" = full ] && [ "$TIER" != hard ] && PLANTIER=intricate
 [ -n "$ISSUE_ARG" ] && say "  issue #$ISSUE: already filed" || say "  labelled: $KIND, $TIER$UNLABELLED"
 # Every model call below is tagged with this, so the spend ledger can say what

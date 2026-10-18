@@ -11,9 +11,9 @@
 # The ruling is a document; the argument that produced it is kept in
 # state/panels/ so the dashboard can show who was overruled and why.
 #
-#   quarterdeck run <p> panel --panel design [--target src/screens]
-#   quarterdeck run <p> panel --panel dev    --issue 204
-#   quarterdeck run <p> panel --panel spec   --idea "let people split a bill"
+#   qtdeck run <p> panel --panel design [--target src/screens]
+#   qtdeck run <p> panel --panel dev    --issue 204
+#   qtdeck run <p> panel --panel spec   --idea "let people split a bill"
 #
 # Contract (per seat, then the chair):
 #   ITEMS_JSON:   [{"area","severity","title","claim","where","why","action"}]
@@ -33,7 +33,7 @@ set -uo pipefail
 {
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)/lib.sh"
 
-PROJECT="${QUARTERDECK_PROJECT:?run me through: quarterdeck run <project> panel --panel design}"
+PROJECT="${QUARTERDECK_PROJECT:?run me through: qtdeck run <project> panel --panel design}"
 WORKDIR="${QUARTERDECK_WORKDIR:?}"
 LOG_FILE="$QUARTERDECK_HOME/logs/panel-$PROJECT.log"
 GH="${QUARTERDECK_GH:-gh}"   # a seam for the self-tests and for a stand-in; lib.sh puts the real gh first on PATH
@@ -98,7 +98,7 @@ esac
 
 [ -n "$SEATS" ] || SEATS="$(crew_by_discipline "$PANEL" | tr '\n' ' ')"
 SEATS="$(xargs <<<"$SEATS")"
-[ -n "$SEATS" ] || die "panel: no crew for '$PANEL' (see: quarterdeck crew)"
+[ -n "$SEATS" ] || die "panel: no crew for '$PANEL' (see: qtdeck crew)"
 set -- $SEATS
 [ $# -ge 2 ] || die "panel: '$PANEL' has only $# seat(s); a panel of one is just a duty"
 crew_exists dockmaster || die "panel: crew/dockmaster.md is missing — nobody can rule"
@@ -512,7 +512,7 @@ KEPT="$(jq 'length' <<<"$RULING")"
   jq -r '
     def sev: if .severity=="critical" then 0 elif .severity=="major" then 1 else 2 end;
     # Sorted by severity to read, numbered by position in the ruling: the number
-    # is what `quarterdeck fix --item` and the dashboard use, so it is what people
+    # is what `qtdeck fix --item` and the dashboard use, so it is what people
     # quote. Renumbering after the sort sent a PR citing the wrong items.
     to_entries | sort_by(.value | sev) | .[] |
     "## \(.key + 1). \(.value.title)\n" +
@@ -544,11 +544,11 @@ say "quarterdeck: $KEPT item(s) ruled from $TOTAL raised ($DISPUTED disputed)"
 say "  $OUT"
 say ""
 case "$MODE" in
-  findings) say "  file them with:"; say "  quarterdeck run $PROJECT foreman --from \"$OUT\" --apply" ;;
-  plan)     say "  build it with:";  say "  quarterdeck run $PROJECT shipwright --issue $ISSUE --plan \"$OUT\" --apply" ;;
-  spec)     say "  turn it into issues with:"; say "  quarterdeck run $PROJECT foreman --from \"$OUT\" --apply" ;;
-  backlog)  say "  the board keeps itself honest separately:"; say "  quarterdeck run $PROJECT harbourmaster --apply" ;;
-  decision) say "  build it with:"; say "  quarterdeck run $PROJECT panel --panel spec --from \"$OUT\"" ;;
+  findings) say "  file them with:"; say "  qtdeck run $PROJECT foreman --from \"$OUT\" --apply" ;;
+  plan)     say "  build it with:";  say "  qtdeck run $PROJECT shipwright --issue $ISSUE --plan \"$OUT\" --apply" ;;
+  spec)     say "  turn it into issues with:"; say "  qtdeck run $PROJECT foreman --from \"$OUT\" --apply" ;;
+  backlog)  say "  the board keeps itself honest separately:"; say "  qtdeck run $PROJECT harbourmaster --apply" ;;
+  decision) say "  build it with:"; say "  qtdeck run $PROJECT panel --panel spec --from \"$OUT\"" ;;
 esac
 
 record_run "$PROJECT" panel "RULED" "$PANEL: $KEPT of $TOTAL on $SUBJECT" ""

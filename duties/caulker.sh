@@ -17,9 +17,9 @@
 #   - touches a forbidden path, or changes more than QUARTERDECK_CAULKER_MAX_LINES lines (default 300),
 #   - makes any local check (verify, test, build) worse than it was on the untouched head.
 #
-#   quarterdeck run <p> caulker --pr 218                       report only
-#   quarterdeck run <p> caulker --pr 218 --apply               commit, push to the PR's own branch, comment
-#   quarterdeck run <p> caulker --pr 218 --findings f.json     use one findings file instead of the state folder
+#   qtdeck run <p> caulker --pr 218                       report only
+#   qtdeck run <p> caulker --pr 218 --apply               commit, push to the PR's own branch, comment
+#   qtdeck run <p> caulker --pr 218 --findings f.json     use one findings file instead of the state folder
 #
 # Findings files (state/findings/<project>-pr<n>-<duty>.json), written by the review duties with --apply:
 #   {"duty","pr","head":"<sha reviewed>","verdict","findings":[{"id","severity","title","body","file","line","paths":[],"kind":"code|test","evidence"}]}
@@ -38,7 +38,7 @@ set -uo pipefail
 {
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)/lib.sh"
 
-PROJECT="${QUARTERDECK_PROJECT:?run me through: quarterdeck run <project> caulker --pr <n>}"
+PROJECT="${QUARTERDECK_PROJECT:?run me through: qtdeck run <project> caulker --pr <n>}"
 SOURCE_REPO_DIR="${QUARTERDECK_WORKDIR:?}"
 LOG_FILE="$QUARTERDECK_HOME/logs/caulker-$PROJECT.log"
 REPO=$(project_get "$PROJECT" repo)

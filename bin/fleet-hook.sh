@@ -15,6 +15,8 @@
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(dirname "$HERE")"
 SELF="$HERE/fleet-hook.sh"
+# remove after migration: an install made under the old name keeps its data folder (bin/legacy-home.sh, never published)
+[ -r "$HERE/legacy-home.sh" ] && _LG_NO_ENV=1 . "$HERE/legacy-home.sh"
 # Where your data lives: the same four rules as bin/home.py (Claude Code starts this without Quarterdeck's environment).
 if [ -n "${QUARTERDECK_HOME:-}" ]; then DHOME="$QUARTERDECK_HOME"
 elif [ -n "${QUARTERDECK_DIR:-}" ]; then DHOME="$QUARTERDECK_DIR"
@@ -34,7 +36,9 @@ settings_edit() { # settings_edit <jq filter>: rewrite the settings file with a 
   jq -e . "$SETTINGS" >/dev/null 2>&1 || { echo "fleet-hook: $SETTINGS is not valid JSON, not touching it" >&2; return 1; }
   ( umask 077; cp "$SETTINGS" "$SETTINGS.quarterdeck-bak-$(date +%Y%m%d-%H%M%S)" ) || return 1
   local tmp; tmp="$(mktemp)"
-  jq --arg cmd "$SELF" "$1" "$SETTINGS" > "$tmp" && mv "$tmp" "$SETTINGS" && chmod 600 "$SETTINGS"
+  # FLEET_HOOK_REPLACE: a JSON list of older hook commands (another copy of this script) that install replaces along with its own
+  local old="${FLEET_HOOK_REPLACE:-[]}"; jq -e 'type == "array"' <<<"$old" >/dev/null 2>&1 || old='[]'
+  jq --arg cmd "$SELF" --argjson old "$old" "$1" "$SETTINGS" > "$tmp" && mv "$tmp" "$SETTINGS" && chmod 600 "$SETTINGS"
 }
 
 case "${1:-}" in
@@ -42,6 +46,8 @@ case "${1:-}" in
     command -v jq >/dev/null || { echo "fleet-hook: jq is needed" >&2; exit 1; }
     settings_edit '
       .hooks = (.hooks // {})
+      | if ($old | length) == 0 then . else .hooks |= with_entries(.value |= (if type == "array" then map(if type == "object" then .hooks = ((.hooks // []) | map(select(((.command // "") as $c | $old | index([$c])) | not))) else . end)
+                                                                    | map(select(type != "object" or ((.hooks | length) > 0))) else . end)) end
       | reduce ("SessionStart", "SessionEnd", "UserPromptSubmit", "Stop", "SubagentStart", "SubagentStop") as $k (.;
           .hooks[$k] = ((.hooks[$k] // [])
             | map(.hooks = ((.hooks // []) | map(select((.command // "") != $cmd)))) | map(select((.hooks | length) > 0))

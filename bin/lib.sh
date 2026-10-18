@@ -13,6 +13,8 @@ umask 077
 
 # Physical path (-P): the dashboard resolves symlinks, and it recognises
 # Quarterdeck's own processes by this path in their command lines.
+# remove after migration: an install made under the old name keeps its data folder, secrets and settings (bin/legacy-home.sh, never published)
+[ -r "$(dirname "${BASH_SOURCE[0]}")/legacy-home.sh" ] && . "$(dirname "${BASH_SOURCE[0]}")/legacy-home.sh"
 _dd_explicit="${QUARTERDECK_DIR:-}"
 QUARTERDECK_DIR="${QUARTERDECK_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)}"
 export QUARTERDECK_DIR
@@ -734,7 +736,7 @@ record_spend() { # record_spend <envelope-json> <duty> <effort>
 record_run() { # record_run <project> <duty> <verdict> [detail] [url]
   local proj="$1" duty="$2" verdict="$3" detail="${4:-}" url="${5:-}" rest="" sha=""
   # A verdict is ONE uppercase token. Every reader of this ledger is built for a
-  # label — a chip in the dashboard, a column in `quarterdeck status` — so a duty
+  # label — a chip in the dashboard, a column in `qtdeck status` — so a duty
   # that passes "NEEDS_HUMAN pick a fix path for #177 ..." gets the token kept
   # and the sentence moved to where sentences go. Enforced here rather than in
   # each duty: there is one ledger, so there is one place to get this right.

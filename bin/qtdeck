@@ -1,8 +1,8 @@
 #!/bin/bash
-# quarterdeck — control CLI for the personal agent fleet.
+# qtdeck: the Quarterdeck command, control CLI for the personal agent fleet.
 set -uo pipefail
 # Follow symlinks to the real script before looking for lib.sh beside it.
-# `quarterdeck` is meant to be linked onto PATH, and dirname of the LINK points at
+# `qtdeck` is meant to be linked onto PATH, and dirname of the LINK points at
 # wherever the link lives — which is how "symlink it somewhere on PATH", the
 # advice in the README, produced "lib.sh: No such file or directory".
 SELF="${BASH_SOURCE[0]}"
@@ -12,11 +12,17 @@ while [ -L "$SELF" ]; do
   case "$SELF" in /*) ;; *) SELF="$d/$SELF" ;; esac
 done
 SELF="$(cd "$(dirname "$SELF")" && pwd)"
+# remove after migration: the one-time move of an install made under an older name. Dispatched before lib.sh, which would create folders in it.
+if [ "${1:-}" = home ] && [[ "${2:-}" == migrate-from-* ]]; then
+  [ -f "$SELF/legacy_home.py" ] || { echo "nothing to migrate from here: this copy has no bin/legacy_home.py" >&2; exit 2; }
+  from="${2#migrate-from-}"; shift 2
+  exec python3 "$SELF/legacy_home.py" migrate "$from" "$@"
+fi
 source "$SELF/lib.sh"
 
 usage() {
   cat <<'EOF'
-Usage: quarterdeck <command>
+Usage: qtdeck <command>
 
   status                      what is registered, what has run, what is pending
   doctor                      check the wiring: claude, gh, jq, repos, config
@@ -41,7 +47,7 @@ Usage: quarterdeck <command>
                               assayer, the reviewers side by side, the caulker (at most 3 cycles). Needs "cycle": true in
                               the project's entry. Report only without --apply. --resume <id> goes on after a stop;
                               --status [<id>] shows the stages and their cost.
-  plan approve <project> <id> approve a sprint plan the planner wrote (run: quarterdeck run <p> planner --apply)
+  plan approve <project> <id> approve a sprint plan the planner wrote (run: qtdeck run <p> planner --apply)
   plan apply <project> <id> [--apply]
                               list, or with --apply make, the approved plan's card moves (Backlog to Ready)
   plan list <project>         the plans on record and their status
@@ -79,24 +85,24 @@ Flags for add:
   --path <dir>          override the inferred checkout path
   --duties a,b          duties to enable (default: review)
 
-quarterdeck new <name> [--in DIR] [--about "..."]
+qtdeck new <name> [--in DIR] [--about "..."]
                         start something new: a folder with git and a README, nothing registered
-  quarterdeck attach <dir> [--name N] [--apply]
+  qtdeck attach <dir> [--name N] [--apply]
                         scan a folder and propose the crew set-up; --apply registers it
 
 Onboarding any project is two commands:
-  cd ~/Projects/Whatever && quarterdeck add
-  quarterdeck run whatever review
+  cd ~/Projects/Whatever && qtdeck add
+  qtdeck run whatever review
 
 Examples:
-  quarterdeck doctor
-  quarterdeck add --duties review,triage
-  quarterdeck run harvest-pipeline surveyor --pr 168
-  quarterdeck run harvest-pipeline surveyor --pr 168 --apply
-  quarterdeck run harvest-pipeline panel --panel design --target src/screens
-  quarterdeck run harvest-pipeline panel --panel dev --issue 204
-  quarterdeck run harvest-pipeline shipwright --issue 204 --plan workspace/harvest-pipeline-plan-204.md
-  quarterdeck run harvest-pipeline inspector --pr 218 --apply
+  qtdeck doctor
+  qtdeck add --duties review,triage
+  qtdeck run harvest-pipeline surveyor --pr 168
+  qtdeck run harvest-pipeline surveyor --pr 168 --apply
+  qtdeck run harvest-pipeline panel --panel design --target src/screens
+  qtdeck run harvest-pipeline panel --panel dev --issue 204
+  qtdeck run harvest-pipeline shipwright --issue 204 --plan workspace/harvest-pipeline-plan-204.md
+  qtdeck run harvest-pipeline inspector --pr 218 --apply
 EOF
 }
 
@@ -225,7 +231,7 @@ case "$cmd" in
       printf '  %-14s %s\n' "$d/" "$([ -d "$QUARTERDECK_HOME/$d" ] && echo "$(ls "$QUARTERDECK_HOME/$d" 2>/dev/null | wc -l | tr -d ' ') item(s)" || echo "not there yet")"
     done
     if [ "$QUARTERDECK_HOME" = "$QUARTERDECK_DIR" ]; then
-      echo; echo "  your data still sits inside the program folder. 'quarterdeck home init' makes ~/.quarterdeck; moving what you have there is a separate, checked step."
+      echo; echo "  your data still sits inside the program folder. 'qtdeck home init' makes ~/.quarterdeck; moving what you have there is a separate, checked step."
     fi
     ;;
 
@@ -248,7 +254,7 @@ case "$cmd" in
 
   projects)
     if [ "$(jq 'length' "$PROJECTS_FILE" 2>/dev/null || echo 0)" = 0 ]; then
-      echo "  no projects yet. Run 'quarterdeck add' inside a repository, or copy config/projects.example.json to $QUARTERDECK_HOME/config/projects.json and edit it."
+      echo "  no projects yet. Run 'qtdeck add' inside a repository, or copy config/projects.example.json to $QUARTERDECK_HOME/config/projects.json and edit it."
     else
       jq -r 'to_entries[] | "\(.key)\t\(.value.repo)\t\(.value.summary // "")"' "$PROJECTS_FILE" | column -t -s $'\t'
     fi ;;
@@ -271,7 +277,7 @@ case "$cmd" in
         printf '  %-14s %s\n' "--panel $disc" "$seats"
       done
       echo
-      echo "  run one with: quarterdeck run <project> panel --panel <name>"
+      echo "  run one with: qtdeck run <project> panel --panel <name>"
     fi
     ;;
 
@@ -312,7 +318,7 @@ case "$cmd" in
 
     branch="$(safe_git -C "$abs" symbolic-ref --short HEAD 2>/dev/null || echo main)"
 
-    project_exists "$name" && die "'$name' is already registered — edit config/projects.json or: quarterdeck remove $name"
+    project_exists "$name" && die "'$name' is already registered — edit config/projects.json or: qtdeck remove $name"
 
     t=$(mktemp)
     jq --arg n "$name" --arg r "$repo" --arg p "$path" --arg b "$branch" \
@@ -326,7 +332,7 @@ case "$cmd" in
     echo
     echo "Now add project-specific guardrails in config/projects.json — the"
     echo "defaults are deliberately thin, and they are injected into every prompt."
-    echo "Then: quarterdeck run $name ${duties%%,*}"
+    echo "Then: qtdeck run $name ${duties%%,*}"
     ;;
 
   remove)
@@ -347,8 +353,8 @@ case "$cmd" in
   run)
     project="${1:-}"; duty="${2:-}"; shift 2 2>/dev/null || true
     [ -n "$project" ] && [ -n "$duty" ] || { usage; exit 1; }
-    project_exists "$project" || die "unknown project '$project' (see: quarterdeck projects)"
-    duty_exists "$duty"       || die "unknown duty '$duty' (see: quarterdeck duties)"
+    project_exists "$project" || die "unknown project '$project' (see: qtdeck projects)"
+    duty_exists "$duty"       || die "unknown duty '$duty' (see: qtdeck duties)"
     project_has_duty "$project" "$duty" \
       || die "'$duty' is not enabled for '$project' — add it to duties[] in config/projects.json"
     wdir=$(project_path "$project")
@@ -365,7 +371,7 @@ case "$cmd" in
       approve) [ -n "$project" ] && [ -n "$pid" ] || { usage; exit 1; }
                exec python3 "$QUARTERDECK_DIR/bin/plan.py" approve "$QUARTERDECK_HOME" "$project" "$pid" ;;
       apply)   [ -n "$project" ] && [ -n "$pid" ] || { usage; exit 1; }
-               project_exists "$project" || die "unknown project '$project' (see: quarterdeck projects)"
+               project_exists "$project" || die "unknown project '$project' (see: qtdeck projects)"
                [ -n "$(project_get "$project" board.number)" ] || die "'$project' has no board in the registry"
                shift 3
                case "${1:-}" in ""|--apply) ;; *) die "plan apply: unknown argument '$1'" ;; esac
@@ -426,7 +432,7 @@ case "$cmd" in
     # The page holds no secret. This one-time link (the code is after the #, which never leaves the browser) pairs the tab it opens in.
     link=$(python3 "$QUARTERDECK_DIR/bin/dashboard.py" link) || { echo "could not make a link; is the data folder writable?"; exit 1; }
     echo "dashboard: $link"
-    echo "  (a one-time link, good for 5 minutes; \`quarterdeck dashboard link\` makes another)"
+    echo "  (a one-time link, good for 5 minutes; \`qtdeck dashboard link\` makes another)"
     if [ "${1:-}" != "--no-open" ]; then
       # The code is never given to a program as an argument: every process of this user can read the arguments of every other (ps, pgrep, and a
       # sandbox cannot hide them), so `open "$link"` published the one-time code for as long as the browser took to start (round-3 S4). The browser

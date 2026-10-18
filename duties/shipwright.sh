@@ -19,7 +19,7 @@ set -uo pipefail
 {
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)/lib.sh"
 
-PROJECT="${QUARTERDECK_PROJECT:?run me through: quarterdeck run <project> shipwright --issue <n>}"
+PROJECT="${QUARTERDECK_PROJECT:?run me through: qtdeck run <project> shipwright --issue <n>}"
 SOURCE_REPO_DIR="${QUARTERDECK_WORKDIR:?}"
 LOG_FILE="$QUARTERDECK_HOME/logs/shipwright-$PROJECT.log"
 REPO=$(project_get "$PROJECT" repo)

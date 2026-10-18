@@ -15,7 +15,7 @@ set -uo pipefail
 REAL="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 mkdir -p "$T"/{bin,config,crew,duties,state,workspace,logs/runs,work,path}
-cp "$REAL"/bin/{lib.sh,outscan.py,guard.py,home.py,protect.py,safegit.py,gitrisky.re,behaviour.py} "$T/bin/"; cp "$REAL"/duties/purser.sh "$T/duties/"
+cp "$REAL"/bin/{lib.sh,markers.py,outscan.py,guard.py,home.py,protect.py,safegit.py,gitrisky.re,behaviour.py} "$T/bin/"; cp "$REAL"/duties/purser.sh "$T/duties/"
 cp "$REAL"/config/quarterdeck.env "$T/config/"; cp "$REAL"/crew/*.md "$T/crew/"
 jq -n --arg w "$T/work" '{tp:{repo:"x/tp",path:$w,summary:"s",default_branch:"main",duties:["purser"],
   guardrails:[],verify:"",board:{number:1,owner:"x"}}}' > "$T/config/projects.json"
@@ -109,8 +109,19 @@ go "$ORIG" "$MIXED" --apply
 ck "#86 an existence check beside one that exercises the behaviour is accepted" 'grep -q "^gh issue edit" $T/gh-calls && [ "$(verdict)" = READY ]'
 ck "#86 the Purser is told to write one check that makes the thing do something and to say what happens" 'grep -q "exercises the behaviour" $T/prompts && grep -q "never only that" $T/prompts'
 
+# remove after migration: a block written under the product's older name (marks from bin/legacy_markers.py, a private file) is replaced, not stacked
+if [ -f "$REAL/bin/legacy_markers.py" ]; then
+  cp "$REAL/bin/legacy_markers.py" "$T/bin/"
+  OLDO=$(python3 -c 'import sys; ns = {}; exec(open(sys.argv[1]).read(), ns); print(ns["REQ_PAIRS"][0][0])' "$REAL/bin/legacy_markers.py")
+  OLDC=$(python3 -c 'import sys; ns = {}; exec(open(sys.argv[1]).read(), ns); print(ns["REQ_PAIRS"][0][1])' "$REAL/bin/legacy_markers.py")
+  go "$ORIG"$'\n\n'"$OLDO"$'\n## Requirements\n\n1. an old requirement\n'"$OLDC" "$READY" --apply
+  ck "legacy: an issue with the older requirements block gets one block, in the current marks; the old one is gone and the person's text stays" \
+     '[ "$(grep -c "<!-- quarterdeck:requirements -->" $T/edited-body)" = 1 ] && ! grep -qF "$OLDO" $T/edited-body && ! grep -q "an old requirement" $T/edited-body && grep -q "See also the settlement screen" $T/edited-body'
+  rm -f "$T/bin/legacy_markers.py"
+fi
+
 go "$ORIG" "$READY"
-ck "report only: nothing is written or moved"       '! grep -q "issue edit" $T/gh-calls && [ ! -f $T/board-calls ] && [ "$(verdict)" = DRY-RUN ]'
+ck "report only: nothing is written or moved"      '! grep -q "issue edit" $T/gh-calls && [ ! -f $T/board-calls ] && [ "$(verdict)" = DRY-RUN ]'
 
 echo
 [ "$fails" = 0 ] && echo "  all checks passed" || { echo "  $fails check(s) failed"; exit 1; }

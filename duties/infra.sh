@@ -15,8 +15,8 @@
 # (Terraform state and variable files, .env files, keys) are named and never opened. The model returns a contract; the
 # harness validates it, refuses a reply that tells anyone to run a cloud command, and records the verdict itself.
 #
-#   quarterdeck run <p> infra --pr 218              report only
-#   quarterdeck run <p> infra --diff main           the checked-out HEAD against a base branch or commit (committed changes only)
+#   qtdeck run <p> infra --pr 218              report only
+#   qtdeck run <p> infra --diff main           the checked-out HEAD against a base branch or commit (committed changes only)
 #   ... --apply                                 also write the change report into workspace/ (never into the project)
 #
 # Contract:
@@ -35,7 +35,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)/lib.sh"
 # No credentials, ever: whatever the owner's shell holds for a cloud is dropped before any model or git command starts.
 for v in $(env | cut -d= -f1 | grep -E '^(AWS_|TF_|ARM_|VERCEL_|SUPABASE_|CDK_|SAM_|SERVERLESS_|PULUMI_|GOOGLE_|AZURE_|CLOUDFLARE_|CF_|WRANGLER_|FLY_|CLOUDSDK_|GCLOUD_|GCP_|ARM_|AZD_)[A-Za-z0-9_]*$'); do unset "$v"; done
 
-PROJECT="${QUARTERDECK_PROJECT:?run me through: quarterdeck run <project> infra --pr <n>}"
+PROJECT="${QUARTERDECK_PROJECT:?run me through: qtdeck run <project> infra --pr <n>}"
 SOURCE_REPO_DIR="${QUARTERDECK_WORKDIR:?}"
 LOG_FILE="$QUARTERDECK_HOME/logs/infra-$PROJECT.log"
 REPO=$(project_get "$PROJECT" repo)
@@ -167,6 +167,7 @@ for i, (kind, path) in enumerate(rows, 1):
 print(" ".join(p["id"] for p, _ in packs.select(prof)))
 PY
 )
+PACKNOTICE=""; [ -z "$PACKIDS" ] || PACKNOTICE=$(python3 "$QUARTERDECK_DIR/bin/packs.py" notice $PACKIDS 2>/dev/null)
 PACKTEXT=""; [ -z "$PACKIDS" ] || PACKTEXT=$(python3 "$QUARTERDECK_DIR/bin/packs.py" text $PACKIDS 2>/dev/null)
 say "  $nfiles infrastructure file(s): $KINDS${PACKIDS:+; stack notes: $PACKIDS}"
 
@@ -269,7 +270,7 @@ $DIFFNOTE}${CUTNOTE:+
 $CUTNOTE}
 $(jq -r '.[] | "\n### \(.risk | ascii_upcase): \(.resource)\(if .needs_human then "  (needs a person)" else "" end)\n**Change:** \(.change)\n\n**Why:** \(.why)\n\n**Blast radius:** \(.blast_radius)\n\n**Rollback:** \(.rollback)"' <<<"$items")
 
-<sub>Quarterdeck rigger. Files only: the harness found the files and wrote the verdict; the rigger judged. Nothing was run, posted or changed.</sub>"
+<sub>Quarterdeck rigger. Files only: the harness found the files and wrote the verdict; the rigger judged. Nothing was run, posted or changed.${PACKNOTICE:+ Experimental: $PACKNOTICE}</sub>"
 say ""; say "$report" >&2; say ""
 
 if [ "$APPLY" != 1 ]; then

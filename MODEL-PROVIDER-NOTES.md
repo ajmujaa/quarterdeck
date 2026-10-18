@@ -53,7 +53,7 @@ No code exists for this. A sketch only.
   2. A file in the data folder, `state/connectors/provider.key`, mode 0600, in a folder that is 0700, refused at load if it is group or world readable (the integration env file already behaves this way). This is the fallback where no keychain exists.
 - **Never in:** the registry, `config/*.env`, the repository, logs, the run envelope, or the dashboard page. `bin/guard.py` already matches the provider key format and would catch a commit.
 - **Agents must not read it.** Add the key file to the private deny list and the sandbox's `denyRead` list, as the connector folder is now. Because the key is in the environment of the tool, a shell command an agent runs could print it; with a key in play the sandbox should be required, not optional, and `printenv`, `env` and `set` should join the deny list.
-- **Setup.** `quarterdeck key set` reads the key from a hidden prompt (not an argument), stores it, and tests it with one tiny call. `key status` shows only the last four characters. `key remove` deletes it.
+- **Setup.** `qtdeck key set` reads the key from a hidden prompt (not an argument), stores it, and tests it with one tiny call. `key status` shows only the last four characters. `key remove` deletes it.
 - **Spend.** With a key, cost is real money, not a usage measure: keep the per-call and daily caps, make the daily cap default lower, and show spend in currency.
 - **Dashboard.** Show "using your login" or "using an API key" in plain words. Never show the key.
 - **Open questions.** Rotation and revocation notes; whether a separate low-limit key for the scheduler is worth recommending; Windows (no keychain tool is assumed).

@@ -9,8 +9,8 @@
 # It pairs with the two duties either side of it. The inspector says what would
 # settle a claim; trials writes it; the shipwright makes it go green:
 #
-#   quarterdeck run <p> trials     --issue 204 --apply    # a red test, on a branch
-#   quarterdeck run <p> shipwright --issue 204 --apply    # make it green
+#   qtdeck run <p> trials     --issue 204 --apply    # a red test, on a branch
+#   qtdeck run <p> shipwright --issue 204 --apply    # make it green
 #
 # Requires a test command in the registry — a duty that cannot run what it
 # writes is not a tester:
@@ -30,7 +30,7 @@ set -uo pipefail
 {
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)/lib.sh"
 
-PROJECT="${QUARTERDECK_PROJECT:?run me through: quarterdeck run <project> trials --issue <n>}"
+PROJECT="${QUARTERDECK_PROJECT:?run me through: qtdeck run <project> trials --issue <n>}"
 SOURCE_REPO_DIR="${QUARTERDECK_WORKDIR:?}"
 LOG_FILE="$QUARTERDECK_HOME/logs/trials-$PROJECT.log"
 REPO=$(project_get "$PROJECT" repo)

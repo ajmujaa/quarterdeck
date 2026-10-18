@@ -12,14 +12,14 @@
 #   * a document, workspace/<project>-plan-<date>.md, in the data folder, not in the repository;
 #   * state/plans/<id>.json, the same plan for machines, status "proposed".
 # Nothing on the board or in GitHub changes. The cards move only after the owner approves:
-#   quarterdeck plan approve <project> <plan-id>
-#   quarterdeck plan apply   <project> <plan-id> [--apply]     # lists the moves; --apply makes them
+#   qtdeck plan approve <project> <plan-id>
+#   qtdeck plan apply   <project> <plan-id> [--apply]     # lists the moves; --apply makes them
 # and then only through the board keeper's own move (bin/board.py to), one card at a time.
 #
-#   quarterdeck run <p> planner                          # report only: prints the plan, writes nothing
-#   quarterdeck run <p> planner --apply                  # writes the document and the plan record
-#   quarterdeck run <p> planner --capacity 5             # at most 5 items in the sprint
-#   quarterdeck run <p> planner --budget 40 --apply      # at most $40 of expected model cost (needs measured cost)
+#   qtdeck run <p> planner                          # report only: prints the plan, writes nothing
+#   qtdeck run <p> planner --apply                  # writes the document and the plan record
+#   qtdeck run <p> planner --capacity 5             # at most 5 items in the sprint
+#   qtdeck run <p> planner --budget 40 --apply      # at most $40 of expected model cost (needs measured cost)
 #
 # Contract:
 #   PLAN_JSON: {"plan":[{"issue","size":"S|M|L","reason","depends_on":[],"parallel_ok":bool,
@@ -34,7 +34,7 @@ set -uo pipefail
 {
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)/lib.sh"
 
-PROJECT="${QUARTERDECK_PROJECT:?run me through: quarterdeck run <project> planner}"
+PROJECT="${QUARTERDECK_PROJECT:?run me through: qtdeck run <project> planner}"
 WORKDIR="${QUARTERDECK_WORKDIR:?}"
 LOG_FILE="$QUARTERDECK_HOME/logs/planner-$PROJECT.log"
 REPO=$(project_get "$PROJECT" repo)
@@ -166,7 +166,7 @@ doc=$(python3 "$PLAN" save "$QUARTERDECK_HOME" "$TMP/plan.json" 2>>"$LOG_FILE") 
   || { record_run "$PROJECT" planner ERROR "could not write the plan"; die "planner: could not write the plan (see $LOG_FILE)"; }
 id=$(jq -r .id "$TMP/plan.json")
 say "  plan $id written to $(basename "$doc")"
-say "  read it, then:  quarterdeck plan approve $PROJECT $id"
+say "  read it, then:  qtdeck plan approve $PROJECT $id"
 record_run "$PROJECT" planner PLANNED "$n items, $s in the sprint — plan $id"
 exit
 }

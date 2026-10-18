@@ -9,7 +9,7 @@ Thank you for helping. A few rules keep the project calm and safe.
 
 ## Making a change
 
-- One change per pull request, with a test that fails without it. `bin/quarterdeck check` must be green.
+- One change per pull request, with a test that fails without it. `bin/qtdeck check` must be green.
 - Python uses the standard library only. Shell must run on macOS bash 3.2 and BSD tools (no `${x:-{}}`, no `timeout`, no GNU-only flags).
 - Plain words in the interface. No decoration or motion that carries no meaning.
 - Never commit a credential, a private name or a personal path. `bin/guard.py` checks this; install the hook with `bin/guard.py install-hook`.

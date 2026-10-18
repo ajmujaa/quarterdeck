@@ -12,11 +12,11 @@
 #   * the brief's record (state/briefs/<id>.json) is marked with the mock-ups, state "ready".
 # Pages are only ever shown by the dashboard in a frame with no permissions and a strict Content-Security-Policy.
 # Nothing is written into a project, nothing is merged, nothing leaves the computer except the model call itself.
-# The owner answers the set: `quarterdeck mockup approve <brief-id>` or `quarterdeck mockup changes <brief-id> "note"`; a new run
+# The owner answers the set: `qtdeck mockup approve <brief-id>` or `qtdeck mockup changes <brief-id> "note"`; a new run
 # after "changes" reads that note.
 #
-#   quarterdeck mockup <brief-id>             # report only: asks the model, checks the pages, prints what it would save, writes nothing
-#   quarterdeck mockup <brief-id> --apply     # writes the pages and the manifest
+#   qtdeck mockup <brief-id>             # report only: asks the model, checks the pages, prints what it would save, writes nothing
+#   qtdeck mockup <brief-id> --apply     # writes the pages and the manifest
 #
 # Contract:
 #   MOCKUPS_JSON: [{"name":"<screen-slug>","title":"...","html":"<!doctype html>..."}]
@@ -37,7 +37,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --apply) APPLY=1 ;;
     b[0-9]*) ID="$1" ;;
-    *) die "mockup: unknown argument '$1' (usage: quarterdeck mockup <brief-id> [--apply])" ;;
+    *) die "mockup: unknown argument '$1' (usage: qtdeck mockup <brief-id> [--apply])" ;;
   esac
   shift
 done
@@ -163,7 +163,7 @@ fi
 dir=$(python3 "$MOCKPY" save "$QUARTERDECK_HOME" "$ID" "$TMP/pages.json" 2>>"$LOG_FILE") \
   || { failed "could not save the pages"; die "mockup: could not save the pages (see $LOG_FILE)"; }
 say "  $n page(s) saved in $(basename "$(dirname "$dir")")/$(basename "$dir")"
-say "  look at them in the dashboard, then:  quarterdeck mockup approve $ID    or    quarterdeck mockup changes $ID \"what should change\""
+say "  look at them in the dashboard, then:  qtdeck mockup approve $ID    or    qtdeck mockup changes $ID \"what should change\""
 record_run "$RUNPROJECT" mockup MOCKED "$n page(s) for brief $ID"
 exit
 }

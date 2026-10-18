@@ -2,8 +2,8 @@
 # brief — turn an idea, or an issue, into a one-page design brief a person can read and approve. Builds nothing.
 #
 # The draughtsman draws the plan the owner approves before any timber is cut. Two kinds of owner use it:
-#   * someone starting something new, in plain words:      quarterdeck brief --idea "a page for my book swap" --for "my neighbours"
-#   * a developer who wants a brief for one issue:          quarterdeck run <project> brief --issue 12
+#   * someone starting something new, in plain words:      qtdeck brief --idea "a page for my book swap" --for "my neighbours"
+#   * a developer who wants a brief for one issue:          qtdeck run <project> brief --issue 12
 # The model writes the brief as one JSON contract (BRIEF_JSON). The harness (bin/brief.py) checks it: required
 # fields, bounded lengths, at most 8 screens, accessibility that names the keyboard and the visible focus, no code
 # and no commands. A reply that fails is a failed run that writes nothing.
@@ -11,12 +11,12 @@
 # What it writes, and where (only with --apply):
 #   * a document, workspace/<project-or-title>-brief-<id>.md, in the data folder, never in a project folder;
 #   * state/briefs/<id>.json, the same brief for machines, status "proposed".
-# The owner answers it: `quarterdeck brief approve <id>` or `quarterdeck brief changes <id> "what should change"`, then
+# The owner answers it: `qtdeck brief approve <id>` or `qtdeck brief changes <id> "what should change"`, then
 # `--revise <id>` writes the next version from those notes. Mock-ups come only from an approved brief (duties/mockup.sh).
 #
-#   quarterdeck brief --idea "..." [--for "..."] [--project name] [--apply]
-#   quarterdeck run <p> brief --issue N [--apply]
-#   quarterdeck brief --revise <brief-id> [--apply]
+#   qtdeck brief --idea "..." [--for "..."] [--project name] [--apply]
+#   qtdeck run <p> brief --issue N [--apply]
+#   qtdeck brief --revise <brief-id> [--apply]
 #   (--id <brief-id> lets the dashboard name the brief before it starts, so it can show progress)
 #
 # Contract:
@@ -65,7 +65,7 @@ fi
 [ -n "$IDEA" ] || [ -n "$ISSUE_N" ] || die "brief: give --idea \"...\" or --issue N"
 [ -z "$IDEA" ] || [ -z "$ISSUE_N" ] || [ -n "$REVISE" ] || die "brief: give an idea or an issue, not both"
 [ -n "$ID" ] || ID=$(python3 "$BRIEFPY" new-id)
-[ -z "$ISSUE_N" ] || { [ -n "$PROJECT" ] && project_exists "$PROJECT" || die "brief: an issue needs a registered project (quarterdeck run <project> brief --issue N)"; }
+[ -z "$ISSUE_N" ] || { [ -n "$PROJECT" ] && project_exists "$PROJECT" || die "brief: an issue needs a registered project (qtdeck run <project> brief --issue N)"; }
 
 LOG_FILE="$QUARTERDECK_HOME/logs/brief-${PROJECT:-idea}.log"
 TMP=$(mktemp -d)
@@ -202,7 +202,7 @@ fi
 doc=$(python3 "$BRIEFPY" save "$QUARTERDECK_HOME" "$TMP/rec.json" 2>>"$LOG_FILE") \
   || { failed "could not write the brief"; die "brief: could not write the brief (see $LOG_FILE)"; }
 say "  brief $ID written to $(basename "$doc")"
-say "  read it, then:  quarterdeck brief approve $ID    or    quarterdeck brief changes $ID \"what should change\""
+say "  read it, then:  qtdeck brief approve $ID    or    qtdeck brief changes $ID \"what should change\""
 record_run "$RUNPROJECT" brief BRIEFED "$title: $ns screen(s), $nq question(s) for you — brief $ID"
 exit
 }

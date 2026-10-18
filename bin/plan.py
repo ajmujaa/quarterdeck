@@ -25,9 +25,11 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import markers as _markers          # the requirements block, in any form it was ever written
+
 SIZES = ("S", "M", "L")
 BODY_MAX = 2000
-REQ_MARK = "<!-- quarterdeck:requirements -->"
 REFERENCE = ("No run of this project is measured yet, so every cost below is unknown. The only measured "
              "reference is from a different project: the first full cycle on a fixture cost about 7.4 "
              "dollars for a one-button change. That is a reference from a different project, not an estimate for this one.")
@@ -141,7 +143,7 @@ def context(snap, issues, home, project, cap=30):
         mentions = sorted({int(m) for m in re.findall(r"#(\d+)", (iss.get("title") or "") + " " + body)} - {n})
         items.append({"n": n, "title": iss.get("title") or i.get("title") or "", "status": i["status"],
                       "labels": [l["name"] if isinstance(l, dict) else l for l in (iss.get("labels") or i.get("labels") or [])],
-                      "has_requirements": REQ_MARK in body, "mentions": [m for m in mentions if m in k],
+                      "has_requirements": _markers.has_requirements(body), "mentions": [m for m in mentions if m in k],
                       "body": body[:BODY_MAX]})
     runs = costs(home, project)
     per = {s: expected(s, runs) for s in SIZES}
@@ -353,8 +355,8 @@ def render(p):
     o += [f"- **#{l['issue']} {l['title']}:** {l['reason']}" for l in p["left_out"]] or ["None."]
     if p["reordered"]:
         o += ["", "_The planner's order put an item before something it depends on; the harness moved the dependency first._"]
-    o += ["", "## To go ahead", "", f"1. `quarterdeck plan approve {p['project']} {p['id']}`",
-          f"2. `quarterdeck plan apply {p['project']} {p['id']}` lists the card moves; add `--apply` to make them.", "",
+    o += ["", "## To go ahead", "", f"1. `qtdeck plan approve {p['project']} {p['id']}`",
+          f"2. `qtdeck plan apply {p['project']} {p['id']}` lists the card moves; add `--apply` to make them.", "",
           "Only the sprint's cards move (Backlog to Ready), one at a time, and a card that has moved since this plan was made is left alone. "
           "No issue is created or edited."]
     return "\n".join(o) + "\n"
@@ -414,7 +416,7 @@ def apply(home, project, pid, owner, number, repo, status_map="", do_apply=False
     if p["status"] == "superseded":
         raise PlanError(f"{pid} was superseded by a newer plan")
     if do_apply and p["status"] != "approved":
-        raise PlanError(f"{pid} is {p['status']}, not approved: run  quarterdeck plan approve {project} {pid}  first")
+        raise PlanError(f"{pid} is {p['status']}, not approved: run  qtdeck plan approve {project} {pid}  first")
     r = _board("snapshot", owner, str(number), repo)
     if r.returncode != 0:
         raise PlanError("could not read the board: " + (r.stderr or "").strip()[:200])
@@ -486,7 +488,7 @@ def main(a):
         print(save(a[1], json.load(open(a[2]))))
     elif c == "approve":
         p = approve(a[1], a[2], a[3])
-        print(f"{p['id']} is approved. Next: quarterdeck plan apply {p['project']} {p['id']}   (add --apply to move the cards)")
+        print(f"{p['id']} is approved. Next: qtdeck plan apply {p['project']} {p['id']}   (add --apply to move the cards)")
     elif c == "apply":
         print("\n".join(apply(a[1], a[2], a[3], a[4], a[5], a[6], "" if a[7] == "-" else a[7], "--apply" in a[8:]))
               + ("" if "--apply" in a[8:] else "\n(report only: add --apply to make these moves)"))

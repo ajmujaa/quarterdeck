@@ -11,8 +11,8 @@
 # The pictures are the duty's own evidence, taken from a build of the pull request under the duty's own state. They are
 # not the owner's screen. Read only for the model; nothing is posted or written without --apply.
 #
-#   quarterdeck run <p> lookout --pr 218            report only
-#   quarterdeck run <p> lookout --pr 218 --apply    comment on the pull request, write the findings document and file
+#   qtdeck run <p> lookout --pr 218            report only
+#   qtdeck run <p> lookout --pr 218 --apply    comment on the pull request, write the findings document and file
 #
 # The project says how to start its app, and which routes and notes to use, in config/projects.json:
 #   "qa": {"start": "npm run dev -- --port $PORT", "build": "npm run build", "env": {"SUPABASE_URL": "http://127.0.0.1:54321"}}
@@ -33,7 +33,7 @@ set -uo pipefail
 {
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)/lib.sh"
 
-PROJECT="${QUARTERDECK_PROJECT:?run me through: quarterdeck run <project> lookout --pr <n>}"
+PROJECT="${QUARTERDECK_PROJECT:?run me through: qtdeck run <project> lookout --pr <n>}"
 SOURCE_REPO_DIR="${QUARTERDECK_WORKDIR:?}"
 LOG_FILE="$QUARTERDECK_HOME/logs/lookout-$PROJECT.log"
 REPO=$(project_get "$PROJECT" repo)

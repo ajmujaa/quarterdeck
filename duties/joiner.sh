@@ -9,8 +9,8 @@
 # joiner's seat on the design panel are the same brief rather than two copies
 # that drift. It writes a findings document and nothing else: no GitHub access.
 # Hand its output to the foreman to get issues:
-#   quarterdeck run <p> joiner
-#   quarterdeck run <p> foreman --from workspace/<p>-joiner-<date>.md --apply
+#   qtdeck run <p> joiner
+#   qtdeck run <p> foreman --from workspace/<p>-joiner-<date>.md --apply
 #
 # Contract:
 #   FINDINGS_JSON: [{"area","severity","title","what","where","why","fix"}, ...]
@@ -25,7 +25,7 @@ set -uo pipefail
 {
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)/lib.sh"
 
-PROJECT="${QUARTERDECK_PROJECT:?run me through: quarterdeck run <project> joiner}"
+PROJECT="${QUARTERDECK_PROJECT:?run me through: qtdeck run <project> joiner}"
 WORKDIR="${QUARTERDECK_WORKDIR:?}"
 LOG_FILE="$QUARTERDECK_HOME/logs/joiner-$PROJECT.log"
 
@@ -110,7 +110,7 @@ say "quarterdeck: $n finding(s) written to"
 say "  $OUT"
 say ""
 say "  file them with:"
-say "  quarterdeck run $PROJECT foreman --from \"$OUT\" --apply"
+say "  qtdeck run $PROJECT foreman --from \"$OUT\" --apply"
 
 record_run "$PROJECT" joiner "FINDINGS" "$n written to $(basename "$OUT")"
 

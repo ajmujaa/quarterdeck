@@ -17,9 +17,9 @@
 # branch is the owner's decision. It walks only the registered project's own repository, from a throwaway worktree of its base branch.
 # It runs at most once a day (--again to walk again by hand), and ships with no schedule set.
 #
-#   quarterdeck run <p> bosun                 report only: the state report, no issue
-#   quarterdeck run <p> bosun --apply         also create or update the summary issue
-#   quarterdeck run <p> bosun --stale 30 --todo 60 --again
+#   qtdeck run <p> bosun                 report only: the state report, no issue
+#   qtdeck run <p> bosun --apply         also create or update the summary issue
+#   qtdeck run <p> bosun --stale 30 --todo 60 --again
 #
 # Contract:
 #   RANKED_JSON: [{"id":"<finding id>","action":"one line"}, ...]     most important first; only ids the harness gave
@@ -35,7 +35,7 @@ set -uo pipefail
 {
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)/lib.sh"
 
-PROJECT="${QUARTERDECK_PROJECT:?run me through: quarterdeck run <project> bosun}"
+PROJECT="${QUARTERDECK_PROJECT:?run me through: qtdeck run <project> bosun}"
 SOURCE_REPO_DIR="${QUARTERDECK_WORKDIR:?}"
 LOG_FILE="$QUARTERDECK_HOME/logs/bosun-$PROJECT.log"
 REPO=$(project_get "$PROJECT" repo)

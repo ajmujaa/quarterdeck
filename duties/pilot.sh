@@ -10,8 +10,8 @@
 #
 # It writes a findings document and nothing else. The Foreman files issues from that document.
 #
-#   quarterdeck run <p> pilot --pr 218            report only
-#   quarterdeck run <p> pilot --pr 218 --apply    also write workspace/<p>-pilot-pr218.md and the findings file
+#   qtdeck run <p> pilot --pr 218            report only
+#   qtdeck run <p> pilot --pr 218 --apply    also write workspace/<p>-pilot-pr218.md and the findings file
 #
 # The project says how to start its app in config/projects.json:
 #   "qa": {"start": "npm run dev -- --port $PORT", "ready": "/", "build": "npm run build", "env": {"SUPABASE_URL": "http://127.0.0.1:54321"}, "routes": ["/settings"]}
@@ -38,7 +38,7 @@ set -uo pipefail
 {
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)/lib.sh"
 
-PROJECT="${QUARTERDECK_PROJECT:?run me through: quarterdeck run <project> pilot --pr <n>}"
+PROJECT="${QUARTERDECK_PROJECT:?run me through: qtdeck run <project> pilot --pr <n>}"
 SOURCE_REPO_DIR="${QUARTERDECK_WORKDIR:?}"
 LOG_FILE="$QUARTERDECK_HOME/logs/pilot-$PROJECT.log"
 REPO=$(project_get "$PROJECT" repo)
@@ -172,7 +172,7 @@ say "  routes the crew may open: $(jq -r 'join(" ")' <<<"$ROUTES")"
 
 # ---- the crew writes plans ---------------------------------------------------------------------------
 SEATS=$(crew_by_discipline qa | tr '\n' ' '); SEATS="$(xargs <<<"$SEATS")"
-[ -n "$SEATS" ] || die "pilot: no crew sits on the qa panel (see: quarterdeck crew)"
+[ -n "$SEATS" ] || die "pilot: no crew sits on the qa panel (see: qtdeck crew)"
 ADR_SPEC=""
 if [ "$ADR_ON" = 1 ]; then
   adr_block "$PROJECT" "$(project_get "$PROJECT" default_branch main)" "$changed" "$title

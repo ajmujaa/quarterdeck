@@ -52,6 +52,6 @@ jobs:
         run: python3 bin/selftest.py
       - name: Doctor (informational, runners have no claude or gh)
         continue-on-error: true
-        run: bin/quarterdeck doctor
+        run: bin/qtdeck doctor
       - name: Check
-        run: bin/quarterdeck check
+        run: bin/qtdeck check

@@ -18,9 +18,9 @@
 # in the registry, falling back to matching the board's own option names. A
 # board with different columns works without touching this file.
 #
-#   quarterdeck run <p> harbourmaster            # report the drift
-#   quarterdeck run <p> harbourmaster --apply    # move things
-#   quarterdeck run <p> harbourmaster --sync-only --apply   # facts only, no model
+#   qtdeck run <p> harbourmaster            # report the drift
+#   qtdeck run <p> harbourmaster --apply    # move things
+#   qtdeck run <p> harbourmaster --sync-only --apply   # facts only, no model
 #
 # Contract:
 #   MOVES_JSON: [{"item_id","number","to","why"}]
@@ -36,7 +36,7 @@ set -uo pipefail
 {
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)/lib.sh"
 
-PROJECT="${QUARTERDECK_PROJECT:?run me through: quarterdeck run <project> harbourmaster}"
+PROJECT="${QUARTERDECK_PROJECT:?run me through: qtdeck run <project> harbourmaster}"
 WORKDIR="${QUARTERDECK_WORKDIR:?}"
 LOG_FILE="$QUARTERDECK_HOME/logs/harbourmaster-$PROJECT.log"
 REPO=$(project_get "$PROJECT" repo)

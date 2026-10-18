@@ -26,7 +26,7 @@ setBasePath("/assets/vendor/shoelace");
     <h1 id="unpaired-h">Open Quarterdeck from its link</h1>
     <p id="unpaired-why">This tab is not connected to your dashboard.</p>
     <p>Quarterdeck shows your work only to a tab opened from a one-time link, so no other program on this computer can read it. Reloading a connected tab keeps it connected. In a terminal, run:</p>
-    <pre class="unp-cmd" id="unpaired-go" tabindex="0">quarterdeck dashboard link</pre>
+    <pre class="unp-cmd" id="unpaired-go" tabindex="0">qtdeck dashboard link</pre>
     <p>It prints a fresh link. Open it in this tab.</p>
   </div>
 </section>
@@ -236,6 +236,8 @@ const SLI = {bot:"robot", grid:"house", home:"house", eye:"diagram-3", target:"k
   play:"play-fill", clock:"clock", box:"collection", folder:"folder2", list:"list", check:"check-lg", arrow:"arrow-right", fix:"wrench", pr:"git", coin:"coin", term:"terminal", scale:"bar-chart"};
 const slIcon = (n, cls) => `<sl-icon name="${esc(SLI[n] || n || "circle")}" ${cls ? `class="${cls}"` : ""}></sl-icon>`;
 const kicker = (text, cls = "") => `<div class="kicker ${cls}">${esc(text)}</div>`;
+const PACK_NOTE = "Tested on small examples only. Read the report as a second opinion, not a verdict.";
+const packPill = status => status === "experimental" ? `<span class="pill warn" title="${esc(PACK_NOTE)}">experimental</span>` : "";
 const pill = (state, label) => `<span class="pill ${esc(state || "")}">${esc(label)}</span>`;
 const btn = (label, o = {}) => `<sl-button ${o.variant ? `variant="${o.variant}"` : ""} size="${o.size || "medium"}" ${o.href ? `href="${esc(safeUrl(o.href))}" target="_blank" rel="noopener"` : ""}${o.disabled ? " disabled" : ""}${o.click ? ` ${o.click}` : ""} ${o.attrs || ""}>${label}</sl-button>`;
 const card = (title, body, o = {}) => `<section class="card ${o.tone ? "tone-" + o.tone : ""} ${o.cls || ""}" ${o.label ? `aria-label="${esc(o.label)}"` : ""} ${o.attrs || ""}>
@@ -1203,7 +1205,7 @@ function recentMissions(){
   const fx = Object.values(S.fixes || {}).filter(mine).map(r => ({id: fixMissionId(r), title: r.title, project: r.project, state: fixStateOf(r), when: r.finished || r.started || ""}));
   const pn = S.panels.filter(mine).filter(p => !p.superseded_by).map(p => ({id: "panel:" + p.id, title: p.headline || p.subject || p.discipline + " panel", project: p.project,
     state: p.status === "running" ? "running" : p.status === "done" ? "done" : "blocked", when: p.finished || p.started || ""}));
-  // a cycle (quarterdeck cycle) is one mission too; the page reads its record. The only thing it can do is start one (Start a full cycle), never resume or stop it
+  // a cycle (qtdeck cycle) is one mission too; the page reads its record. The only thing it can do is start one (Start a full cycle), never resume or stop it
   const cy = (S.cycles || []).filter(mine).map(c => ({id: "cycle:" + c.id, title: `Cycle · #${c.issue} ${c.title || ""}`.trim(), project: c.project,
     state: c.status === "running" ? "running" : c.status === "awaiting-review" ? "awaiting" : ["needs-human", "failed", "stopped-cap", "stopped-ceiling"].includes(c.status) ? "blocked" : "done",
     when: c.finished || c.started || ""}));
@@ -1529,6 +1531,8 @@ function viewSettings(){
       + row("Voice", esc(d.voice) + ", speed " + esc(d.voice_speed), "Speech recognition and the voice run on this computer.")
       + row("Attention timeline", d.attention ? "On" : "Off", "Counts and times only, from your registered projects.")
       + `<p class="sub" style="margin-top:12px">To change any of these, edit <code>${esc((d.env_files[1] || d.env_files[0] || "config/quarterdeck.env"))}</code> and restart the dashboard.</p>`)
+    + sec("Packs", (d.packs || []).map(x => row(x.label, `<code>${esc(x.id)}</code> ${packPill(x.status)}`, "")).join("")
+      + ((d.packs || []).some(x => x.status === "experimental") ? `<p class="sub" style="margin-top:12px">${esc(PACK_NOTE)}</p>` : ""))
     + sec("What is never collected", `<p>Keystrokes, screenshots, screen contents, which apps or websites you use, the clipboard, your location, or any file outside the projects you register and the data folder. A test scans the code for the calls that would do it.</p>
       <p style="margin-top:8px"><button class="mlink link" ${act("dockGo", "connections")}>Connections</button> reads only what you switch on, and any credential you enter stays in a private file on this computer.</p>`)
     + sec("This version", row("Version", `<code>${esc(d.commit || "unknown")}</code>`, "Running for " + up + ".")
@@ -1583,7 +1587,7 @@ function viewPanels(){
   const old = all.filter(p => p.superseded_by);
   const list = all.filter(p => showOld || !p.superseded_by);
   const fold = old.length ? `<div class="btns" style="margin-top:var(--s4)">${btn(showOld ? `Hide ${old.length} superseded` : `Show ${old.length} superseded (a later run of the same panel replaced them)`, {click: act("toggleOld")})}</div>` : "";
-  if(!list.length) return emptyState({kicker: "Panels", title: "No panels here yet.", body: "Run one from the terminal: quarterdeck run <project> panel --panel design."}) + fold;
+  if(!list.length) return emptyState({kicker: "Panels", title: "No panels here yet.", body: "Run one from the terminal: qtdeck run <project> panel --panel design."}) + fold;
   return `<div class="grid g3">` + list.map(p => {
     const live = p.status === "running", broke = !live && p.status !== "done";
     const cut = Math.max(0, p.raised - p.kept), tot = Math.max(1, p.raised);
@@ -2632,7 +2636,7 @@ async function attachLook(){
     + `<h3>What the crew would do</h3>
       <p>This is a proposal. Change anything you like; nothing is added until you click the button at the end.</p>
       <ul><li><b>Repository</b> ${esc(e.repo || "no GitHub address found")}</li>
-      <li><b>Stack notes</b> ${esc(e.packs.join(", ") || "none")}. ${esc(cap(j.proposal.reasons.packs))}.</li></ul>
+      <li><b>Stack notes</b> ${esc(e.packs.join(", ") || "none")} ${e.packs.map(id => packPill((j.pack_status || {})[id])).join(" ")}. ${esc(cap(j.proposal.reasons.packs))}.</li></ul>
       <div class="sec-h">Duties</div>
       <p class="hint">${esc(cap(j.proposal.reasons.duties))}.</p>
       <div class="focus-rows" style="flex-direction:column;align-items:flex-start;gap:0">${j.duty_options.map(o => slCheckbox(`${esc(o.name)}<small> ${esc(o.role)}</small>`, {attrs: `data-ad="${esc(o.name)}"${e.duties.includes(o.name) ? " checked" : ""}`})).join("")}</div>
@@ -4255,7 +4259,7 @@ const ACTIONS = {
   ...EXT.actions,                                   // an add-on's own (assets/ext-*.js), by name
 };
 
-// ---- Pairing: the page is served without any secret. A one-time link (quarterdeck dashboard) carries a nonce in its #fragment, which no server or log ever sees;
+// ---- Pairing: the page is served without any secret. A one-time link (qtdeck dashboard) carries a nonce in its #fragment, which no server or log ever sees;
 // the page trades it for an HttpOnly cookie and this tab's token. The token lives in this tab's sessionStorage, so a reload keeps working; the server never
 // hands it out again (any server on 127.0.0.1 the browser visits receives the cookie, cookies are not per port), so a new tab needs a new link. ----
 function showUnpaired(why){

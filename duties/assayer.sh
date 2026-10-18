@@ -13,9 +13,9 @@
 # Needs two commands in config/projects.json: the project's whole suite as "test", and how to run ONE test file:
 #   "test_file": "npx vitest run {file}"        ({file} is replaced by one validated path)
 #
-#   quarterdeck run <p> assayer --issue 204                       write the tests, check they fail on the base; report only
-#   quarterdeck run <p> assayer --issue 204 --pr 218              also check they pass on the pull request's head
-#   quarterdeck run <p> assayer --issue 204 --pr 218 --apply      commit the ones that did both, on a branch, as a pull request
+#   qtdeck run <p> assayer --issue 204                       write the tests, check they fail on the base; report only
+#   qtdeck run <p> assayer --issue 204 --pr 218              also check they pass on the pull request's head
+#   qtdeck run <p> assayer --issue 204 --pr 218 --apply      commit the ones that did both, on a branch, as a pull request
 #
 # Contract:
 #   TESTS_JSON: [{"file":"path of the new test file","name":"what it asserts","accept":"the acceptance check it comes from"}]
@@ -31,7 +31,7 @@ set -uo pipefail
 {
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)/lib.sh"
 
-PROJECT="${QUARTERDECK_PROJECT:?run me through: quarterdeck run <project> assayer --issue <n>}"
+PROJECT="${QUARTERDECK_PROJECT:?run me through: qtdeck run <project> assayer --issue <n>}"
 SOURCE_REPO_DIR="${QUARTERDECK_WORKDIR:?}"
 LOG_FILE="$QUARTERDECK_HOME/logs/assayer-$PROJECT.log"
 REPO=$(project_get "$PROJECT" repo)
@@ -79,13 +79,8 @@ title=$(jq -r .title <<<"$meta"); body=$(jq -r .body <<<"$meta")
 working_on "issue #$ISSUE — tests for: $title"
 say "quarterdeck: assayer on $REPO#$ISSUE — $title"
 
-# The acceptance checks: the purser's block when there is one (its marks are fixed), else the whole issue.
-OPEN_MARK='<!-- quarterdeck:requirements -->'; CLOSE_MARK='<!-- /quarterdeck:requirements -->'
-checks=$(python3 -c '
-import sys
-b = sys.stdin.read(); o = "<!-- quarterdeck:requirements -->"; c = "<!-- /quarterdeck:requirements -->"
-i = b.find(o); j = b.find(c, i + len(o)) if i >= 0 else -1
-print(b[i + len(o):j].strip() if i >= 0 and j >= 0 else b.strip())' <<<"$body")
+# The acceptance checks: the purser's block when there is one (its marks are in bin/markers.py), else the whole issue.
+checks=$(python3 "$QUARTERDECK_DIR/bin/markers.py" checks <<<"$body")
 
 is_test_path() {
   case "$(tr '[:upper:]' '[:lower:]' <<<"$1")" in

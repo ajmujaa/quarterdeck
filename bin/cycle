@@ -1,5 +1,5 @@
 #!/bin/bash
-# quarterdeck cycle — one bounded run of the whole development cycle for ONE issue, then stop for a person.
+# qtdeck cycle — one bounded run of the whole development cycle for ONE issue, then stop for a person.
 #
 # Like bin/fix this is not a duty and not a fifth abstraction: it holds no prompt, makes no model call of its own and decides
 # nothing about code. It is the harness typing, in order, the commands you would type yourself, and stopping at the first
@@ -14,11 +14,11 @@
 #   caulker     seals exactly the findings, at most three cycles; every cycle is followed by the reviewers again
 #   STOP        a person reads the pull request and merges it. Nothing here merges, approves or pushes to the trunk.
 #
-#   quarterdeck cycle <project> --issue 12              report only: purser and the dev panel run (they write nothing), the
+#   qtdeck cycle <project> --issue 12              report only: purser and the dev panel run (they write nothing), the
 #                                                   later stages are listed with what each WOULD do
-#   quarterdeck cycle <project> --issue 12 --apply      every stage follows its own duty's --apply rules
-#   quarterdeck cycle --resume <id>                     a stopped or crashed cycle goes on at the failed stage; a finished stage is never repeated
-#   quarterdeck cycle --status [<id>]                   the stages, their verdicts and what each cost
+#   qtdeck cycle <project> --issue 12 --apply      every stage follows its own duty's --apply rules
+#   qtdeck cycle --resume <id>                     a stopped or crashed cycle goes on at the failed stage; a finished stage is never repeated
+#   qtdeck cycle --status [<id>]                   the stages, their verdicts and what each cost
 #
 # Off unless the project opts in: "cycle": true in its registry entry. It is never started by a schedule or the fix queue (it is not
 # a duty, so neither can name it). The dashboard starts one only from the Mission page's "Start a full cycle" dialog, for an opted-in
@@ -120,10 +120,10 @@ if [ -n "$RESUME" ]; then
     *) die "cycle: $ID is finished ($(jq -r .status "$REC")); there is nothing to resume" ;;
   esac
 else
-  [ -n "$PROJECT" ] || die "usage: quarterdeck cycle <project> --issue <n> [--apply]   |   --resume <id>   |   --status [<id>]"
+  [ -n "$PROJECT" ] || die "usage: qtdeck cycle <project> --issue <n> [--apply]   |   --resume <id>   |   --status [<id>]"
   [[ "$ISSUE" =~ ^[0-9]+$ ]] || die "cycle: which issue? --issue <number>"
 fi
-project_exists "$PROJECT" || die "unknown project '$PROJECT' (see: quarterdeck projects)"
+project_exists "$PROJECT" || die "unknown project '$PROJECT' (see: qtdeck projects)"
 [ "$(jq -r --arg p "$PROJECT" '.[$p].cycle // false' "$PROJECTS_FILE")" = true ] \
   || die "cycle: '$PROJECT' has not opted in. Add \"cycle\": true to its entry in $PROJECTS_FILE first; a cycle spends real money and opens real pull requests, so it is never on by default."
 project_has_duty "$PROJECT" shipwright || die "cycle: the shipwright is not enabled for '$PROJECT' (duties[] in the registry); a cycle with nothing to build with has no point"
@@ -140,7 +140,7 @@ fi
 acquire_lock "cycle-$PROJECT-$ISSUE"
 # acquire_lock set a trap that drops the lock; keep that, and never leave a record saying "running" behind a process that is gone.
 trap 'if [ -n "${REC:-}" ] && [ -f "$REC" ] && [ "$(jq -r .status "$REC" 2>/dev/null)" = running ]; then
-        jq --arg at "$(now)" ".status = \"failed\" | .final = \"stopped before it finished; resume with: quarterdeck cycle --resume ${ID:-}\" | .finished = \$at" "$REC" > "$REC.t" && mv "$REC.t" "$REC"; fi
+        jq --arg at "$(now)" ".status = \"failed\" | .final = \"stopped before it finished; resume with: qtdeck cycle --resume ${ID:-}\" | .finished = \$at" "$REC" > "$REC.t" && mv "$REC.t" "$REC"; fi
       rm -rf "$QUARTERDECK_LOCK"' EXIT
 
 if [ -z "$RESUME" ]; then
@@ -209,12 +209,12 @@ gate() { # gate <stage-id> — a stage that would cross the daily budget or this
   if num_ok "$d" && gt "$d" 0; then
     s=$(spent_today)
     if gt "$(awk -v a="$s" -v b="$est" 'BEGIN { print a + b }')" "$d"; then
-      finish stopped-cap "stopped at the cap: \$$(printf '%.2f' "$s") of today's \$$d is spent, so the next stage ($1) was not started. Nothing was lost. After the cap resets or is raised (QUARTERDECK_DAILY_BUDGET): quarterdeck cycle --resume $ID" 2
+      finish stopped-cap "stopped at the cap: \$$(printf '%.2f' "$s") of today's \$$d is spent, so the next stage ($1) was not started. Nothing was lost. After the cap resets or is raised (QUARTERDECK_DAILY_BUDGET): qtdeck cycle --resume $ID" 2
     fi
   fi
   c=$(cost_so_far)
   if gt "$(awk -v a="$c" -v b="$est" 'BEGIN { print a + b }')" "$CEILING"; then
-    finish stopped-ceiling "stopped at the cycle ceiling: this cycle has cost \$$(printf '%.2f' "$c") of its \$$CEILING (QUARTERDECK_CYCLE_BUDGET), so the next stage ($1) was not started. To go on, raise it and: quarterdeck cycle --resume $ID" 2
+    finish stopped-ceiling "stopped at the cycle ceiling: this cycle has cost \$$(printf '%.2f' "$c") of its \$$CEILING (QUARTERDECK_CYCLE_BUDGET), so the next stage ($1) was not started. To go on, raise it and: qtdeck cycle --resume $ID" 2
   fi
 }
 
@@ -309,7 +309,7 @@ review_round() { # review_round <n> — the reviewers run side by side on the pu
     [ "$LST" = failed ] && bad="${bad:+$bad, }$d"
     i=$((i + 1))
   done
-  [ -z "$bad" ] || finish failed "round $r: $bad did not report a verdict. Everything else is on the record. Resume with: quarterdeck cycle --resume $ID" 1
+  [ -z "$bad" ] || finish failed "round $r: $bad did not report a verdict. Everything else is on the record. Resume with: qtdeck cycle --resume $ID" 1
 }
 open_findings() { # the findings the caulker could act on: files for this exact head whose verdict is not clean
   local sha; sha=$(guard 60 "$GH" pr view "$PRNUM" -R "$REPO" --json headRefOid -q .headRefOid 2>>"$LOG_FILE") || { echo "?"; return; }
@@ -330,12 +330,12 @@ if [ -z "$RESUME" ]; then
   rec_set --arg t "$(jq -r .title <<<"$info")" '.title = $t'
 fi
 TITLE=$(jq -r '.title // ""' "$REC")
-say "quarterdeck cycle: $PROJECT — #$ISSUE $TITLE"
+say "qtdeck cycle: $PROJECT — #$ISSUE $TITLE"
 say "  $ID · $([ "$APPLY" = 1 ] && echo apply || echo 'report only') · ceiling \$$CEILING · $(num_ok "${QUARTERDECK_DAILY_BUDGET:-}" && echo "daily cap \$$QUARTERDECK_DAILY_BUDGET" || echo 'no daily cap')"
 
 # ---- 1. the purser -------------------------------------------------------------------------------------------------
 simple_stage purser "Purser" purser --issue "$ISSUE" $([ "$APPLY" = 1 ] && echo --apply)
-[ "$LST" = failed ] && finish failed "the purser failed: $LD. Resume with: quarterdeck cycle --resume $ID" 1
+[ "$LST" = failed ] && finish failed "the purser failed: $LD. Resume with: qtdeck cycle --resume $ID" 1
 [ "$LV" = NEEDS_HUMAN ] && finish needs-human "the purser could not write requirements: $LD" 0
 
 # ---- 2. the dev panel ------------------------------------------------------------------------------------------------
@@ -356,14 +356,14 @@ panel_stage() {
   end_stage panel panel "$rc"
 }
 panel_stage
-[ "$LST" = failed ] && finish failed "the dev panel failed: $LD. Resume with: quarterdeck cycle --resume $ID" 1
+[ "$LST" = failed ] && finish failed "the dev panel failed: $LD. Resume with: qtdeck cycle --resume $ID" 1
 if [ "$LST" != skipped ]; then
   case "$LV" in
     RULED) kept=$(sed -nE 's/^dev: ([0-9]+) of .*/\1/p' <<<"$LD")
            [ "${kept:-0}" = 0 ] && finish nothing "the dev panel ruled there is nothing to change for #$ISSUE" 0
            [ -f "$PLAN" ] || finish failed "the dev panel ruled but wrote no plan ($PLAN)" 1 ;;
     CLEAN) finish nothing "the dev panel found nothing to change for #$ISSUE" 0 ;;
-    *)     finish failed "the dev panel did not reach a ruling: $LV $LD. Resume with: quarterdeck cycle --resume $ID" 1 ;;
+    *)     finish failed "the dev panel did not reach a ruling: $LV $LD. Resume with: qtdeck cycle --resume $ID" 1 ;;
   esac
 fi
 
@@ -396,7 +396,7 @@ adopt() { # a pull request this cycle opened before a crash
 }
 if [ "$(stage_state shipwright)" != done ]; then adopt || true; fi
 simple_stage shipwright "Shipwright" shipwright --issue "$ISSUE" --plan "$PLAN" --apply
-[ "$LST" = failed ] && finish failed "the shipwright failed: $LD. Resume with: quarterdeck cycle --resume $ID" 1
+[ "$LST" = failed ] && finish failed "the shipwright failed: $LD. Resume with: qtdeck cycle --resume $ID" 1
 case "$LV" in
   PR) ;;
   NO_CHANGE) finish nothing "the shipwright judged nothing should change: $LD" 0 ;;
@@ -407,7 +407,7 @@ rec_set --arg u "$PR" --argjson n "${PRNUM:-0}" '.pr = $u | .prnum = $n'
 
 # ---- 4. the assayer: tests from the acceptance checks, by an agent that never sees the diff -----------------------------
 simple_stage assayer "Assayer" assayer --issue "$ISSUE" --pr "$PRNUM" --apply
-[ "$LST" = failed ] && finish failed "the assayer failed: $LD. Resume with: quarterdeck cycle --resume $ID" 1
+[ "$LST" = failed ] && finish failed "the assayer failed: $LD. Resume with: qtdeck cycle --resume $ID" 1
 case "$LV" in
   VERIFIED) note "the assayer proposed tests as their own pull request: $LU. Merge it only if you agree with them." ;;
   SKIPPED|NONE) ;;
@@ -419,7 +419,7 @@ while :; do
   sealed=$(jq '[.stages[] | select((.id | startswith("caulk")) and .verdict == "SEALED")] | length' "$REC")
   review_round $((sealed + 1))
   open=$(open_findings)
-  if [ "$open" = "?" ]; then finish failed "could not read the pull request's head from GitHub to count the open findings. Resume with: quarterdeck cycle --resume $ID" 1; fi
+  if [ "$open" = "?" ]; then finish failed "could not read the pull request's head from GitHub to count the open findings. Resume with: qtdeck cycle --resume $ID" 1; fi
   [ "$open" = 0 ] && break
   used=$(jq '[.stages[] | select((.id | test("^caulk[0-9]+$")) and .state == "done")] | length' "$REC")
   if [ "$used" -ge "$MAX_CAULK" ]; then
@@ -429,7 +429,7 @@ while :; do
   fi
   n=$((used + 1))
   simple_stage "caulk$n" "Caulker (cycle $n)" caulker --pr "$PRNUM" --apply
-  [ "$LST" = failed ] && finish failed "the caulker recorded no verdict: $LD. Resume with: quarterdeck cycle --resume $ID" 1
+  [ "$LST" = failed ] && finish failed "the caulker recorded no verdict: $LD. Resume with: qtdeck cycle --resume $ID" 1
   case "$LV" in
     SEALED|REJECTED|ERROR) ;;                       # a cycle was used; SEALED has a new head to read again
     *) finish needs-human "the caulker stopped: $LV${LD:+ — $LD}. $open finding(s) are open for a person." 0 ;;

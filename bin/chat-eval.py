@@ -3,7 +3,7 @@
 running dashboard and prints what a good answer must contain or must not contain, so you can see where it fails.
 
 Needs the dashboard running and the local model installed (it loads a 2 GB model), so it is not part of selftest. Turn
-Demo mode on first (`QUARTERDECK_DEMO=1 quarterdeck dashboard`): the conversations are written for the made-up world at second 0
+Demo mode on first (`QUARTERDECK_DEMO=1 qtdeck dashboard`): the conversations are written for the made-up world at second 0
 (wayfarer-mobile building issue 14, four pull requests open, Gmail with a mail
 older than a day, 5 open notes). Nothing here is sent to Claude: it only calls the local brain.
 

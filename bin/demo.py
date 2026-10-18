@@ -437,7 +437,7 @@ class World:
                         "detail": j.get("fail") or ("opened by Quarterdeck" if status == "pr" else "")}
         return out
 
-    # ---- cycles: two invented `quarterdeck cycle` run records (state/cycles/<id>.json), read only like the real ones ----
+    # ---- cycles: two invented `qtdeck cycle` run records (state/cycles/<id>.json), read only like the real ones ----
     def cycle_records(self):
         def st(sid, title, duty, state, verdict, detail, cost, mins, url=""):
             return {"id": sid, "title": title, "duty": duty, "state": state, "verdict": verdict, "detail": detail, "url": url, "cost": cost,
@@ -470,7 +470,7 @@ class World:
             f"cyc-harvest-pipeline-31-{int(self.t0) - 90000}": {
                 "kind": "cycle", "id": f"cyc-harvest-pipeline-31-{int(self.t0) - 90000}", "project": "harvest-pipeline", "issue": 31, "title": "Skip empty partitions in the nightly load",
                 "apply": True, "status": "stopped-cap", "started": self.ago(minutes=1505), "finished": self.ago(minutes=1494), "seconds": 660,
-                "final": "stopped at the cap: $119.82 of today's $120 is spent, so the next stage (shipwright) was not started. Nothing was lost. After the cap resets or is raised (QUARTERDECK_DAILY_BUDGET): quarterdeck cycle --resume <id>",
+                "final": "stopped at the cap: $119.82 of today's $120 is spent, so the next stage (shipwright) was not started. Nothing was lost. After the cap resets or is raised (QUARTERDECK_DAILY_BUDGET): qtdeck cycle --resume <id>",
                 "pr": None, "prnum": None, "stages": b, "cost": round(sum(x["cost"] for x in b), 4), "notes": []}}
 
     def cycle_projects(self):

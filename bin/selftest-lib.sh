@@ -24,7 +24,7 @@ st_gone() { local i; for i in $(seq 1 40); do pgrep -f "$1" >/dev/null 2>&1 || r
 
 st_init() { # st_init <duty>... — a throwaway Quarterdeck holding the harness, those duties and the real crew
   mkdir -p "$T"/{bin,config,crew,duties,state,workspace,logs/runs,path,ghdata,replies}
-  cp "$REAL"/bin/{lib.sh,outscan.py,guard.py,home.py,protect.py,safegit.py,gitrisky.re,behaviour.py,routes.py} "$T/bin/"
+  cp "$REAL"/bin/{lib.sh,markers.py,outscan.py,guard.py,home.py,protect.py,safegit.py,gitrisky.re,behaviour.py,routes.py} "$T/bin/"
   for f in browse.mjs decisions.sh; do [ -f "$REAL/bin/$f" ] && cp "$REAL/bin/$f" "$T/bin/"; done
   for d in "$@"; do cp "$REAL/duties/$d.sh" "$T/duties/"; done
   cp "$REAL"/config/quarterdeck.env "$T/config/"; cp "$REAL"/crew/*.md "$T/crew/"

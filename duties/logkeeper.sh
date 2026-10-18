@@ -11,8 +11,8 @@
 # make it wrong. It also lists the Paths and Keywords the harness (bin/decisions.sh, bin/adr.py) matches a later review's
 # diff and issue against, so the right records are put in front of every review duty.
 #
-#   quarterdeck run <p> logkeeper --panel <decision-panel-id>            report only
-#   quarterdeck run <p> logkeeper --panel <decision-panel-id> --apply    branch decision/NNNN-slug and a pull request
+#   qtdeck run <p> logkeeper --panel <decision-panel-id>            report only
+#   qtdeck run <p> logkeeper --panel <decision-panel-id> --apply    branch decision/NNNN-slug and a pull request
 #
 # Contract:
 #   RECORD_JSON: {"title","chosen","rejected":[{"option","cost"}],"hard_to_reverse":[],"wrong_if":[],"paths":[],"keywords":[]}
@@ -27,7 +27,7 @@ set -uo pipefail
 {
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)/lib.sh"
 
-PROJECT="${QUARTERDECK_PROJECT:?run me through: quarterdeck run <project> logkeeper --panel <id>}"
+PROJECT="${QUARTERDECK_PROJECT:?run me through: qtdeck run <project> logkeeper --panel <id>}"
 SOURCE_REPO_DIR="${QUARTERDECK_WORKDIR:?}"
 LOG_FILE="$QUARTERDECK_HOME/logs/logkeeper-$PROJECT.log"
 REPO=$(project_get "$PROJECT" repo)

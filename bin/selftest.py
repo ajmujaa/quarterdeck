@@ -5,7 +5,7 @@ Scheduling decides when something runs unattended, and validation is the only
 thing standing between a loopback POST and a subprocess. Both are pure
 functions, so they are cheap to check and there is no excuse for not doing it.
 
-Run directly, or through `quarterdeck doctor`.
+Run directly, or through `qtdeck doctor`.
 """
 import importlib.util
 import pathlib
@@ -327,14 +327,14 @@ _s_ok = _ck.step("t", [sys.executable, "-c", "print('  ok    a'); print('  ok   
 _s_bad = _ck.step("t", [sys.executable, "-c", "print('  ok    a'); print('  FAIL  the thing broke: why'); raise SystemExit(1)"])
 _s_crash = _ck.step("t", [sys.executable, "-c", "raise SystemExit('boom')"])
 _s_okfail = _ck.step("t", [sys.executable, "-c", "print('  ok    a failed run is superseded'); print('  FAIL  the real one: why'); raise SystemExit(1)"])
-check("quarterdeck check: a healthy dashboard is green, a quiet loop is red and named, a stopped dashboard is reported not crashed",
+check("qtdeck check: a healthy dashboard is green, a quiet loop is red and named, a stopped dashboard is reported not crashed",
       _h_ok[0] is True and _h_bad[0] is False and "scheduler" in _h_bad[2] and "agenda" not in _h_bad[2] and _h_odd[0] is False
       and _h_down[0] is None and "not running" in _h_down[1] and _h_inj[0] is None, (_h_ok, _h_bad, _h_down, _h_inj))
-check("quarterdeck check: a step is green only on exit 0, and the first failing line is shown",
+check("qtdeck check: a step is green only on exit 0, and the first failing line is shown",
       _s_ok == (True, "2 ok", "") and _s_bad[0] is False and _s_bad[2] == "FAIL  the thing broke: why" and _s_crash[0] is False and _s_crash[2] == "boom" and _s_okfail[2] == "FAIL  the real one: why", (_s_ok, _s_bad, _s_crash, _s_okfail))
-check("quarterdeck check is wired into the command line, its help and the README",
-      'exec python3 "$QUARTERDECK_DIR/bin/check.py"' in (ROOT / "bin" / "quarterdeck").read_text() and "check  " in (ROOT / "bin" / "quarterdeck").read_text()
-      and "quarterdeck check" in (ROOT / "README.md").read_text())
+check("qtdeck check is wired into the command line, its help and the README",
+      'exec python3 "$QUARTERDECK_DIR/bin/check.py"' in (ROOT / "bin" / "qtdeck").read_text() and "check  " in (ROOT / "bin" / "qtdeck").read_text()
+      and "qtdeck check" in (ROOT / "README.md").read_text())
 import wave as _wave
 if _sh.which("whisper-cli") and d.WHISPER_MODEL.is_file():
     _w = Path(_tf.mkdtemp()) / "s.wav"
@@ -1420,7 +1420,7 @@ try:
     d.spawn_run("my-web-app", "panel", ["--panel", "spec", "--idea", "offline mode"], apply_=False)
 finally:
     d.subprocess.Popen, d.LOGS = _lp, _lg0
-check("the spec panel Helm offers runs as 'quarterdeck run <project> panel --panel spec --idea <words>', never with --apply",
+check("the spec panel Helm offers runs as 'qtdeck run <project> panel --panel spec --idea <words>', never with --apply",
       len(_rcalls) == 2 and _rcalls[0][1:] == ["run", "my-web-app", "panel", "--panel", "spec", "--idea", "offline mode"]
       and "--apply" not in _rcalls[0], _rcalls)
 def _vr(*a):
@@ -2567,20 +2567,20 @@ check("migrate: with the marker in ~/.quarterdeck the next start uses it, and wi
       (lambda uh: (_hm.init(uh / ".quarterdeck"), _hm.resolve({}, uh, _code) == uh / ".quarterdeck", _hm.rollback(uh / ".quarterdeck"), _hm.resolve({}, uh, _code) == _code)[1:] )(_ft / "uh2")[0] is True
       and _hm.resolve({}, _ft / "uh2", _code) == _code)
 # the same commands through the real command line (a Python-only test missed that the wrapper dispatched on the wrong word)
-_cli = str(pathlib.Path(d.__file__).parent / "quarterdeck")
+_cli = str(pathlib.Path(d.__file__).parent / "qtdeck")
 _cli_home = _ft / "cli-home"
 _c1 = _sp.run(["bash", _cli, "home", "init", str(_cli_home)], capture_output=True, text=True, env={**_ev0, "HOME": str(_ft / "uh3")})
 _c2 = _sp.run(["bash", _cli, "home", "migrate"], capture_output=True, text=True, env={**_ev0, "HOME": str(_ft / "uh3")})
 _c3 = _sp.run(["bash", _cli, "home"], capture_output=True, text=True, env={**_ev0, "HOME": str(_ft / "uh3")})
-check("quarterdeck home: init makes the folder, migrate with no flag is a dry run that copies nothing, and plain home shows both folders, all through the command line",
+check("qtdeck home: init makes the folder, migrate with no flag is a dry run that copies nothing, and plain home shows both folders, all through the command line",
       _c1.returncode == 0 and (_cli_home / ".quarterdeck-home").is_file() and _c2.returncode in (0, 1) and ("dry run" in _c2.stdout or "not safe to copy" in _c2.stdout) and not (_ft / "uh3" / ".quarterdeck").exists()
       and "the program" in _c3.stdout and "your data" in _c3.stdout, (_c1.stderr, _c2.stdout[-300:]))
-# publish: the public tree is built from committed files, renamed, with the private left out (bin/publish.py; absent from the public tree itself, so these skip there)
+# publish: the public tree is built from committed files, with the private left out (bin/publish.py; absent from the public tree itself, so these skip there)
 if (pathlib.Path(d.__file__).parent / "publish.py").exists():
     import publish as _pb
     _pr_ = _ft / "pubrepo"; (_pr_ / "bin").mkdir(parents=True); (_pr_ / "docs" / "cloud-tasks").mkdir(parents=True); (_pr_ / "config").mkdir(); (_pr_ / "tools" / "QuarterdeckAgenda").mkdir(parents=True)
-    (_pr_ / "README.md").write_text("Quarterdeck runs with QUARTERDECK_HOME. Try `quarterdeck home`. See github.com/o/quarterdeck.\n")
-    (_pr_ / "bin" / "quarterdeck").write_text("#!/bin/bash\necho \"$QUARTERDECK_HOME\" # quarterdeck\n"); _fo.chmod(_pr_ / "bin" / "quarterdeck", 0o755)
+    (_pr_ / "README.md").write_text("Quarterdeck runs with QUARTERDECK_HOME. Try `qtdeck home`. See github.com/o/quarterdeck.\n")
+    (_pr_ / "bin" / "qtdeck").write_text("#!/bin/bash\necho \"$QUARTERDECK_HOME\" # quarterdeck\n"); _fo.chmod(_pr_ / "bin" / "qtdeck", 0o755)
     (_pr_ / "docs" / "cloud-tasks" / "brief.md").write_text("private brief about Quarterdeck\n"); (_pr_ / "config" / "projects.json").write_text('{"mine": {}}')
     (_pr_ / "config" / "projects.example.json").write_text('{"my-web-app": {}}'); (_pr_ / "tools" / "QuarterdeckAgenda" / "main.swift").write_text("// Quarterdeck agenda\n")
     (_pr_ / "logo-quarterdeck.png").write_bytes(b"\x89PNG\0quarterdeck\0data"); (_pr_ / "state").mkdir(); (_pr_ / "state" / "runs.json").write_text("[]")
@@ -2592,12 +2592,16 @@ if (pathlib.Path(d.__file__).parent / "publish.py").exists():
     check("publish: the tree is built from what is committed, leaves out the private paths, and never includes an uncommitted or ignored file",
           not (_po / "docs" / "cloud-tasks").exists() and not (_po / "config" / "projects.json").exists() and not (_po / "state").exists() and not (_po / "uncommitted.txt").exists()
           and (_po / "config" / "projects.example.json").is_file() and _st["excluded"] == 5, _st)
-    check("publish: the product is renamed in file names, folder names, settings, the command, prose and links, and an executable stays executable",
-          (_po / "bin" / "quarterdeck").is_file() and not (_po / "bin" / "quarterdeck").exists() and _fo.access(_po / "bin" / "quarterdeck", _fo.X_OK)
-          and "QUARTERDECK_HOME" in (_po / "bin" / "quarterdeck").read_text() and "Quarterdeck runs with QUARTERDECK_HOME" in (_po / "README.md").read_text()
-          and "`quarterdeck home`" in (_po / "README.md").read_text() and "github.com/o/quarterdeck" in (_po / "README.md").read_text()
-          and (_po / "tools" / "QuarterdeckAgenda" / "main.swift").read_text().startswith("// Quarterdeck"), _st)
-    check("publish: a binary file is copied byte for byte (its name is renamed, its content is not touched)",
+    check("publish: files are copied as they are committed (nothing is renamed any more), and an executable stays executable",
+          (_po / "bin" / "qtdeck").is_file() and _fo.access(_po / "bin" / "qtdeck", _fo.X_OK) and "QUARTERDECK_HOME" in (_po / "bin" / "qtdeck").read_text()
+          and (_po / "README.md").read_text() == "Quarterdeck runs with QUARTERDECK_HOME. Try `qtdeck home`. See github.com/o/quarterdeck.\n"
+          and (_po / "tools" / "QuarterdeckAgenda" / "main.swift").read_text().startswith("// Quarterdeck") and set(_st) == {"files", "excluded"}, _st)
+    _old = "dry" + "dock"                               # spelt apart, so this file never says it
+    _pz = _ft / "pubrepo4"; (_pz / "bin").mkdir(parents=True); (_pz / "bin" / "x.sh").write_text(f"echo {_old.upper()}_HOME\n"); (_pz / "bin" / f"y-{_old}").write_text("y\n"); (_pz / "ok.md").write_text("fine\n")
+    _gx("init", "-q", cwd=_pz); _gx("add", ".", cwd=_pz); _gx("commit", "-qm", "c", cwd=_pz); _poz = _ft / "pubout4"; _pb.build(_poz, repo=_pz)
+    check("publish: the old product name left in a line or a file name, in any case, is found; a clean tree has none",
+          sorted(_pb.leftover(_poz)) == ["bin/x.sh", f"bin/y-{_old}"] and _pb.leftover(_po) == [], _pb.leftover(_poz))
+    check("publish: a binary file is copied byte for byte",
           (_po / "logo-quarterdeck.png").read_bytes() == b"\x89PNG\0quarterdeck\0data" and _pb.leftover(_po) == [], _pb.leftover(_po))
     check("publish: it refuses to write into a folder that already has files",
           _sp.run(["python3", str(pathlib.Path(d.__file__).parent / "publish.py"), "--out", str(_po)], capture_output=True, text=True).returncode == 2
@@ -2609,9 +2613,9 @@ if (pathlib.Path(d.__file__).parent / "publish.py").exists():
           (_po2 / "README.md").read_text() == "Public Quarterdeck readme\n" and (_po2 / "LICENSE").is_file() and not (_po2 / "docs" / "public").exists()
           and "PRIVATE" not in "".join(p.read_text() for p in _po2.rglob("*") if p.is_file()) and (_po2 / "docs" / "guide.md").is_file())
     _gh_ = _pb.guard_result(_po, None)
-    _dn = _ft / "pubdeny.txt"; _dn.write_text("quarterdeck\n")      # pretend the new name were private: the check over the result must notice it
+    _dn = _ft / "pubdeny.txt"; _dn.write_text("quarterdeck\n")      # pretend the product name were private: the check over the result must notice it
     _gn = _pb.guard_result(_po, str(_dn))
-    check("publish: the check over the result finds a credential that was committed, finds a denylisted name that survived the rename, and finds neither when there is none",
+    check("publish: the check over the result finds a credential that was committed, finds a denylisted name, and finds neither when there is none",
           any(h[0] == "leak.py" and h[2] == "a GitHub token" for h in _gh_) and not any(h[2] == "a private name" for h in _gh_)
           and any(h[2] == "a private name" and h[0] == "README.md" for h in _gn)
           and not any(h[2] == "a private name" for h in _pb.guard_result(_po, str(_ft / "deny.txt"))), (_gh_, _gn[:2]))
@@ -3132,6 +3136,20 @@ with _tf.TemporaryDirectory() as _cd:
           {"Azure", "Google Cloud Build", "Google Cloud App Engine", "Cloudflare", "Fly.io"} <= _dt and {"Azure Bicep", "Azure Developer CLI"} <= {i["name"] for i in _cp["infrastructure"]}
           and {p["id"] for p, _ in _pk.select(_cp, _pl)} >= set(_more), (_dt, [p["id"] for p, _ in _pk.select(_cp, _pl)]))
     check("scan: a host.json with no version key is not taken for Azure", [i["evidence"] for i in _cp["deploy_targets"] if i["name"] == "Azure"] and not any("web/host.json" in i["evidence"] for i in _cp["deploy_targets"] if i["name"] == "Azure"))
+_infra6 = {"aws", "vercel-supabase", "azure", "google-cloud", "cloudflare", "fly"}
+check("packs: the loader reads status; the six infrastructure packs are experimental, the stack packs have none",
+      all(_byid[i]["status"] == "experimental" for i in _infra6) and all(_byid[i]["status"] == "" for i in ("python", "typescript-node")), {i: _byid[i]["status"] for i in _byid})
+_lst = _sp.run([sys.executable, str(ROOT / "bin" / "packs.py"), "list"], capture_output=True, text=True).stdout.splitlines()
+check("packs: list tags each experimental pack next to its name and leaves the stack packs bare",
+      all("[experimental]" in next(l for l in _lst if l.startswith(f"  {i} ")) for i in _infra6) and not any("[experimental]" in l for l in _lst if l.startswith(("  python ", "  typescript-node "))), _lst[:4])
+check("packs: the experimental notice is one sentence, and empty when no named pack is experimental",
+      _pk.notice(["aws"], _pl) == _pk.EXPERIMENTAL_NOTE == "Tested on small examples only. Read the report as a second opinion, not a verdict." and _pk.notice(["python"], _pl) == "")
+check("infra: the report footer carries the notice while a pack is experimental", 'packs.py" notice' in (ROOT / "duties" / "infra.sh").read_text())
+_sv2 = d.settings_view()
+check("settings: lists the packs with their status", any(x["id"] == "aws" and x["status"] == "experimental" for x in _sv2["packs"]))
+_ix = (ROOT / "dashboard" / "index.html").read_text()
+check("dashboard: an experimental pill with the help text appears in Settings and in the Attach drawer, in the shared pill helper",
+      "const packPill" in _ix and _pk.EXPERIMENTAL_NOTE in _ix and _ix.count("packPill") >= 3 and "\u2014" not in _pk.EXPERIMENTAL_NOTE and "\u2014" not in _ix[_ix.index("const packPill"):_ix.index("const packPill") + 400])
 check("packs: list prints what was tested", "tested:" in _sp.run([sys.executable, str(ROOT / "bin" / "packs.py"), "list"], capture_output=True, text=True).stdout)
 with _tf.TemporaryDirectory() as _id_dir:
     _r = Path(_id_dir)
@@ -3222,7 +3240,7 @@ _r = _m("attn:remote:scout:job_failed", inbox=[{"id": "remote:scout:job_failed",
 check("mission: a configuration blocker offers Inspect blocker (a class and a place), never a rerun",
       _r["blocker"]["cls"] == "config" and _r["blocker"]["rerun"] is False and _r["blocker"]["place"] == "remote")
 
-# ---- mission focus: a `quarterdeck cycle` run record is a mission too (read only; the dashboard cannot start one) ----
+# ---- mission focus: a `qtdeck cycle` run record is a mission too (read only; the dashboard cannot start one) ----
 def _cst(sid, title, duty, state, verdict, cost, detail=""):
     return {"id": sid, "title": title, "duty": duty, "state": state, "verdict": verdict, "detail": detail, "cost": cost, "url": "", "runs": ["r"],
             "started": "2026-01-01T00:00:00Z", "finished": "2026-01-01T00:01:00Z"}
@@ -3285,7 +3303,7 @@ check("cycle: the demo cycle opens as a mission, read through the same function 
       _rd and _rd["state"] == "awaiting" and len(_rd["history"]) == 14 and abs(sum(float(h["detail"].split(" ")[0].lstrip("$")) for h in _rd["history"] if h["detail"].startswith("$")) - _dc["cost"]) < 0.02)
 _idx_cy = (ROOT / "dashboard" / "index.html").read_text()
 check("cycle: the Mission list reads S.cycles and the page has no control that starts, resumes or stops a cycle",
-      "S.cycles" in _idx_cy and "cycle:" in _idx_cy and not _re.search(r"post\(\"/api/[a-z]+\", *\{[^}]*cycle", _idx_cy) and "quarterdeck cycle --resume" not in _idx_cy)
+      "S.cycles" in _idx_cy and "cycle:" in _idx_cy and not _re.search(r"post\(\"/api/[a-z]+\", *\{[^}]*cycle", _idx_cy) and "qtdeck cycle --resume" not in _idx_cy)
 
 # ---- showcase case study: nothing private survives the sanitizing step ----
 _dirty = ("see /Users/bob/Projects/x/a.py, ~/notes/b.md and C:\\Users\\bob\\x.txt; https://git.corp.example.com/x/pull/3; token=ghp_abcdefghijklmnop1234; "
@@ -3393,7 +3411,7 @@ try:
           all(_r1) and "opted in" in _r1[0] and "opted in" in _r1[1] and "unknown" in _r1[2] and _r1[3] == _r1[4] == _r1[5] == "bad issue" and "confirm" in _r1[6] and "confirm" in _r1[7]
           and _dup and "already running" in _dup and _cap and "budget" in _cap and not _calls, (_r1, _dup, _cap, _calls))
     _ok = _ts("on", 3, True)
-    check("start cycle: a good request runs bin/quarterdeck cycle <project> --issue <n> --apply as an argv list, detached, logging under logs/, and answers with the record's id or none yet",
+    check("start cycle: a good request runs bin/qtdeck cycle <project> --issue <n> --apply as an argv list, detached, logging under logs/, and answers with the record's id or none yet",
           len(_calls) == 1 and _calls[0][1:] == ["cycle", "on", "--issue", "3", "--apply"] and _ok["id"] is None and _ok["started"] == "cycle on --issue 3", (_calls, _ok))
 finally:
     d.PROJECTS_FILE, d.running_locks, d.daily_budget, d.spent_today, d.subprocess.Popen, d.time.sleep = _svpf, _svlk, _svdb, _svsp, _svpo, _svsl
@@ -3546,9 +3564,9 @@ check("the page is served with no token: TOKEN starts empty, only /api/pair give
       'let TOKEN = ""' in _page_js and "__QUARTERDECK_TOKEN__" not in _page_js and "localStorage" not in _page_js.split("// ---- Pairing")[1] and "document.cookie" not in _page_js
       and "sessionStorage.setItem" in _page_js)
 _pair_js = _page_js.split("// ---- Pairing")[1]
-check("M1 a reload proves itself with the tab's own token (/api/session is asked with X-Quarterdeck-Token and gives no token back), and a new tab is told to run `quarterdeck dashboard link`",
+check("M1 a reload proves itself with the tab's own token (/api/session is asked with X-Quarterdeck-Token and gives no token back), and a new tab is told to run `qtdeck dashboard link`",
       _re0.search(r'fetch\("/api/session", *\{[^}]*X-Quarterdeck-Token', _pair_js) is not None and ".token" not in _pair_js.split('fetch("/api/session"')[1].split("\n}")[0]
-      and "quarterdeck dashboard link" in _page_js.split('id="unpaired"')[1].split("</section>")[0])
+      and "qtdeck dashboard link" in _page_js.split('id="unpaired"')[1].split("</section>")[0])
 if _nodeok.path():
     _hr = _sp.run(["node", "--no-warnings", str(ROOT / "bin" / "selftest-handlers.mjs")], capture_output=True, text=True)
     check("handlers under node: hostile ids and text (quotes, backticks, </script>, &#39;, line separators, ${}) only ever round-trip as JSON data, and only names in the table run",
@@ -3787,7 +3805,7 @@ _j = _ie.judge({"id": "x", "observe": ["tool"]}, _rec(tool_log=[{"tool": "Bash",
 check("injection: judge: a shell call to curl is a forbidden tool call, contained when refused", "tool" in _j["hits"] and not _j["effect_landed"])
 _j = _ie.judge({"id": "x", "observe": ["file"]}, _rec(duty="shipwright", changed=["package.json"], ledger=[{"verdict": "REFUSED", "detail": "protected"}]))
 check("injection: judge: a protected file changed in the worktree is obedience, contained when the gate refused it", "file" in _j["hits"] and not _j["effect_landed"] and _j["contained_by"])
-check("injection: the doctor runs the structural injection check", "selftest-injection.sh" in (ROOT / "bin" / "quarterdeck").read_text())
+check("injection: the doctor runs the structural injection check", "selftest-injection.sh" in (ROOT / "bin" / "qtdeck").read_text())
 
 # ---- F2: no credential pattern is defeated by one character glued in front of or behind the key ------------------------------------------------
 _keys = {"anthropic": "sk-ant-" + "q" * 30, "sk": "sk-" + "a1" * 20, "github": "gh" + "p_" + "a1" * 20, "fine-grained": "github" + "_pat_" + "a1" * 25, "slack": "xo" + "xb-1234567890-abcdef",
@@ -3903,11 +3921,48 @@ _ci_tl = _ci_t.read_text().splitlines()
 check("CI guard sanity: the same line checks would flag a write permission and a bare tag", any(_re0.search(r"^\s*[\w-]+:\s*write\s*$", l) for l in _ci_tl) and "TODO(pin)" not in _ci_tl[-2])
 
 # audit 7 (L2): an impostor that held the port read a #pair= fragment from the owner's browser; once the real server bound, the nonce was still
-# good for five minutes. The server's start now empties state/pair/ as well as the sessions (bin/quarterdeck mints the link after the health check).
+# good for five minutes. The server's start now empties state/pair/ as well as the sessions (bin/qtdeck mints the link after the health check).
 _l2n = d.pair_mint()
 _l2s = d.make_server(0); _l2s.server_close()
 check("L2 a pairing nonce minted before the dashboard started is no longer good once it has started", d.pair_redeem(_l2n) is False and not any((d.STATE / "pair").iterdir()))
 
+# the rename: the old product name is nowhere in what ships, in a file name or a line. Files the public build leaves out (the registry, the notes,
+# the progress log, the talk, and the temporary migration files) may still say it; nothing else may, and the allow-list below is for exceptions.
+_oldname = _re0.compile("dry" "dock", _re0.I)        # spelt apart, so this file never says it
+_rn_allow = ()
+_rn_ls = _sp.run(["git", "-C", str(ROOT), "ls-files", "-z"], capture_output=True)
+_rn_files = [f for f in _rn_ls.stdout.decode().split("\0") if f] if _rn_ls.returncode == 0 and _rn_ls.stdout else \
+    [str(p.relative_to(ROOT)) for p in ROOT.rglob("*") if p.is_file() and ".git" not in p.relative_to(ROOT).parts]
+if (ROOT / "bin" / "publish.py").exists():
+    import publish as _pb2
+    _rn_files = [f for f in _rn_files if not _pb2.excluded(f) and not (f == "README.md" and (ROOT / "docs" / "public" / "README.md").exists())]
+_rn_bad = []
+for _f in _rn_files:
+    if _f in _rn_allow or not (ROOT / _f).is_file():
+        continue
+    if _oldname.search(_f) or (not _f.lower().endswith((".png", ".jpg", ".ico", ".woff2", ".onnx", ".pdf")) and _oldname.search((ROOT / _f).read_text(errors="replace"))):
+        _rn_bad.append(_f)
+check("rename: the old product name is in no file that ships, by name or content" + (f": {_rn_bad[:8]}" if _rn_bad else ""), not _rn_bad and len(_rn_files) > 50)
+
+# remove after migration: the migration's own tests (bin/selftest-legacy.py, never published), run when the file is here
+if (ROOT / "bin" / "selftest-legacy.py").exists():
+    _lg = _sp.run([sys.executable, str(ROOT / "bin" / "selftest-legacy.py")], capture_output=True, text=True)
+    check("legacy: the shim, the old data folder until migration, and the migration itself (fake home, stand-in launchctl)",
+          _lg.returncode == 0, [l for l in _lg.stdout.splitlines() if "FAIL" in l][:5] or _lg.stderr[-300:])
+    # and again in the environment bin/qtdeck exports (lib.sh sourced in a throwaway home that holds an old data folder): its data folder,
+    # program folder, secrets folder and TMPDIR all point into that old install, as they do when the owner runs the migration
+    _lgt = _tf0.gettempdir()                         # under bin/qtdeck this is a data folder's state/tmp: the throwaway home never goes there
+    _lgt = "/tmp" if any(n in str(Path(_lgt).resolve()) for n in ("." "dry" "dock", ".quarterdeck")) else _lgt
+    _lgh = Path(_tf0.mkdtemp(prefix="qd-wrapenv-", dir=_lgt)).resolve()
+    (_lgh / "." "dry" "dock" / "config").mkdir(parents=True); (_lgh / "." "dry" "dock" / ("." "dry" "dock-home")).write_text("x")
+    _lgr = _sp.run(["bash", "-c", 'source "$1/bin/lib.sh" >/dev/null 2>&1; env -0', "x", str(ROOT)], capture_output=True,
+                   env={"PATH": _os0.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(_lgh), "LANG": "C"})
+    _lge = dict(l.split("=", 1) for l in _lgr.stdout.decode().split("\0") if "=" in l)
+    _lg2 = _sp.run([sys.executable, str(ROOT / "bin" / "selftest-legacy.py")], capture_output=True, text=True, env=_lge)
+    check("legacy: the same suite passes in the environment bin/qtdeck exports, which points into the old install",
+          _lge.get("QUARTERDECK_HOME", "").startswith(str(_lgh)) and _lge.get("TMPDIR", "").startswith(str(_lgh)) and _lg2.returncode == 0,
+          ([l for l in _lg2.stdout.splitlines() if "FAIL" in l][:5] or _lg2.stderr[-300:], _lge.get("QUARTERDECK_HOME")))
+    shutil.rmtree(_lgh, ignore_errors=True)
 
 print()
 if FAILS:

@@ -1,5 +1,5 @@
 #!/bin/bash
-# `quarterdeck cycle` runs the crew in order, on one issue, and stops for a person. What is asserted here is the orchestration:
+# `qtdeck cycle` runs the crew in order, on one issue, and stops for a person. What is asserted here is the orchestration:
 # the order of the stages, that the reviewers run side by side and every result is collected, that the caulker is bounded at
 # three cycles with the reviewers reading each new head, that the daily cap and the cycle ceiling stop a stage BEFORE it starts,
 # that a stopped or crashed cycle resumes at the failed stage and never repeats a finished one, that nothing starts without the
@@ -186,7 +186,7 @@ export QUARTERDECK_CYCLE_BUDGET=15
 # ---- resume: a failed stage, and a real crash --------------------------------------------------------------------------------------
 fresh; cfg shipwright "ERROR|run failed|" "PR|#7 → pull/1|https://github.com/x/tp/pull/1"
 cyc tp --issue 7 --apply
-ck "a stage that fails stops the cycle as failed, resumable, with everything before it on the record" '[ "$RC" = 1 ] && [ "$(jq -r .status "$REC")" = failed ] && [ "$(stg shipwright .state)" = failed ] && [ "$(stg panel .state)" = done ] && grep -q "quarterdeck cycle --resume" <<<"$OUT"'
+ck "a stage that fails stops the cycle as failed, resumable, with everything before it on the record" '[ "$RC" = 1 ] && [ "$(jq -r .status "$REC")" = failed ] && [ "$(stg shipwright .state)" = failed ] && [ "$(stg panel .state)" = done ] && grep -q "qtdeck cycle --resume" <<<"$OUT"'
 FID=$ID; cyc --resume "$FID"
 ck "  --resume continues at the failed stage: the shipwright runs again, the purser and the panel do not" '[ "$RC" = 0 ] && [ "$(calls shipwright)" = 2 ] && [ "$(calls purser)" = 1 ] && [ "$(calls panel)" = 1 ] && [ "$(jq -r .status "$REC")" = awaiting-review ]'
 fresh; cfg panel "CRASH|x|"

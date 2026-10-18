@@ -8,7 +8,7 @@ program can be published or updated without touching your data, and a stranger s
 Which folder is the home, in this order (bin/lib.sh follows the same four rules):
   1. QUARTERDECK_HOME, if set;
   2. QUARTERDECK_DIR, if set: a throwaway Quarterdeck (the tests) keeps its data with its code;
-  3. ~/.quarterdeck, once it carries the marker file .quarterdeck-home (made by `quarterdeck home init`);
+  3. ~/.quarterdeck, once it carries the marker file .quarterdeck-home (made by `qtdeck home init`);
   4. the program folder itself: the layout every earlier version had, so nothing moves until you say so.
 """
 import os
@@ -19,6 +19,15 @@ CODE = Path(__file__).resolve().parent.parent
 MARKER = ".quarterdeck-home"
 SUBDIRS = ("config", "state", "logs", "workspace")
 
+# remove after migration: an install made under the old name keeps its data folder until it is migrated (bin/legacy_home.py, never published)
+try:
+    import importlib.util as _ilu
+    _spec = _ilu.spec_from_file_location("legacy_home", Path(__file__).with_name("legacy_home.py"))
+    _legacy = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_legacy)
+except (OSError, ImportError, AttributeError):
+    _legacy = None
+
 
 def resolve(env=None, user_home=None, code=CODE):
     env = os.environ if env is None else env
@@ -27,11 +36,14 @@ def resolve(env=None, user_home=None, code=CODE):
     if env.get("QUARTERDECK_DIR"):
         return Path(env["QUARTERDECK_DIR"])
     default = Path(user_home or Path.home()) / ".quarterdeck"
-    return default if (default / MARKER).is_file() else Path(code)
+    if (default / MARKER).is_file():
+        return default
+    old = _legacy and _legacy.old_home(env, user_home)          # remove after migration
+    return old or Path(code)
 
 
 def why(env=None, user_home=None, code=CODE):
-    """The rule that chose the home, for `quarterdeck home`."""
+    """The rule that chose the home, for `qtdeck home`."""
     env = os.environ if env is None else env
     if env.get("QUARTERDECK_HOME"):
         return "QUARTERDECK_HOME is set"
@@ -39,6 +51,8 @@ def why(env=None, user_home=None, code=CODE):
         return "QUARTERDECK_DIR is set (a throwaway Quarterdeck keeps its data with its code)"
     if ((Path(user_home or Path.home()) / ".quarterdeck") / MARKER).is_file():
         return "~/.quarterdeck has the marker file"
+    if _legacy and _legacy.old_home(env, user_home):                # remove after migration
+        return _legacy.WHY
     return "no data folder set up yet: data stays inside the program folder, as before"
 
 
@@ -200,7 +214,7 @@ def migrate(src, dst, apply=False, force=False):
         return False, out + [f"  the copy did not verify ({len(bad)} file(s), for example {bad[0]}); nothing was switched"]
     marker.write_text("This folder is a Quarterdeck home: your projects, state and logs live here, apart from the program.\n")
     (dst / "MIGRATED-FROM").write_text(f"{src}\ncopied {len(rows)} item(s); the originals were left in place and can be deleted once you are happy.\n")
-    return True, out + ["", "  copied and verified. The marker is in place, so the next start uses this folder.", f"  to go back: quarterdeck home rollback   (the originals in {src} were not touched)"]
+    return True, out + ["", "  copied and verified. The marker is in place, so the next start uses this folder.", f"  to go back: qtdeck home rollback   (the originals in {src} were not touched)"]
 
 
 def rollback(dst):

@@ -16,8 +16,8 @@
 # only make the verdict stricter: when the facts say HOLD, MERGE is not available to it. Report only without --apply; with
 # --apply the script adds ONE comment and ONE label to the pull request and nothing else. It never merges.
 #
-#   quarterdeck run <p> quartermaster --pr 218            report only
-#   quarterdeck run <p> quartermaster --pr 218 --apply    comment and label (quartermaster:merge | :hold | :block)
+#   qtdeck run <p> quartermaster --pr 218            report only
+#   qtdeck run <p> quartermaster --pr 218 --apply    comment and label (quartermaster:merge | :hold | :block)
 #
 # Registry (config/projects.json), all optional:
 #   "pinned": ["react"]                                     never bumped by a bot: BLOCK
@@ -36,7 +36,7 @@ set -uo pipefail
 {
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)/lib.sh"
 
-PROJECT="${QUARTERDECK_PROJECT:?run me through: quarterdeck run <project> quartermaster --pr <n>}"
+PROJECT="${QUARTERDECK_PROJECT:?run me through: qtdeck run <project> quartermaster --pr <n>}"
 SOURCE_REPO_DIR="${QUARTERDECK_WORKDIR:?}"
 LOG_FILE="$QUARTERDECK_HOME/logs/quartermaster-$PROJECT.log"
 REPO=$(project_get "$PROJECT" repo)

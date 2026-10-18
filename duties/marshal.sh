@@ -9,8 +9,8 @@
 #      seat that found nothing.
 #   3. Nothing is posted, filed or written without --apply.
 #
-#   quarterdeck run <p> marshal --pr 218            report only
-#   quarterdeck run <p> marshal --pr 218 --apply    comment on the pull request and write the findings file
+#   qtdeck run <p> marshal --pr 218            report only
+#   qtdeck run <p> marshal --pr 218 --apply    comment on the pull request and write the findings file
 #
 # Contract of each seat:
 #   FINDINGS_JSON: [{"file","line","severity","title","body"}]     [] when clean
@@ -27,7 +27,7 @@ set -uo pipefail
 {
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)/lib.sh"
 
-PROJECT="${QUARTERDECK_PROJECT:?run me through: quarterdeck run <project> marshal --pr <n>}"
+PROJECT="${QUARTERDECK_PROJECT:?run me through: qtdeck run <project> marshal --pr <n>}"
 SOURCE_REPO_DIR="${QUARTERDECK_WORKDIR:?}"
 LOG_FILE="$QUARTERDECK_HOME/logs/marshal-$PROJECT.log"
 REPO=$(project_get "$PROJECT" repo)
@@ -106,7 +106,7 @@ fi
 guard 180 "${SAFE_GIT[@]}" -C "$SOURCE_REPO_DIR" fetch -q origin "pull/$PR/head" 2>>"$LOG_FILE" || die "could not fetch pull/$PR/head"
 worktree_at "$SOURCE_REPO_DIR" "$WT" FETCH_HEAD || die "could not create a worktree at $WT"
 SEATS=$(crew_by_discipline security | tr '\n' ' '); SEATS="$(xargs <<<"$SEATS")"
-[ -n "$SEATS" ] || die "marshal: no crew sits on the security panel (see: quarterdeck crew)"
+[ -n "$SEATS" ] || die "marshal: no crew sits on the security panel (see: qtdeck crew)"
 ADR_SPEC=""
 if [ "$ADR_ON" = 1 ]; then
   adr_block "$PROJECT" "$BASE" "$changed" "$title

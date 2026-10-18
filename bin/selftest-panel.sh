@@ -8,7 +8,7 @@ set -uo pipefail
 REAL="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 mkdir -p "$T"/{bin,config,crew,duties,state/panels,workspace,logs/runs,work}
-cp "$REAL"/bin/{lib.sh,outscan.py,guard.py,home.py,protect.py,safegit.py,gitrisky.re} "$T/bin/"; cp "$REAL"/duties/panel.sh "$T/duties/"
+cp "$REAL"/bin/{lib.sh,markers.py,outscan.py,guard.py,home.py,protect.py,safegit.py,gitrisky.re} "$T/bin/"; cp "$REAL"/duties/panel.sh "$T/duties/"
 cp "$REAL"/config/quarterdeck.env "$T/config/"; cp "$REAL"/crew/*.md "$T/crew/"
 jq -n --arg w "$T/work" '{tp:{repo:"x/tp",path:$w,summary:"s",default_branch:"main",duties:["panel"],guardrails:[],verify:""}}' \
   > "$T/config/projects.json"

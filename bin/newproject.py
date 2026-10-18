@@ -4,7 +4,7 @@
     bin/newproject.py NAME [--in DIR] [--about "one sentence"]     DIR defaults to ~/Projects
 
 It refuses a folder that already exists with anything in it, writes only inside the new folder, and does not register anything or contact
-any service: the next step, `bin/quarterdeck attach <folder> --apply`, is yours. Standard library only (git must be installed).
+any service: the next step, `bin/qtdeck attach <folder> --apply`, is yours. Standard library only (git must be installed).
 """
 import re
 import subprocess
@@ -60,7 +60,7 @@ def main(argv):
         print(f"  {e}")
         return 2
     print(f"  created {dest}  (a git repository with a README and a .gitignore)")
-    print(f"  next: bin/quarterdeck attach {dest}    to see what the crew would do, then add --apply to register it")
+    print(f"  next: bin/qtdeck attach {dest}    to see what the crew would do, then add --apply to register it")
     return 0
 
 

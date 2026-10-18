@@ -135,6 +135,6 @@ ck "  the owner's note and the earlier brief reached the prompt inside untrusted
 ck "  the idea and audience carried over" '[ "$(jq -r .idea "$T/state/briefs/$NEW.json")" = "A page for my neighbourhood book swap" ]'
 ck "a superseded brief cannot be approved"        '! BP approve "$T" "$ID" 2>/dev/null'
 ck "an id that is not an id is refused"            '! BP approve "$T" "../etc" 2>/dev/null && ! BP approve "$T" "b1" 2>/dev/null'
-ck "quarterdeck brief list shows them"                 'BP list "$T" | grep -q "$NEW"'
+ck "qtdeck brief list shows them"                 'BP list "$T" | grep -q "$NEW"'
 
 st_done

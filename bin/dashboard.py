@@ -14,7 +14,7 @@ that property is here rather than in the browser:
     allowlist before it is passed on.
 
 It still performs no privileged action itself. Starting a run means spawning the
-same `quarterdeck run` a human would type, so the contract discipline in lib.sh is
+same `qtdeck run` a human would type, so the contract discipline in lib.sh is
 exactly as it was: the model thinks, the harness acts.
 """
 import array
@@ -43,7 +43,9 @@ from pathlib import Path
 from urllib.parse import urlparse, parse_qs, quote
 
 import home as _home
+import markers as _markers                              # the marks written into GitHub bodies (bin/markers.py)
 import safegit as _safegit
+import packs as _packs_mod                              # stack and infrastructure packs (bin/packs.py)
 
 ROOT = Path(__file__).resolve().parent.parent           # the program: bin/, duties/, crew/, dashboard/
 HOME = _home.resolve()                                  # YOUR data: state/, logs/, workspace/, config/ (see bin/home.py)
@@ -81,7 +83,7 @@ SAFE_ID = re.compile(r"^[\w.-]{1,80}$")        # a panel id: a file name under s
 
 # ---- pairing: how a browser tab earns the right to read and drive this dashboard --------------------------------------------
 # Loopback is not a secret: any program, and any other user on this computer, can open 127.0.0.1:PORT. So the page itself carries
-# nothing. `quarterdeck dashboard` (or `quarterdeck dashboard link`, or `python3 bin/dashboard.py link`) writes a one-time nonce into
+# nothing. `qtdeck dashboard` (or `qtdeck dashboard link`, or `python3 bin/dashboard.py link`) writes a one-time nonce into
 # state/pair/ (a folder only the owner can read) and prints a link with the nonce in its #fragment, which no server and no log ever
 # sees. The page POSTs the nonce to /api/pair; the server checks it (single use: whoever deletes the file wins; constant-time
 # compare; five minutes), then sets an HttpOnly, SameSite=Strict cookie bound to a random session and hands the page that session's
@@ -173,7 +175,7 @@ def pair_redeem(nonce):
 
 
 def _sessions():
-    """The sessions, re-read whenever the file changed: `quarterdeck dashboard sessions revoke` (another process) rewrites it, and a running server must obey at once."""
+    """The sessions, re-read whenever the file changed: `qtdeck dashboard sessions revoke` (another process) rewrites it, and a running server must obey at once."""
     f = STATE / "dashboard.sessions.json"
     try:
         st = f.stat()
@@ -201,7 +203,7 @@ def _sessions_save(m):
 
 
 def sessions_revoke():
-    """End every paired session: the file is emptied. A running server notices (see _sessions); `quarterdeck dashboard sessions revoke` calls this."""
+    """End every paired session: the file is emptied. A running server notices (see _sessions); `qtdeck dashboard sessions revoke` calls this."""
     STATE.mkdir(parents=True, exist_ok=True)
     _private_write(STATE / "dashboard.sessions.json", "{}")
 
@@ -791,7 +793,7 @@ def fix_index(locks):
     return out
 
 
-# ---- cycles: the run records `quarterdeck cycle` keeps in state/cycles/<id>.json ------------
+# ---- cycles: the run records `qtdeck cycle` keeps in state/cycles/<id>.json ------------
 # The records are read only. The one thing the dashboard can do is start a cycle, and only through POST /api/cycle/start
 # (start_cycle below), on a project that opted in with "cycle": true. It cannot resume or stop one. A record that still says
 # "running" with no live lock behind it was killed, and is shown as failed, like a fix record in the same position.
@@ -803,7 +805,7 @@ def cycle_record(cid, locks):
         return None
     if r.get("status") == "running" and f"cycle-{r.get('project')}-{r.get('issue')}" not in locks:
         r = {**r, "status": "failed",
-             "final": r.get("final") or f"stopped before it finished; resume with: quarterdeck cycle --resume {cid}"}
+             "final": r.get("final") or f"stopped before it finished; resume with: qtdeck cycle --resume {cid}"}
     return r
 
 
@@ -860,7 +862,7 @@ def cycle_estimate(project, records=None):
 
 
 def start_cycle(project, issue, confirm):
-    """Start `quarterdeck cycle <project> --issue <n> --apply`, detached, the way a duty is started. The record (and so the id) is made by
+    """Start `qtdeck cycle <project> --issue <n> --apply`, detached, the way a duty is started. The record (and so the id) is made by
     the script a moment after it starts; wait briefly for it. Nothing here merges or pushes: that is the script's own rule."""
     no_demo("start a cycle")
     projects = read_json(PROJECTS_FILE, {})
@@ -877,7 +879,7 @@ def start_cycle(project, issue, confirm):
     b = daily_budget()
     if b is not None and spent_today() >= b:
         raise ValueError(f"today's budget is spent (${spent_today():.2f} of ${b:.2f}); a cycle would stop at once")
-    argv = [str(ROOT / "bin" / "quarterdeck"), "cycle", project, "--issue", str(issue), "--apply"]
+    argv = [str(ROOT / "bin" / "qtdeck"), "cycle", project, "--issue", str(issue), "--apply"]
     LOGS.mkdir(exist_ok=True)
     out = open(LOGS / f"cycle-{project}.log", "a")
     out.write(f"\n[{iso(now_utc())}] started by dashboard: {' '.join(argv[2:])}\n")
@@ -1072,7 +1074,7 @@ def spawn_fix(project, panel, items, source):
 
 def _spawn_fix(project, args, what, source):
     no_demo("start a fix")
-    argv = [str(ROOT / "bin" / "quarterdeck"), "fix", project, *args, "--apply"]
+    argv = [str(ROOT / "bin" / "qtdeck"), "fix", project, *args, "--apply"]
     LOGS.mkdir(exist_ok=True)
     out = open(LOGS / f"fix-{project}.log", "a")
     out.write(f"\n[{iso(now_utc())}] started by {source}: {what}\n")
@@ -1087,7 +1089,7 @@ def start_work(project, issue, action):
     Neither takes anything from the request but a project name, an issue number
     and one of two words; the command is built here, as argv, never a shell line.
     Analysing is the purser run through spawn_run's own allowlist. Starting is
-    `quarterdeck fix --issue`, which is the same pipeline as Fix this from step 2, or
+    `qtdeck fix --issue`, which is the same pipeline as Fix this from step 2, or
     on a project with a shipwright and no panel, the shipwright alone."""
     projects = read_json(PROJECTS_FILE, {})
     if not isinstance(project, str) or project not in projects:
@@ -1103,7 +1105,7 @@ def start_work(project, issue, action):
         raise ValueError(f"'shipwright' is not enabled for '{project}'")
     if "panel" not in duties:
         # No panel to plan it: the shipwright takes the issue straight to a pull
-        # request, which is `quarterdeck run <project> shipwright --issue N --apply`.
+        # request, which is `qtdeck run <project> shipwright --issue N --apply`.
         return spawn_run(project, "shipwright", ["--issue", str(issue)], apply_=True)
     # what `fix` will run: both duties are enabled
     # One pipeline per issue, not per project — the builder isolates each in its
@@ -1557,7 +1559,7 @@ def inbox_act(action, body, source):
 #   panel:<id>           a panel and its ruling
 #   run:<at>|<project>|<duty>   one ledger row (a fix run is shown as its fix)
 #   attn:<inbox id>      one needs-you entry from a connected source
-#   cycle:<id>           one `quarterdeck cycle` run, read from its record in state/cycles
+#   cycle:<id>           one `qtdeck cycle` run, read from its record in state/cycles
 NODES = (("brief", "Brief"), ("panel", "Panel"), ("build", "Build"), ("verify", "Verify"), ("review", "Review"))
 FIX_STEP_NODE = {"filing": "brief", "planning": "panel", "building": "build", "reviewing": "verify", "verifying": "verify"}
 FIX_STEP_TEXT = {
@@ -2238,7 +2240,7 @@ def mission_act(action, body, source):
 
 
 # ---- schedules ---------------------------------------------------------------
-# A schedule is the same `quarterdeck run` a human would type, plus when. Kept in
+# A schedule is the same `qtdeck run` a human would type, plus when. Kept in
 # config/ because it is a decision about the fleet, not a byproduct of running
 # it — but written by this process, so it stays small and boring on purpose.
 
@@ -2329,7 +2331,7 @@ def validate_run(project, duty, args):
             if not SAFE_VALUE.match(a) or ".." in a or a.startswith("/"):
                 raise ValueError(f"bad value: {a}")
         clean.append(a)
-    return [str(ROOT / "bin" / "quarterdeck"), "run", project, duty, *clean]
+    return [str(ROOT / "bin" / "qtdeck"), "run", project, duty, *clean]
 
 
 def spawn_run(project, duty, args, apply_=False, source="dashboard", mission=None):
@@ -2436,12 +2438,8 @@ def classify(name, doc_kind):
     return {"kind": kind, "kind_label": label, "fileable": fileable}
 
 
-# What Quarterdeck writes into every pull request it opens, so one can be recognised
-# even after its ledger row has aged out.
-# The builders sign PR bodies with the first; the rest are how bodies were
-# signed before that, kept so an older open PR is still recognised.
-QUARTERDECK_MARKERS = ("<!-- quarterdeck:", "Checked locally before this branch was pushed",
-                   "Quarterdeck trials", "Quarterdeck shipwright")
+# What Quarterdeck writes into every pull request it opens, so one can be recognised even after its ledger row has aged out:
+# bin/markers.py (PR_SIGNS), which also knows how bodies were signed before.
 
 
 def verdict_outdated(sha, head):
@@ -2541,7 +2539,7 @@ def open_prs(project, repo, runs, fixes):
                        "pending": sum(state(c) in ("PENDING", "IN_PROGRESS", "QUEUED", "") for c in checks),
                        "failing": [c.get("name") or c.get("context") for c in checks
                                    if state(c) in ("FAILURE", "ERROR", "CANCELLED", "TIMED_OUT")]},
-            "by_quarterdeck": (pr["url"] in opened) or any(m in body for m in QUARTERDECK_MARKERS),
+            "by_quarterdeck": (pr["url"] in opened) or _markers.signed(body),
             "from_item": ({"panel": f.get("panel"), "item": f.get("item"), "title": f.get("title")}
                           if f else None),
             "review": said("surveyor", pr["number"], pr.get("headRefOid")),
@@ -2610,7 +2608,7 @@ def shape_card(raw, kind, snap=None):
     """What the reading panel needs from gh's JSON, trimmed and typed. Nothing but data to display."""
     def text(v, n):
         return v[:n] if isinstance(v, str) else ""
-    body = text(raw.get("body"), CARD_BODY_MAX)
+    body = text(_markers.normalise(raw.get("body")), CARD_BODY_MAX)       # an older requirements block reads as the current one on the page
     comments = [c for c in (raw.get("comments") or []) if isinstance(c, dict)]
     linked = []
     for ref in (raw.get("closedByPullRequestsReferences") if kind == "issue" else raw.get("closingIssuesReferences")) or []:
@@ -3327,6 +3325,7 @@ def settings_view():
         "voice": env_flag("QUARTERDECK_HELM_VOICE", "am_liam"), "voice_speed": env_flag("QUARTERDECK_HELM_SPEED", "1.05"),
         "attention": attention_on(), "commit": git_commit(), "uptime_seconds": int(time.time() - STARTED),
         "projects": len(read_json(PROJECTS_FILE, {}) or {}),
+        "packs": [{k: x[k] for k in ("id", "label", "status")} for x in _packs_mod.load()],
     }
 
 
@@ -3431,7 +3430,7 @@ def attach_api(b):
         return 400, {"error": str(e)}
     except OSError as e:
         return 500, {"error": str(e)[:200]}
-    return 200, {"profile": prof, "proposal": prop, "applied": bool(b.get("apply")), "agents_md": agents, "duty_options": [{"name": x["name"], "role": x["role"]} for x in duty_list() if x["name"] in _attach.known_duties()], "guardrail_options": _attach.GUARDRAILS}
+    return 200, {"profile": prof, "proposal": prop, "applied": bool(b.get("apply")), "agents_md": agents, "duty_options": [{"name": x["name"], "role": x["role"]} for x in duty_list() if x["name"] in _attach.known_duties()], "guardrail_options": _attach.GUARDRAILS, "pack_status": {x["id"]: x["status"] for x in _packs_mod.load()}}
 
 
 # ---- design briefs, mock-ups and sprint plans: the owner's approval screens ------------------------------------------
@@ -3563,7 +3562,7 @@ def brief_new(b):
     if issue is not None:
         argv = validate_run(project, "brief", ["--issue", str(issue), "--id", bid]) + ["--apply"]      # the project must have the duty switched on
     else:
-        argv = [str(ROOT / "bin" / "quarterdeck"), "brief", "--idea", idea, "--id", bid, "--apply"]
+        argv = [str(ROOT / "bin" / "qtdeck"), "brief", "--idea", idea, "--id", bid, "--apply"]
         if aud:
             argv += ["--for", aud]
         if project:
@@ -3597,7 +3596,7 @@ def brief_act(b):
                 raise LookupError("mock-ups for this brief are already being made")
             if over_budget():
                 raise ValueError("today's budget is spent")
-            _spawn_detached([str(ROOT / "bin" / "quarterdeck"), "mockup", bid, "--apply"], f"mockup-{rec.get('project') or 'idea'}.log")
+            _spawn_detached([str(ROOT / "bin" / "qtdeck"), "mockup", bid, "--apply"], f"mockup-{rec.get('project') or 'idea'}.log")
             return {"started": f"mockup {bid}"}
         if act == "revise":
             _b.revise_context(home, bid)                              # refuses a brief nobody asked changes on
@@ -3605,7 +3604,7 @@ def brief_act(b):
                 raise ValueError("today's budget is spent")
             nid = _b.new_id()
             _b.stub(home, nid, rec.get("source") or "idea", rec.get("project") or "", rec.get("issue"), rec.get("idea") or "", rec.get("audience_hint") or "", bid)
-            _spawn_detached([str(ROOT / "bin" / "quarterdeck"), "brief", "--revise", bid, "--id", nid, "--apply"], f"brief-{rec.get('project') or 'idea'}.log")
+            _spawn_detached([str(ROOT / "bin" / "qtdeck"), "brief", "--revise", bid, "--id", nid, "--apply"], f"brief-{rec.get('project') or 'idea'}.log")
             return {"id": nid}
         if act == "link":
             name = str(b.get("project") or "")
@@ -4552,7 +4551,7 @@ class Handler(BaseHTTPRequestHandler):
                               cookie=f"qd_session={m.value}; HttpOnly; SameSite=Strict; Path=/; Max-Age={SESSION_TTL}")
 
         if u.path.startswith("/api/") and not self._read_ok():
-            return self._send(401, json.dumps({"error": "unpaired: open Quarterdeck from the link that `quarterdeck dashboard` prints"}))
+            return self._send(401, json.dumps({"error": "unpaired: open Quarterdeck from the link that `qtdeck dashboard` prints"}))
 
         if u.path.startswith("/api/") and demo_on():
             # Answered entirely from the made-up world; a path it does not know is a 404,
@@ -4794,7 +4793,7 @@ class Handler(BaseHTTPRequestHandler):
         if ok is None:
             return self._send(429, json.dumps({"error": "too many wrong links: wait a minute"}))
         if not ok:
-            return self._send(401, json.dumps({"error": "that link has been used or has expired: run `quarterdeck dashboard` for a new one"}))
+            return self._send(401, json.dumps({"error": "that link has been used or has expired: run `qtdeck dashboard` for a new one"}))
         sid, token = session_new()
         cookie = f"qd_session={sid}; HttpOnly; SameSite=Strict; Path=/; Max-Age={SESSION_TTL}"
         return self._send(200, json.dumps({"token": token}), cookie=cookie)
@@ -5150,9 +5149,9 @@ def make_server(port):
                 super().process_request_thread(request, client_address)
             finally:
                 slots.release()
-    sessions_revoke()               # a process that held this port while the dashboard was down may have the old cookie and token: they stop working. The owner pairs again with `quarterdeck dashboard link`
+    sessions_revoke()               # a process that held this port while the dashboard was down may have the old cookie and token: they stop working. The owner pairs again with `qtdeck dashboard link`
     # and the pending pairing links (audit 7, L2): an impostor holding the port served the page a link opened and read its #pair= code; once the
-    # real server bound, that code was still good for five minutes. bin/quarterdeck mints the link it prints only after this server answers.
+    # real server bound, that code was still good for five minutes. bin/qtdeck mints the link it prints only after this server answers.
     for f in (STATE / "pair").glob("*"):
         try:
             f.unlink()
@@ -5195,7 +5194,7 @@ def main():
     # ponytail: no per-key locking on the in-memory BOARD_CACHE/PR_CACHE dicts;
     # add it if a real race ever shows up as more than a stale read.
     srv = make_server(PORT)
-    print(f"quarterdeck dashboard on http://127.0.0.1:{PORT}", flush=True)
+    print(f"qtdeck dashboard on http://127.0.0.1:{PORT}", flush=True)
     if not demo_on() and fleetview.projects():       # read the registered fleets once now, so the first look at Fleet is not a wait
         threading.Thread(target=fleet_view, kwargs={"force": True}, daemon=True).start()
     try:
@@ -5208,11 +5207,11 @@ EXTENSIONS = load_extensions()
 
 
 if __name__ == "__main__":
-    if sys.argv[1:3] == ["sessions", "revoke"]:      # `quarterdeck dashboard sessions revoke`: every paired browser is signed out, in a running dashboard too
+    if sys.argv[1:3] == ["sessions", "revoke"]:      # `qtdeck dashboard sessions revoke`: every paired browser is signed out, in a running dashboard too
         sessions_revoke()
-        print("every paired browser is signed out; `quarterdeck dashboard link` pairs one again")
+        print("every paired browser is signed out; `qtdeck dashboard link` pairs one again")
         sys.exit(0)
-    if sys.argv[1:2] == ["link"]:           # `quarterdeck dashboard link`: a fresh one-time link, made by writing into state/, never over HTTP
+    if sys.argv[1:2] == ["link"]:           # `qtdeck dashboard link`: a fresh one-time link, made by writing into state/, never over HTTP
         STATE.mkdir(parents=True, exist_ok=True)
         print(pair_link())
         sys.exit(0)

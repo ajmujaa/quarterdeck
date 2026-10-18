@@ -20,7 +20,7 @@ import home as _home
 ROOT = Path(__file__).resolve().parents[2]              # the program
 HOME = _home.resolve()                                   # your data (bin/home.py)
 STATE = HOME / "state"
-CONFIG_DIR = Path.home() / ".config" / "quarterdeck"
+CONFIG_DIR = Path(os.environ.get("QUARTERDECK_SECRETS_DIR") or Path.home() / ".config" / "quarterdeck")
 ENV_NAME = "integrations.env"
 TIMEOUT = 15
 MAX_ITEMS = 12

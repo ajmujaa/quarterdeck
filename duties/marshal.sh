@@ -120,8 +120,10 @@ for seat in $SEATS; do
   (
     trap - EXIT
     export QUARTERDECK_RUN_ID="${QUARTERDECK_RUN_ID}-$seat"
+    export QUARTERDECK_SEAT="$seat"   # its own billing setting, if any (bin/billing.py)
     m="$(crew_meta "$seat" model)"; [ -n "$m" ] && export QUARTERDECK_MODEL_PERSONA="$m"
     e="$(crew_meta "$seat" effort)"; [ -n "$e" ] && export QUARTERDECK_EFFORT_PERSONA="$e"
+    pv="$(crew_meta "$seat" provider)"; [ -n "$pv" ] && export QUARTERDECK_PROVIDER_PERSONA="$pv"
     p="$(preamble "$PROJECT")
 
 You are the ${seat} on the security crew. Your seat: $(crew_meta "$seat" seat).

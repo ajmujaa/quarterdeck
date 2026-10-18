@@ -1531,12 +1531,52 @@ function viewSettings(){
       + row("Voice", esc(d.voice) + ", speed " + esc(d.voice_speed), "Speech recognition and the voice run on this computer.")
       + row("Attention timeline", d.attention ? "On" : "Off", "Counts and times only, from your registered projects.")
       + `<p class="sub" style="margin-top:12px">To change any of these, edit <code>${esc((d.env_files[1] || d.env_files[0] || "config/quarterdeck.env"))}</code> and restart the dashboard.</p>`)
+    + sec("Billing: your plan or an API key", billingCard(d.billing))
     + sec("Packs", (d.packs || []).map(x => row(x.label, `<code>${esc(x.id)}</code> ${packPill(x.status)}`, "")).join("")
       + ((d.packs || []).some(x => x.status === "experimental") ? `<p class="sub" style="margin-top:12px">${esc(PACK_NOTE)}</p>` : ""))
     + sec("What is never collected", `<p>Keystrokes, screenshots, screen contents, which apps or websites you use, the clipboard, your location, or any file outside the projects you register and the data folder. A test scans the code for the calls that would do it.</p>
       <p style="margin-top:8px"><button class="mlink link" ${act("dockGo", "connections")}>Connections</button> reads only what you switch on, and any credential you enter stays in a private file on this computer.</p>`)
     + sec("This version", row("Version", `<code>${esc(d.commit || "unknown")}</code>`, "Running for " + up + ".")
       + `<p class="sub" style="margin-top:12px">To update, get the new version of the program and restart the dashboard. Your data folder is not touched.</p>`);
+}
+// Who pays for each duty's model calls. The key field is write-only: the server answers with a presence flag, so there is never a value to show.
+function billingCard(b){
+  if(!b) return "";
+  const store = b.key_store === "keychain" ? "the macOS Keychain" : "the private file on this computer";
+  const cap = b.caps && b.caps.daily_usd != null ? b.caps.daily_usd : "";
+  const duties = (b.duties || []).map(x => `<div class="set-row"><span class="set-k">${esc(x.duty)}</span><span class="set-v"><div style="max-width:220px">${slSelect({id: `bill-${x.duty}`, label: "Billing for " + x.duty, cls: "nolabel", value: x.billing, size: "small", options: [["plan", "Your plan"], ["api", "API key"]], change: actOn("change", "setBilling", x.duty, T.sel)})}</div></span></div>`).join("");
+  return `<p class="sub">Each duty runs on your Claude sign-in (your plan) unless you choose the API key for it. A duty set to the API key never falls back to your plan: with no key stored, or at a cap, it stops and asks you.</p>
+    <form class="conn-cred" ${actOn("submit", "seq", ["setKeySave"], ["preventDefault"])}>
+      ${slInput({id: "set-apikey", label: "Anthropic API key", type: "password", password: true, placeholder: b.key_present ? "Enter a new key to replace it" : "Paste the key here",
+        help: b.key_present ? `Stored in ${store}. It is never shown again.` : "Not stored."})}
+      <div class="btns">${btn("Save", {size: "small", attrs: 'type="submit"'})}${b.key_present ? btn("Remove", {size: "small", click: act("setKeyRemove")}) : ""}</div></form>
+    <form class="conn-cred" ${actOn("submit", "seq", ["setCapSave"], ["preventDefault"])}>
+      ${slInput({id: "set-capday", label: "Daily cap for the API key, in dollars", type: "number", value: cap, placeholder: "No cap", help: `Billed to the key today: ${usd(b.api_spent_today || 0)}. Empty means no daily cap.`})}
+      <div class="btns">${btn("Save cap", {size: "small", attrs: 'type="submit"'})}</div></form>
+    ${duties}`;
+}
+async function setKeySave(){
+  const el = document.getElementById("set-apikey"), v = el ? String(el.value || "").trim() : "";
+  if(!v) return fieldError(el, "Paste the key first.");
+  const j = await post("/api/settings", {action: "api_key", value: v, confirm: true});
+  if(el) el.value = "";
+  if(j){ toast("Saved. It will not be shown again."); loadSettings(true); }
+}
+async function setKeyRemove(){
+  if(!await confirmDlg("Duties set to the API key will stop and ask you until a key is stored again.", {title: "Remove the API key?", ok: "Remove it"})) return;
+  const j = await post("/api/settings", {action: "api_key", value: "", confirm: true});
+  if(j){ toast("Removed."); loadSettings(true); }
+}
+async function setBilling(duty, mode){
+  const j = await post("/api/settings", {action: "billing", duty, mode, confirm: true});
+  if(j) toast(`${duty}: ${mode === "api" ? "billed to the API key" : "billed to your plan"}.`);
+  loadSettings(true);
+}
+async function setCapSave(){
+  const el = document.getElementById("set-capday"), v = el ? String(el.value || "").trim() : "";
+  if(v !== "" && !(Number(v) >= 0)) return fieldError(el, "A number of dollars, or empty for no cap.");
+  const j = await post("/api/settings", {action: "cap", scope: "daily", usd: v === "" ? null : Number(v), confirm: true});
+  if(j){ toast("Saved."); loadSettings(true); }
 }
 function viewOperations(){
   const {fixing, live} = liveOperations();
@@ -4290,7 +4330,7 @@ const ACTIONS = {
   openAttach, openAttention, openCard, openCycleDialog, openDoc, openFocusDrawer, openFullLog, openMission, openMissionPage, openPalette, openPanel, openShowcase,
   openWhatChanged, palGo, pickCase, planAct, planMove, projSwitch, proposeMissionPlan, publishShowcase, queueAction, replayStep, restartDemo, rhythmScope,
   rowClick, rowKey, runHarbourmaster, runNext, saveFocus, saveMissionDraft, saveMissionEdit, saveShowcaseDraft, saveShowcaseEdit, schedAction,
-  selectPlace, selectProject, setBrainMode, setFleetView, setHandsFree, setLens, setSizeBy, setTheme, sgSpeakToggle, showGuardrails, showLog, showPrivacy,
+  selectPlace, selectProject, setBilling, setBrainMode, setCapSave, setFleetView, setHandsFree, setKeyRemove, setKeySave, setLens, setSizeBy, setTheme, sgSpeakToggle, showGuardrails, showLog, showPrivacy,
   startCycle, startMissionPanel, stopRun, talkSubmit, thinkToggle, tlClick, tlHover, tlSet, toggleCalm, toggleDemo, toggleLedger,
   toggleMissionForm, toggleMobileMenu, toggleOld, toggleReplay, toggleSched, toggleSel, toggleShowcaseForm, unpublishShowcase, unqueue, workOn,
   ...EXT.actions,                                   // an add-on's own (assets/ext-*.js), by name

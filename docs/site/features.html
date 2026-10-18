@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Features - Quarterdeck</title>
+<meta name="description" content="What Quarterdeck does: the crew, one bounded cycle, sprint planning, the Brain, calm mode and Helm.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site">
+<div class="wrap">
+<a class="brand" href="index.html">Quarterdeck</a>
+<nav aria-label="Main"><ul><li><a href="index.html">Home</a></li><li><a href="features.html" aria-current="page">Features</a></li><li><a href="security.html">Security</a></li><li><a href="install.html">Install</a></li><li><a href="faq.html">FAQ</a></li></ul></nav>
+</div>
+</header>
+<main id="main">
+<div class="wrap">
+<h1>Features</h1>
+<p class="lead">Four things and nothing else: a project, a crew member, a duty and a run. New capability means adding one of these, not editing the machinery.</p>
+
+<h2>Words used here</h2>
+<dl>
+<dt><strong>Project</strong></dt><dd>A repository you have registered, with its guardrails and the command that proves a change works.</dd>
+<dt><strong>Crew</strong></dt><dd>The built-in agents. Each is a short markdown file describing one point of view.</dd>
+<dt><strong>Duty</strong></dt><dd>One script that does one job, such as reviewing a pull request.</dd>
+<dt><strong>Run</strong></dt><dd>One execution of a duty, with a one-line verdict kept in the ledger.</dd>
+<dt><strong>Ledger</strong></dt><dd>The record of every run, what it cost and what it said.</dd>
+</dl>
+
+<h2>Review and build duties</h2>
+<ul>
+<li><strong>surveyor</strong> reads a pull request and posts findings as review comments.</li>
+<li><strong>marshal</strong> reads a pull request for security.</li>
+<li><strong>joiner</strong> reviews the interface: accessibility, states, responsive behaviour.</li>
+<li><strong>inspector</strong> checks that a pull request does what it claims.</li>
+<li><strong>shipwright</strong> takes one issue to a branch and a pull request, in a throwaway worktree.</li>
+<li><strong>trials</strong> writes the test that reproduces a bug and proves it fails first.</li>
+<li><strong>caulker</strong> fixes exactly the problem that was found.</li>
+<li><strong>assayer</strong> writes tests, as a different agent from the one that built the change.</li>
+</ul>
+
+<h2>Backlog and upkeep duties</h2>
+<ul>
+<li><strong>foreman</strong> turns a findings document into well-formed, deduplicated GitHub issues.</li>
+<li><strong>purser</strong> turns a backlog issue into something a stranger could start cold.</li>
+<li><strong>planner</strong> turns the open backlog into a sprint plan you read.</li>
+<li><strong>harbourmaster</strong> keeps the project board honest about what is actually happening.</li>
+<li><strong>bosun</strong> reports drift: stale branches, dead settings, docs that name things that are gone.</li>
+<li><strong>quartermaster</strong> checks what comes in: dependencies and what they actually are.</li>
+<li><strong>infra</strong> reads Terraform, CDK, CloudFormation, SAM, serverless, Vercel and Supabase files and reports risk and how to undo a change. It runs nothing against a cloud and holds no credentials.</li>
+</ul>
+
+<h2>Beyond single duties</h2>
+<h3>One bounded cycle</h3>
+<p><code>qtdeck cycle &lt;project&gt; --issue &lt;n&gt;</code> takes one issue through requirements, a plan, a build, tests written by a different agent, five reviewers side by side and a capped number of fixes. Then it stops for you to read the pull request and merge it. It is off unless the project opts in, report-only unless you pass <code>--apply</code>, resumable, and it stops before any stage that would cross your daily or per-run budget.</p>
+<h3>Sprint planning you approve</h3>
+<p>The planner writes an order that respects dependencies, a size (S, M or L) with a reason for each item, what needs a decision from you first, and what to leave out. Cost is the number your own finished runs measured, or plainly "unknown" when there are none. Nothing on your board changes until you run <code>qtdeck plan approve</code>.</p>
+<h3>A brief and mock-ups you approve first</h3>
+<p>An idea becomes a one-page brief in plain words, with what it assumed and what only you can answer. After you approve it, one static page is made per screen. The harness checks each page against an allowlist (no script, no external address, visible keyboard focus, readable contrast) and shows it only in a sandboxed frame.</p>
+<h3>Panel</h3>
+<p>Several crew members look at one question and are made to disagree before a chair rules.</p>
+
+<h2>The Brain</h2>
+<p>One map of your projects, your agents and the services you connect. It is built from what you have added, so adding or removing a project or a connection changes it with no code edit. Click any dot to see what it is, what state it is in and where it leads.</p>
+
+<h2>Connections</h2>
+<p>Gmail or Mac Mail, team chat, web analytics, post numbers for Facebook, Instagram, LinkedIn, Threads and X, and your Mac's calendar and reminders can be shown in the Brain. Each is a small script that calls the service's own API with a read-only credential, with no model in the path. A credential you enter goes into a private file on your computer and is never shown again. Quarterdeck never posts to a social account. Nothing is claimed as tested against a real service unless that service's file says so.</p>
+
+<h2>Calm mode</h2>
+<p>A switch in the top bar. It shows larger text in one column and only what needs you, and folds the rest behind <strong>Show everything</strong>. It starts on by itself if your system asks for reduced motion.</p>
+
+<h2>Packs</h2>
+<p>A pack is a short note about one stack that the crew reads before it works on a matching project. The python and typescript-node packs carry no tag. The six infrastructure packs (aws, vercel-supabase, azure, google-cloud, cloudflare, fly) are labelled <strong>experimental</strong>: they were tested on small examples only, and every infra report says so in its footer. Read such a report as a second opinion, not a verdict.</p>
+
+<h2>Helm, the optional voice</h2>
+<p>An assistant you can talk to and listen to. It is off until you set it up, and the rest of Quarterdeck works without it. Speech recognition (whisper.cpp), the voice (Kokoro) and the small language model that answers (llama.cpp) all run on your machine. Helm can optionally think with Claude for open questions; that is off by default, capped per day, never on in demo mode, and you choose what it may be told.</p>
+
+<h2>Your data stays yours</h2>
+<p>The program and your data are separate folders. Your registry, runs, notes, logs and settings live in your data folder, <code>~/.quarterdeck</code> by default. You can update or delete the program without touching your data.</p>
+</div>
+</main>
+<footer class="site">
+<div class="wrap">
+<ul><li><a href="features.html">Features</a></li><li><a href="security.html">Security</a></li><li><a href="install.html">Install</a></li><li><a href="faq.html">FAQ</a></li><li><a href="https://github.com/ajmujaa/quarterdeck">Source on GitHub</a></li></ul>
+<p>Quarterdeck is open source under the Apache License 2.0. This site loads nothing from other websites and sets no cookies.</p>
+</div>
+</footer>
+</body>
+</html>

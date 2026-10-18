@@ -3271,6 +3271,7 @@ import claudeproc
 import fleetview
 import projagents
 from integrations import manifest as integrations_manifest
+import billing as _billing                               # who pays for a duty's model calls, and the API key's presence (bin/billing.py)
 
 # Local fleets (bin/fleetview.py): the agent folders the owner registered in config/fleet.local.json, shown on one screen and
 # started or stopped from it. Not in /api/state, so nothing here reaches Helm or any model. Cached for a few seconds because
@@ -3324,7 +3325,56 @@ def settings_view():
         "attention": attention_on(), "commit": git_commit(), "uptime_seconds": int(time.time() - STARTED),
         "projects": len(read_json(PROJECTS_FILE, {}) or {}),
         "packs": [{k: x[k] for k in ("id", "label", "status")} for x in _packs_mod.load()],
+        "billing": _billing.summary(),                   # modes, caps and whether the API key is stored; never the key
     }
+
+
+def settings_api(b):
+    """The writable part of Settings: who pays for each duty (plan or API key), the API spend caps, and the API key itself, which goes in and
+    never comes back: every answer about it is a presence flag. Needs the owner's confirm. The log names the action, never a value."""
+    if b.get("confirm") is not True:
+        return 400, {"error": "confirm is required: this changes which account pays for model calls"}
+    action = b.get("action")
+    try:
+        if action == "api_key":
+            result = {"present": _billing.set_key(b.get("value") if isinstance(b.get("value"), str) else "")}
+        elif action in ("billing", "seat"):
+            name, mode = str(b.get("duty" if action == "billing" else "seat") or ""), b.get("mode")
+            if mode not in _billing.MODES or not _billing.SAFE_NAME.match(name) or (action == "billing" and name not in _billing.duty_names()):
+                return 400, {"error": "name a duty (or seat) that exists, and plan or api"}
+            cfg = _billing.load()
+            cfg["duties" if action == "billing" else "seats"][name] = mode
+            _billing.save(cfg)
+            result = {"billing": _billing.mode(name) if action == "billing" else mode}
+        elif action == "cap":
+            usd = b.get("usd")
+            if usd is not None and _billing._usd(usd) is None:
+                return 400, {"error": "a cap is a number of dollars, or null for none"}
+            cfg = _billing.load()
+            if b.get("scope") == "daily":
+                cfg["caps"]["daily_usd"] = _billing._usd(usd) if usd is not None else None
+            elif b.get("scope") == "duty" and (b.get("duty") == "*" or str(b.get("duty") or "") in _billing.duty_names()):
+                if usd is None:
+                    cfg["caps"]["duty_usd"].pop(b["duty"], None)
+                else:
+                    cfg["caps"]["duty_usd"][b["duty"]] = float(usd)
+            else:
+                return 400, {"error": "scope is daily, or duty with a duty that exists (or *)"}
+            _billing.save(cfg)
+            result = {"caps": _billing.load()["caps"]}
+        else:
+            return 400, {"error": "action must be api_key, billing, seat or cap"}
+    except ValueError as e:
+        return 400, {"error": str(e)}
+    except OSError as e:
+        return 500, {"error": "could not write: " + type(e).__name__}
+    try:
+        LOGS.mkdir(parents=True, exist_ok=True)
+        with open(LOGS / "settings.log", "a") as f:                     # what changed, never a value of the key
+            f.write(f"{iso(now_utc())} {log_field(action)} {log_field(b.get('duty') or b.get('seat') or b.get('scope') or '')}\n")
+    except OSError:
+        pass
+    return 200, result
 
 
 MAX_BODY = 2_000_000
@@ -4867,6 +4917,10 @@ class Handler(BaseHTTPRequestHandler):
 
         if u.path == "/api/connections":
             code, body = connections_api(b)
+            return self._send(code, json.dumps(body))
+
+        if u.path == "/api/settings":
+            code, body = settings_api(b)
             return self._send(code, json.dumps(body))
 
         if u.path == "/api/newproject":

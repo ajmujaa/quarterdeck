@@ -99,6 +99,20 @@ safe_git -C "$WT" checkout -q -B "$BRANCH" 2>>"$LOG_FILE" || die "could not crea
 # Recorded (<wt>.nmlink) the way worktree_at does it, or the check sandbox would not let the link in (round 6).
 worktree_nm_borrow "$SOURCE_REPO_DIR" "$WT"
 
+# Terraform (ticket #101): a plan item whose Where field is one folder (`infra/net/`) lets the builder change the *.tf files, and the *.tfvars
+# files without a secret-looking value, under that folder (bin/protect.py decides, at the gate). The folder must be in the checkout before the
+# model runs. The harness then runs terraform fmt and validate itself, and the infra duty reviews the diff.
+TF_FOLDERS="" TF_PLUGINS=""
+if [ -n "$PLAN" ]; then
+  tf_named=$(python3 "$QUARTERDECK_DIR/bin/protect.py" folders --plan "$PLAN") || die "shipwright: could not read the plan's Where fields"
+  TF_FOLDERS=$(python3 "$QUARTERDECK_DIR/bin/protect.py" folders --plan "$PLAN" --root "$WT") || die "shipwright: could not check the plan's folders"
+  if [ "$tf_named" != "$TF_FOLDERS" ]; then
+    record_run "$PROJECT" shipwright REFUSED "#$ISSUE: the plan names a folder that is not a plain folder in the checkout: $(tr '\n' ' ' <<<"$tf_named")"
+    die "refused: the plan names a folder ($(tr '\n' ' ' <<<"$tf_named" | sed 's/ $//')) that is not a plain folder in the checkout; a folder Where must already exist, inside the project, with no link in it"
+  fi
+  TF_PLUGINS=$(project_get "$PROJECT" terraform_plugin_dir)
+fi
+
 # What the verify command is made of, before the model has touched anything (see model_diff_gate).
 INPUTS_BEFORE="$(verify_inputs "$WT")"
 
@@ -107,8 +121,10 @@ INPUTS_BEFORE="$(verify_inputs "$WT")"
 # already had.
 say "  baselining local checks"
 BASE_CHECKS="$(run_checks "$PROJECT" "$WT")"
+[ -z "$TF_FOLDERS" ] || BASE_CHECKS="$BASE_CHECKS${BASE_CHECKS:+
+}$(tf_checks "$WT" "$TF_PLUGINS" $TF_FOLDERS)"
 wt_mark "$WT"          # what git ignores now (the node_modules link, build output): the gate examines every ignored file added after this
-CHECK_LIST="$(jq -rs 'if length == 0 then "" else map("  " + .cmd + "   (currently exit " + (.rc|tostring) + ")") | join("\n") end' <<<"$BASE_CHECKS")"
+CHECK_LIST="$(jq -rs 'map(select(.name | startswith("terraform ") | not)) | if length == 0 then "" else map("  " + .cmd + "   (currently exit " + (.rc|tostring) + ")") | join("\n") end' <<<"$BASE_CHECKS")"
 
 # Issue 121, QUARTERDECK_BUILD_FOCUS=on: the files the plan names, up front, and a rule to stop once the checks pass. Turns, not wording,
 # are what a build costs; a builder that knows where to start and when it is done takes fewer of them.
@@ -141,6 +157,16 @@ something else.
 $PLAN_TEXT
 === END OF RULING ===
 }
+${TF_FOLDERS:+=== TERRAFORM ===
+This item changes Terraform in $(tr '\n' ' ' <<<"$TF_FOLDERS")and nowhere else. You may change only *.tf files there,
+and *.tfvars files that hold no secret value. You have no shell; the harness runs terraform fmt and validate itself
+after you stop, and an infrastructure review reads your change. Nobody here runs a plan or an apply: a person does.
+- Never write a secret value into a file: refer to a secret store or a variable without a default.
+- Never edit a backend block, a provider version or a module source, state files, .terraform/ or the lock file.
+- Prefer a moved block to a rename. Never remove prevent_destroy, deletion_protection or a retention setting.
+- Keep the files formatted the way terraform fmt formats them.
+=== END TERRAFORM ===
+}
 How to work:
 - Read enough of the surrounding code to be sure of the cause. Fix the cause,
   not the symptom, and check whether other call sites have the same problem.
@@ -164,8 +190,10 @@ RESULT: NEEDS_HUMAN <what you need decided>
   or
 RESULT: NO_CHANGE <why nothing should change>"
 
-result=$(claude_run "$WT" "$prompt" \
-  "Read,Edit,Write,Grep,Glob,Bash(npx tsc*),Bash(npm run*),Bash(node*)" \
+# A Terraform builder gets no shell (ticket #101): a model that cannot run terraform cannot be talked into a plan or an apply.
+TOOLS="Read,Edit,Write,Grep,Glob,Bash(npx tsc*),Bash(npm run*),Bash(node*)"
+[ -z "$TF_FOLDERS" ] || TOOLS="Read,Edit,Write,Grep,Glob"
+result=$(claude_run "$WT" "$prompt" "$TOOLS" \
   "WebFetch,WebSearch,Bash(git push*),Bash(git commit*),Bash(git checkout*),Bash(git reset*),Bash(gh *),Bash(rm -rf*),Bash(curl*),Bash(ssh*),Bash(npm publish*),Bash(npm install*)")
 rc=$?
 [ $rc = 2 ] && { say "quarterdeck: usage limit reached — worktree discarded"; exit 0; }
@@ -230,6 +258,8 @@ fi
 
 say "  re-running local checks"
 AFTER_CHECKS="$(run_checks "$PROJECT" "$WT")"
+[ -z "$TF_FOLDERS" ] || AFTER_CHECKS="$AFTER_CHECKS${AFTER_CHECKS:+
+}$(tf_checks "$WT" "$TF_PLUGINS" $TF_FOLDERS)"
 # The checks ran project code that may write in the worktree: the gate again, on what is there now (S1), before anything can be committed.
 if ! why=$(post_checks_gate "$PROJECT" "$WT" "$INPUTS_BEFORE" "$changed" "$PLAN"); then
   say "  REFUSED: $why"
@@ -247,6 +277,24 @@ if [ "$(jq length <<<"$REGRESSIONS")" != 0 ]; then
   trap - EXIT
   record_run "$PROJECT" shipwright REFUSED "#$ISSUE — $(jq -r '[.[].name] | join(", ")' <<<"$REGRESSIONS") got worse"
   die "refused: nothing is committed when a local check regresses"
+fi
+
+# Terraform: the infra duty reviews exactly what passed (the staged tree, as a commit object no branch points at) against the packs that fit,
+# the AWS pack among them. Its report is shown here and goes into the pull request; it is experimental and it is a second opinion, not a gate.
+INFRA_REPORT=""
+if [ -n "$TF_FOLDERS" ]; then
+  say "  infrastructure review (experimental)"
+  tf_base=$(safe_git -C "$WT" rev-parse HEAD) && tf_tree=$(safe_git -C "$WT" write-tree) \
+    && tf_head=$(safe_git -C "$WT" -c user.name=quarterdeck -c user.email=quarterdeck@example.com commit-tree "$tf_tree" -p "$tf_base" -m "shipwright review of #$ISSUE") \
+    || tf_head=""
+  tf_rep=$(mktemp "$QUARTERDECK_HOME/workspace/infra-review.XXXXXX")
+  if [ -n "$tf_head" ] && QUARTERDECK_PROJECT="$PROJECT" QUARTERDECK_WORKDIR="$SOURCE_REPO_DIR" bash "$QUARTERDECK_DIR/duties/infra.sh" --diff "$tf_base" --head "$tf_head" --report-to "$tf_rep" >>"$LOG_FILE" 2>&1 && [ -s "$tf_rep" ]; then
+    INFRA_REPORT=$(cat "$tf_rep")
+  else
+    INFRA_REPORT="**The infrastructure review did not complete** (see the infra log). Nothing was reviewed; read the change yourself. No plan was run by Quarterdeck."
+  fi
+  rm -f "$tf_rep"
+  say ""; say "$INFRA_REPORT"
 fi
 
 say ""
@@ -289,8 +337,18 @@ $(checks_summary "$AFTER_CHECKS")
 Every one of those was also run on an untouched tree first, and the harness refuses to commit anything that makes one of them worse. That is the whole of what has been proven — it is not a claim that the change was exercised by hand or looked at in a browser.
 EOF
 )
+DRAFT=()
+if [ -n "$TF_FOLDERS" ]; then
+  # Opened as a draft: a Terraform change is ready only when a person has read the review and the project's own plan, and applies it.
+  DRAFT=(--draft)
+  pr_body="$pr_body
+
+**Terraform (experimental).** Quarterdeck ran no plan and holds no cloud credentials; the checks above are terraform fmt and validate only. Read the project's own CI plan, then apply through your own process.
+
+$INFRA_REPORT"
+fi
 if url=$(gh_post 90 pr create -R "$REPO" --base "$BASE" --head "$BRANCH" \
-           --title "fix: $title" --body "$pr_body" 2>>"$LOG_FILE"); then
+           --title "fix: $title" --body "$pr_body" ${DRAFT[@]+"${DRAFT[@]}"} 2>>"$LOG_FILE"); then
   say "  ✓ $url"
   record_run "$PROJECT" shipwright "PR" "#$ISSUE → $url" "$url"
 else

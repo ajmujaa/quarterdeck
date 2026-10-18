@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Quarterdeck: a local-first control room for AI agents</title>
+<meta name="description" content="Quarterdeck runs on your own machine and takes work from an issue to a reviewed pull request, with you in charge.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site">
+<div class="wrap">
+<a class="brand" href="index.html">Quarterdeck</a>
+<nav aria-label="Main"><ul><li><a href="index.html" aria-current="page">Home</a></li><li><a href="features.html">Features</a></li><li><a href="security.html">Security</a></li><li><a href="install.html">Install</a></li><li><a href="faq.html">FAQ</a></li></ul></nav>
+</div>
+</header>
+<main id="main">
+<div class="wrap">
+<h1>A calm control room for AI software-development agents</h1>
+<p class="lead">Quarterdeck runs on your own machine. It gives you one dashboard for all your projects and a built-in crew of agents that take work from an issue to a reviewed pull request. Nothing leaves your computer except the requests you ask for.</p>
+<div class="actions">
+<a class="button" href="install.html">Install on macOS</a>
+<a class="button plain" href="security.html">What is tested and what is not</a>
+</div>
+<div class="note"><p><strong>Status: early.</strong> It is built and used daily on macOS. Linux is next. Expect rough edges, and read what is tested and what is not before you trust it with anything you care about.</p></div>
+
+<h2>What it is</h2>
+<p>A command, <code>qtdeck</code>, and a dashboard that listens on your machine only. You register a project (a repository). The crew, which are short markdown files each describing one point of view, can then review pull requests, write issues, plan a sprint, fix a bug or take one issue to a pull request. You read the result and decide.</p>
+
+<h2>The one rule</h2>
+<p><strong>The model thinks, the harness acts.</strong> No agent is given credentials or write tools. An agent reads, reasons and ends its reply with a machine-readable contract. A script parses the contract and does the privileged thing (posts a comment, opens a branch, files an issue), and only with an explicit <code>--apply</code>. A reply that does not parse is a failed run that writes nothing.</p>
+
+<h2>What it never collects</h2>
+<ul>
+<li>Keystrokes</li>
+<li>Screenshots or screen contents</li>
+<li>Which apps or websites you use</li>
+<li>The clipboard</li>
+<li>Your location</li>
+<li>Any file outside the projects you register and its own data folder</li>
+</ul>
+<p>A test scans the code for the programming interfaces that would do any of this. <a href="security.html">Read how it stays safe</a>.</p>
+
+<h2>Where to go next</h2>
+<ul>
+<li><a href="features.html">Features</a>: the crew, planning, the Brain, calm mode and the optional voice.</li>
+<li><a href="security.html">Security</a>: protections, tests, and the limits we know about.</li>
+<li><a href="install.html">Install</a>: the steps on macOS.</li>
+<li><a href="faq.html">FAQ</a>: short answers.</li>
+</ul>
+</div>
+</main>
+<footer class="site">
+<div class="wrap">
+<ul><li><a href="features.html">Features</a></li><li><a href="security.html">Security</a></li><li><a href="install.html">Install</a></li><li><a href="faq.html">FAQ</a></li><li><a href="https://github.com/ajmujaa/quarterdeck">Source on GitHub</a></li></ul>
+<p>Quarterdeck is open source under the Apache License 2.0. This site loads nothing from other websites and sets no cookies.</p>
+</div>
+</footer>
+</body>
+</html>

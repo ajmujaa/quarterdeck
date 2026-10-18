@@ -535,12 +535,20 @@ claude_sandbox_json() { # claude_sandbox_json <workdir> [extra paths to deny, on
 
 # The environment a model call gets: what claude needs to run and to sign in, and nothing else. Everything exported from
 # ~/.config/quarterdeck/env (tokens, webhooks, QUARTERDECK_*) and the owner's GH_TOKEN stay out of a process whose shell commands a prompt may steer.
-# QUARTERDECK_CLAUDE_ENV=inherit passes the whole environment (the self-tests' stand-in model needs its fixtures).
-_qd_claude_env() { # fills the array CLAUDE_ENV with NAME=value pairs for env -i
+# Which account pays (bin/billing.py, ticket #38) decides the sign-in: a plan call gets no ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN even when the
+# owner's shell has one (a stray key must never silently bill the wrong account); an api call gets the stored key added by _qd_call_env, and no
+# other credential that could win over it (CLAUDE_CODE_OAUTH_TOKEN, the auth token, a cloud provider switch).
+# QUARTERDECK_CLAUDE_ENV=inherit passes the whole environment (the self-tests' stand-in model needs its fixtures), with the same billing rule.
+# Only the claude adapter (provider_call_claude) calls these: the key and the sign-in are that adapter's business and no other's.
+_QD_PLAN_DROP="ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN"
+_QD_API_DROP="ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_FOUNDRY"
+_qd_claude_env() { # _qd_claude_env [plan|api]: fills the array CLAUDE_ENV with NAME=value pairs for env -i (never with the API key)
   CLAUDE_ENV=("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1")
-  local k cloud=""
-  [ -n "${CLAUDE_CODE_USE_BEDROCK:-}${CLAUDE_CODE_USE_VERTEX:-}${CLAUDE_CODE_USE_FOUNDRY:-}" ] && cloud=1
+  local k cloud="" drop=" $_QD_PLAN_DROP "
+  [ "${1:-plan}" = api ] && drop=" $_QD_API_DROP "
+  [ "${1:-plan}" != api ] && [ -n "${CLAUDE_CODE_USE_BEDROCK:-}${CLAUDE_CODE_USE_VERTEX:-}${CLAUDE_CODE_USE_FOUNDRY:-}" ] && cloud=1
   while IFS= read -r k; do
+    case "$drop" in *" $k "*) continue ;; esac
     case "$k" in
       TMPDIR) CLAUDE_ENV+=("TMPDIR=$_QD_SYSTMP"); continue ;;
       HOME|PATH|USER|LOGNAME|SHELL|LANG|LC_*|TERM|TZ|ANTHROPIC_*|CLAUDE_CONFIG_DIR|CLAUDE_CODE_*|HTTP_PROXY|HTTPS_PROXY|NO_PROXY|http_proxy|https_proxy|no_proxy|NODE_EXTRA_CA_CERTS|SSL_CERT_FILE|SSL_CERT_DIR) ;;
@@ -550,6 +558,33 @@ _qd_claude_env() { # fills the array CLAUDE_ENV with NAME=value pairs for env -i
     [ "$k" = CLAUDE_CODE_SUBPROCESS_ENV_SCRUB ] && continue
     CLAUDE_ENV+=("$k=${!k}")
   done < <(compgen -e)
+}
+
+# _qd_call_env <plan|api>: run ONLY inside the call's own subshell, just before claude starts: sets exactly the environment the call gets.
+# It un-exports everything and exports the allowed names (export is a shell builtin, so no value, the key least of all, is ever a process
+# argument: `env NAME=value` would put it where any local user's `ps` reads it). For an api call the key comes from $_QD_API_KEY, a plain
+# shell variable of the claude adapter that was never exported.
+_qd_call_env() {
+  local k
+  if [ "${QUARTERDECK_CLAUDE_ENV:-clean}" != inherit ]; then
+    _qd_claude_env "$1"
+    while IFS= read -r k; do export -n "$k"; done < <(compgen -e)
+    while read -r _ _ k; do export -nf "$k"; done < <(declare -Fx)
+    for k in "${CLAUDE_ENV[@]}"; do export "$k"; done
+  else
+    for k in $([ "$1" = api ] && echo "$_QD_API_DROP" || echo "$_QD_PLAN_DROP"); do unset "$k"; done
+  fi
+  if [ "$1" = api ]; then export ANTHROPIC_API_KEY="$_QD_API_KEY"; fi
+  _QD_API_KEY=""
+}
+
+# _qd_billing_stop <duty> <reason>: an api call that cannot go ahead (no key stored, a spend cap reached): the duty stops with NEEDS_HUMAN and
+# says why, and the duty's own "run failed" row for the same run is not added on top (record_run looks for the mark).
+_qd_billing_stop() {
+  log "billing: $1 is billed to the API key and was not started: $2"
+  notify "quarterdeck/${QUARTERDECK_PROJECT:-quarterdeck}" "$1 stopped: $2"
+  record_run "${QUARTERDECK_PROJECT:-}" "$1" NEEDS_HUMAN "$2"
+  [ -z "${QUARTERDECK_RUN_ID:-}" ] || : > "$TMPDIR/qd-billing-stop.$QUARTERDECK_RUN_ID"     # only a run with its own id can be told apart
 }
 
 # ---- the model call ---------------------------------------------------------
@@ -575,6 +610,9 @@ claude_run() { # claude_run <workdir> <prompt> [tools, comma separated] [deny-to
   local out result rc
   wdir=$(cd "$wdir" 2>/dev/null && pwd -P) || { log "claude_run: no working folder '$1'"; return 1; }
   case "$wdir" in *,*|*"("*|*")"*) log "claude_run: refusing a working folder whose name holds a comma or a bracket ($wdir)"; return 1 ;; esac
+  # Which adapter makes the call (docs/design-providers.md). Decided first: an unknown name is refused before anything is prepared or run.
+  local QD_PROVIDER QD_PROVIDER_FROM
+  provider_pick "$(basename "${0:-quarterdeck}" .sh)" || return 1
 
   # tools -> --tools (names) and --allowedTools (rules)
   local t base names="" has_shell="" allow=""
@@ -652,6 +690,15 @@ claude_run() { # claude_run <workdir> <prompt> [tools, comma separated] [deny-to
   local tvar turns; tvar="QUARTERDECK_MAX_TURNS_$key"; turns="${!tvar:-${QUARTERDECK_MAX_TURNS:-}}"
   [[ "$turns" =~ ^[1-9][0-9]{0,3}$ ]] || turns=""
 
+  # Who pays (bin/billing.py, ticket #38): the plan unless the duty (or this crew seat) is set to the API key. Only the claude adapter signs
+  # in to Anthropic, so only its calls are billed to either; another provider's calls are booked as billing "none" and never see the key.
+  local bmode=none cbudget="${QUARTERDECK_CALL_BUDGET:-}" left=""
+  if [ "$QD_PROVIDER" = claude ]; then
+    bmode=plan
+    [ -f "$QUARTERDECK_DIR/bin/billing.py" ] && bmode=$(python3 "$QUARTERDECK_DIR/bin/billing.py" mode "$duty" "${QUARTERDECK_SEAT:-}" 2>/dev/null)
+    [ "$bmode" = api ] || bmode=plan
+  fi
+
   # Skip when nothing changed (issue 121): a read-only call of a duty listed in QUARTERDECK_REUSE, whose inputs are byte for byte those of an
   # earlier answered call, gets that answer back without a model call. The inputs are everything that decides the answer: the prompt (the
   # random UNTRUSTED nonces aside), the model, effort, tools and rules, the turn cap, and the working folder's commit, which must be clean.
@@ -662,7 +709,7 @@ claude_run() { # claude_run <workdir> <prompt> [tools, comma separated] [deny-to
       local head
       # ponytail: an untracked file counts by name only (a borrowed node_modules link is untracked); a tracked change turns reuse off for the call.
       if head=$(safe_git -C "$wdir" rev-parse HEAD 2>/dev/null) && [ -z "$(safe_git -C "$wdir" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
-        rkey=$( { printf '%s\n' "$duty" "$model" "$effort" "$names" "$allow" "$deny" "$turns" "$head" "$wdir"
+        rkey=$( { printf '%s\n' "$duty" "$QD_PROVIDER" "$model" "$effort" "$names" "$allow" "$deny" "$turns" "$head" "$wdir"
                   safe_git -C "$wdir" status --porcelain 2>/dev/null
                   # the nonces go, and the numbers inside a command's output (test timings): the commit above already pins what ran
                   printf '%s\n' "$prompt" | awk '{ if ($0 ~ /^(BEGIN|END) UNTRUSTED /) { sub(/ [0-9a-f]+$/, ""); o = ($0 ~ /^BEGIN UNTRUSTED output of /) }
@@ -674,14 +721,14 @@ claude_run() { # claude_run <workdir> <prompt> [tools, comma separated] [deny-to
     esac ;;
   esac
   if [ -n "$hit" ]; then
-    out=$(jq -c '. + {reused: true, total_cost_usd: 0, num_turns: 0, usage: {}}' "$rfile") || out=""
+    out=$(jq -c 'select(.text | type == "string") | . + {reused: true, cost_usd: 0, turns: 0, input_tokens: 0, input_new: 0, cache_write: 0, cache_read: 0, output_tokens: 0}' "$rfile" 2>/dev/null) || out=""
     if [ -n "$out" ]; then
       say "  reused: the same inputs were answered on $(jq -r '.reused_from.at // "an earlier run"' <<<"$out") (run $(jq -r '.reused_from.run // "?"' <<<"$out")); no model call. Pass --fresh to ask again."
       log "reused $rkey for ${QUARTERDECK_RUN_ID:-run} (no model call)"
       printf '%s\n' "${QUARTERDECK_RUN_ID:-run}" >> "$QUARTERDECK_HOME/state/tmp/reused.$$"
       printf '%s' "$out" > "$QUARTERDECK_HOME/logs/runs/${QUARTERDECK_RUN_ID:-run}.json"
-      record_spend "$out" "$duty" "$effort" "$rkey"
-      jq -r '.result // empty' <<<"$out"
+      record_spend_neutral "$out" "$duty" "$effort" "$rkey" "$bmode"
+      jq -r '.text // empty' <<<"$out"
       return 0
     fi
   fi
@@ -690,7 +737,15 @@ claude_run() { # claude_run <workdir> <prompt> [tools, comma separated] [deny-to
   # so the long system prompt is byte-identical across worktrees and is read from the prompt cache instead of written again.
   local stable=""; [ "${QUARTERDECK_STABLE_PROMPT:-off}" = on ] && stable=--exclude-dynamic-system-prompt-sections
 
-  [ -n "$CLAUDE_BIN" ] || { log "claude binary not found"; return 1; }
+  # An api call needs the key and room under its caps, or it does not start: falling back to the plan would bill an account the owner did
+  # not choose. Its own return code, 5 (4 is the turn cap). Only whether a key is stored is asked here; the claude adapter reads it.
+  if [ "$bmode" = api ]; then
+    left=$(python3 "$QUARTERDECK_DIR/bin/billing.py" gate "$duty" 2>/dev/null) || { _qd_billing_stop "$duty" "${left:-the API spend caps could not be read}"; return 5; }
+    python3 "$QUARTERDECK_DIR/bin/billing.py" has-key >/dev/null 2>&1 \
+      || { _qd_billing_stop "$duty" "no API key is stored (qtdeck keys set anthropic, or the Settings page); it was not billed to your plan instead"; return 5; }
+    # the call may spend at most what is left under the caps
+    [ -n "$left" ] && cbudget=$(awk -v a="$cbudget" -v b="$left" 'BEGIN { printf "%.4f", (a == "" || b + 0 < a + 0) ? b : a }')
+  fi
 
   # Captured with ||, not a following $?: under set -e a failing substitution
   # would end the script before its cost was recorded.
@@ -699,51 +754,39 @@ claude_run() { # claude_run <workdir> <prompt> [tools, comma separated] [deny-to
   # that has a shell gets it: the models no longer run gh (which cannot reach GitHub from inside it), the harness does.
   local sandbox=""
   if [ -n "$has_shell" ] && [ "${QUARTERDECK_SANDBOX:-on}" = on ]; then sandbox=$(claude_sandbox_json "$wdir" "${sbdeny:-}"); fi
-  local -a cenv=()
-  if [ "${QUARTERDECK_CLAUDE_ENV:-clean}" != inherit ]; then _qd_claude_env; cenv=(env -i "${CLAUDE_ENV[@]}"); fi
-  # Nothing about the call is put in the process arguments where any local user's `ps` shows it: the prompt (issue text, diffs, which
-  # can quote private code) goes in on stdin, and the sandbox settings are a file only this user can read, removed when the call ends.
-  local sfile=""
-  if [ -n "$sandbox" ]; then
-    sfile=$(mktemp "${TMPDIR:-/tmp}/quarterdeck-settings.XXXXXX") && chmod 600 "$sfile" && printf '%s' "$sandbox" > "$sfile" \
-      || { log "claude_run: could not write the sandbox settings file"; rm -f "$sfile"; return 1; }
-  fi
-  rc=0
-  out=$(cd "$wdir" && printf '%s' "$prompt" | guard "${QUARTERDECK_RUN_TIMEOUT:-900}" ${cenv[@]+"${cenv[@]}"} "$CLAUDE_BIN" -p \
-        --permission-mode dontAsk \
-        --tools "$names" \
-        --allowedTools "$allow" \
-        --disallowedTools "$deny" \
-        --setting-sources "${QUARTERDECK_SETTING_SOURCES:-}" \
-        --strict-mcp-config \
-        ${model:+--model "$model"} \
-        ${effort:+--effort "$effort"} \
-        ${QUARTERDECK_CALL_BUDGET:+--max-budget-usd "$QUARTERDECK_CALL_BUDGET"} \
-        ${turns:+--max-turns "$turns"} \
-        ${stable:+"$stable"} \
-        ${sfile:+--settings "$sfile"} \
-        --output-format json 2>>"${LOG_FILE:-$QUARTERDECK_HOME/logs/quarterdeck.log}") || rc=$?
-  [ -z "$sfile" ] || rm -f "$sfile"
-  [ -n "$out" ] || { log "claude returned nothing (exit $rc, workdir=$wdir)"; return 1; }
 
-  # Keep the raw envelope; when a contract fails to parse this is the only way
-  # to see what the model actually said.
-  printf '%s' "$out" > "$QUARTERDECK_HOME/logs/runs/${QUARTERDECK_RUN_ID:-run}.json"
-  # And what it cost — before deciding whether it succeeded. A call that fails
+  # The adapter seam. Everything above is the harness's and the same for every provider; the adapter only starts its program with these
+  # inputs (the prompt on stdin) and prints one reply envelope (provider_call_claude says what is in it). It keeps the provider's raw reply
+  # in QD_CALL_ENVELOPE, and returns the program's exit status.
+  local QD_CALL_WORKDIR=$wdir QD_CALL_TOOLS=$names QD_CALL_ALLOW=$allow QD_CALL_DENY=$deny QD_CALL_MODEL=$model QD_CALL_EFFORT=$effort \
+        QD_CALL_BUDGET=$cbudget QD_CALL_BILLING=$bmode QD_CALL_TIMEOUT="${QUARTERDECK_RUN_TIMEOUT:-900}" QD_CALL_SOURCES="${QUARTERDECK_SETTING_SOURCES:-}" \
+        QD_CALL_SANDBOX=$sandbox QD_CALL_TURNS=$turns QD_CALL_STABLE=$stable QD_CALL_ENVELOPE="$QUARTERDECK_HOME/logs/runs/${QUARTERDECK_RUN_ID:-run}.json"
+  rc=0
+  out=$(printf '%s' "$prompt" | "provider_call_$QD_PROVIDER") || rc=$?
+  [ -n "$out" ] || { log "$QD_PROVIDER returned nothing (exit $rc, workdir=$wdir)"; return 1; }
+  if ! jq -e 'type == "object"' >/dev/null 2>&1 <<<"$out"; then
+    log "claude_run: the $QD_PROVIDER adapter printed something that is not a reply envelope (exit $rc, workdir=$wdir)"; return 1
+  fi
+
+  # What it cost, before deciding whether it succeeded. A call that fails
   # or is stopped at its cap has still been paid for, and a spend ledger that
   # only counts successes is wrong in exactly the cases worth looking at.
-  record_spend "$out" "$duty" "$effort" "$rkey"
+  if [ "$(jq -r '.unparsed // false' <<<"$out")" = true ]; then
+    log "record_spend: could not record a ${duty} call — the daily budget will undercount it"
+  else
+    record_spend_neutral "$out" "$duty" "$effort" "$rkey" "$bmode"
+  fi
 
-  case "$(jq -r '.subtype // empty' <<<"$out" 2>/dev/null)" in
-    error_max_budget_usd) log "stopped at the per-call cap of \$${QUARTERDECK_CALL_BUDGET} — nothing written"; return 3 ;;
-    error_max_turns)      log "ran out of turns: the cap of $turns for $duty was reached — nothing written"; return 4 ;;
+  case "$(jq -r '.stop // empty' <<<"$out")" in
+    cap)   log "stopped at the per-call cap of \$${cbudget}, nothing written"; return 3 ;;
+    turns) log "ran out of turns: the cap of $turns for $duty was reached — nothing written"; return 4 ;;
   esac
-  [ $rc = 0 ] || { log "claude run failed (exit $rc, workdir=$wdir)"; return 1; }
+  [ $rc = 0 ] || { log "$QD_PROVIDER run failed (exit $rc, workdir=$wdir)"; return 1; }
 
-  result=$(jq -r '.result // empty' <<<"$out")
+  result=$(jq -r '.text // empty' <<<"$out")
 
   # Only an answered contract is kept for reuse: a failed or unparseable call must be asked again, not replayed.
-  if [ -n "$rfile" ] && grep -q '^RESULT: ' <<<"$result" && [ "$(jq -r '.is_error // false' <<<"$out")" = false ]; then
+  if [ -n "$rfile" ] && grep -q '^RESULT: ' <<<"$result" && [ "$(jq -r '.error // false' <<<"$out")" = false ]; then
     mkdir -p "$QUARTERDECK_HOME/state/reuse" \
       && jq -c --arg at "$(date -u +%FT%TZ)" --arg run "${QUARTERDECK_RUN_ID:-run}" '. + {reused_from: {at: $at, run: $run}}' <<<"$out" > "$rfile.t" \
       && mv "$rfile.t" "$rfile"
@@ -751,8 +794,8 @@ claude_run() { # claude_run <workdir> <prompt> [tools, comma separated] [deny-to
   fi
 
   # Subscription exhausted is retriable and must not be recorded as a verdict,
-  # or the work silently never happens after the limit resets.
-  if grep -qiE 'session limit|usage limit|hit your (session|usage)' <<<"$result"; then
+  # or the work silently never happens after the limit resets. Each adapter knows its own provider's words for it.
+  if [ "$(jq -r '.stop // empty' <<<"$out")" = limit ]; then
     log "usage limit reached — nothing written, retry after reset"
     # Leave a mark anything queued can see. A queue of fixes that ignored this
     # would start the next one, hit the same limit, and fail every item behind
@@ -764,27 +807,185 @@ claude_run() { # claude_run <workdir> <prompt> [tools, comma separated] [deny-to
   printf '%s' "$result"
 }
 
+# ---- providers --------------------------------------------------------------
+# The adapters behind claude_run (docs/design-providers.md). An adapter is a function provider_call_<name>: it reads the prompt on stdin,
+# takes the QD_CALL_* inputs claude_run set (workdir, tool names, allow and deny rules, model, effort, budget, timeout, settings sources,
+# sandbox settings JSON, turn cap, the stable-prompt flag, where to keep the raw reply), starts its program under guard with a minimal
+# environment of its own, keeps the provider's raw reply in QD_CALL_ENVELOPE and prints one JSON object, the reply envelope:
+#   {"provider", "text", "cost_usd", "cost_known", "input_tokens", "input_new", "cache_write", "cache_read", "output_tokens", "turns", "model",
+#    "error": bool, "stop": null|"cap"|"turns"|"limit"|"error"}
+# and, only for a reply it could not read at all, "unparsed": true. Its exit status is the program's. Nothing about safety is an
+# adapter's to decide: the tool checks, path rules, deny list, secret screen and sandbox rules come from claude_run, the same for every one.
+# claude is here; the others live in providers/<name>.sh and are loaded only when a call names them.
+QD_PROVIDERS="claude fake"
+
+provider_pick() { # provider_pick <duty>: sets QD_PROVIDER and QD_PROVIDER_FROM; refuses (1) a name this version has no adapter for
+  # Most specific wins, the same order as the model: QUARTERDECK_PROVIDER_OVERRIDE (a fix or a decision panel), QUARTERDECK_PROVIDER_PERSONA
+  # (a crew seat's provider: line), the registry ("providers": {"<duty>": "<name>"} on the project), QUARTERDECK_PROVIDER_<DUTY>,
+  # QUARTERDECK_PROVIDER, then claude. "default" at any level means claude.
+  local key pvar reg=""
+  key=$(tr '[:lower:]-' '[:upper:]_' <<<"$1"); pvar="QUARTERDECK_PROVIDER_$key"
+  if [ -n "${QUARTERDECK_PROJECT:-}" ] && [ -r "$PROJECTS_FILE" ]; then
+    reg=$(jq -r --arg p "$QUARTERDECK_PROJECT" --arg d "$1" '.[$p].providers[$d] // empty | strings' "$PROJECTS_FILE" 2>/dev/null)
+  fi
+  if [ -n "${QUARTERDECK_PROVIDER_OVERRIDE:-}" ]; then QD_PROVIDER=$QUARTERDECK_PROVIDER_OVERRIDE; QD_PROVIDER_FROM=QUARTERDECK_PROVIDER_OVERRIDE
+  elif [ -n "${QUARTERDECK_PROVIDER_PERSONA:-}" ]; then QD_PROVIDER=$QUARTERDECK_PROVIDER_PERSONA; QD_PROVIDER_FROM="the crew seat's provider: line (QUARTERDECK_PROVIDER_PERSONA)"
+  elif [ -n "$reg" ]; then QD_PROVIDER=$reg; QD_PROVIDER_FROM="\"providers\" for $1 on project $QUARTERDECK_PROJECT in $PROJECTS_FILE"
+  elif [ -n "${!pvar:-}" ]; then QD_PROVIDER=${!pvar}; QD_PROVIDER_FROM=$pvar
+  elif [ -n "${QUARTERDECK_PROVIDER:-}" ]; then QD_PROVIDER=$QUARTERDECK_PROVIDER; QD_PROVIDER_FROM=QUARTERDECK_PROVIDER
+  else QD_PROVIDER=claude; QD_PROVIDER_FROM="the default"; fi
+  [ "$QD_PROVIDER" = default ] && QD_PROVIDER=claude
+  if ! provider_known "$QD_PROVIDER"; then
+    log "claude_run: refusing: unknown provider '$QD_PROVIDER' (set by $QD_PROVIDER_FROM); this version has: ${QD_PROVIDERS// /, }"
+    say "quarterdeck: unknown provider '$QD_PROVIDER' (set by $QD_PROVIDER_FROM); this version has: ${QD_PROVIDERS// /, }"
+    return 1
+  fi
+  [ "$QD_PROVIDER" = claude ] && return 0
+  # shellcheck disable=SC1090
+  [ -r "$QUARTERDECK_DIR/providers/$QD_PROVIDER.sh" ] && . "$QUARTERDECK_DIR/providers/$QD_PROVIDER.sh" && declare -F "provider_call_$QD_PROVIDER" >/dev/null \
+    || { log "claude_run: refusing: the $QD_PROVIDER adapter (providers/$QD_PROVIDER.sh) is missing"; say "quarterdeck: the $QD_PROVIDER adapter (providers/$QD_PROVIDER.sh) is missing"; return 1; }
+}
+provider_known() { # provider_known <name>: a plain word naming an adapter this version has
+  case "$1" in ""|*[!a-z0-9-]*) return 1 ;; esac
+  case " $QD_PROVIDERS " in *" $1 "*) return 0 ;; esac
+  return 1
+}
+
+provider_available() { # provider_available <name>: prints a few words on whether it can run on this machine; 0 when it can
+  case "$1" in
+    claude) if [ -n "$CLAUDE_BIN" ] && [ -x "$CLAUDE_BIN" ]; then printf 'available (%s)' "$CLAUDE_BIN"; else printf 'not available: the claude program is not on PATH'; return 1; fi ;;
+    *) [ -r "$QUARTERDECK_DIR/providers/$1.sh" ] || { printf 'not available: providers/%s.sh is missing' "$1"; return 1; }
+       ( . "$QUARTERDECK_DIR/providers/$1.sh" && "provider_status_$1" ) ;;
+  esac
+}
+
+provider_report() { # what qtdeck doctor shows: every provider this version has, and every place one is set; 1 when a setting names one that cannot run
+  local p d c v k bad=0 used=" claude " where line
+  local -a set=()
+  # where providers are set: crew seats, the registry, the environment
+  for c in $(crew_names); do v=$(crew_meta "$c" provider); [ -n "$v" ] && set+=("crew/$c.md|$v"); done
+  while IFS=$'\t' read -r k v; do [ -n "$k" ] && set+=("$k (projects.json)|$v"); done \
+    < <(jq -r 'to_entries[] | .key as $p | (.value.providers // {}) | objects | to_entries[] | "\($p)/\(.key)\t\(.value)"' "$PROJECTS_FILE" 2>/dev/null)
+  while IFS= read -r k; do case "$k" in QUARTERDECK_PROVIDER|QUARTERDECK_PROVIDER_*) [ -n "${!k}" ] && set+=("$k|${!k}") ;; esac; done < <(compgen -v QUARTERDECK_PROVIDER | sort -u)
+  for line in ${set[@]+"${set[@]}"}; do v=${line##*|}; [ -n "$v" ] && [ "$v" != default ] && used="$used$v "; done
+  for p in $QD_PROVIDERS; do
+    d=$(provider_available "$p"); c=$?
+    case "$used" in *" $p "*) where="in use" ;; *) where="not used by any seat or duty" ;; esac
+    if [ "$c" = 0 ]; then printf '  \033[32m✓\033[0m %-22s %s; %s\n' "provider: $p" "$d" "$where"
+    elif [ "$where" = "in use" ]; then printf '  \033[31m✗\033[0m %-22s %s; in use\n' "provider: $p" "$d"; bad=1
+    else printf '  - %-22s %s; %s\n' "provider: $p" "$d" "$where"; fi
+  done
+  local seen=""
+  for line in ${set[@]+"${set[@]}"}; do
+    k=${line%|*}; v=${line##*|}; [ "$v" = default ] && v=claude
+    case "$seen" in *"|$k|"*) continue ;; esac; seen="$seen|$k|"
+    if ! provider_known "$v"; then printf '  \033[31m✗\033[0m %-22s %s names provider %s, which this version does not have (%s)\n' "provider setting" "$k" "'$v'" "${QD_PROVIDERS// /, }"; bad=1
+    elif ! provider_available "$v" >/dev/null; then printf '  \033[31m✗\033[0m %-22s %s names provider %s, which cannot run here\n' "provider setting" "$k" "$v"; bad=1
+    else printf '  \033[32m✓\033[0m %-22s %s: %s\n' "provider setting" "$k" "$v"; fi
+  done
+  return "$bad"
+}
+
+# The claude adapter: the Claude Code CLI, started exactly as claude_run always started it (bin/selftest-providers.sh holds a record of
+# every argument and the environment from before this seam existed, and fails on any difference).
+provider_call_claude() {
+  [ -n "$CLAUDE_BIN" ] || { log "claude binary not found"; return 1; }
+  # Who pays (QD_CALL_BILLING, decided by claude_run): an api call reads the key here, into a variable that is never exported, just before
+  # the call, and _qd_call_env puts it in the call's environment only. Nothing else in the harness handles the value.
+  local bmode=${QD_CALL_BILLING:-plan} _QD_API_KEY="" efile
+  [ "$bmode" = api ] || bmode=plan
+  if [ "$bmode" = api ]; then
+    _QD_API_KEY=$(python3 "$QUARTERDECK_DIR/bin/billing.py" key 2>/dev/null) && [ -n "$_QD_API_KEY" ] \
+      || { _QD_API_KEY=""; log "claude_run: the API key could not be read just before the call; not started (nothing was billed to your plan)"; return 1; }
+  fi
+  # Nothing about the call is put in the process arguments where any local user's `ps` shows it: the prompt (issue text, diffs, which
+  # can quote private code) goes in on stdin, and the sandbox settings are a file only this user can read, removed when the call ends.
+  local sfile="" out rc=0 model=$QD_CALL_MODEL effort=$QD_CALL_EFFORT turns=$QD_CALL_TURNS stable=$QD_CALL_STABLE
+  if [ -n "$QD_CALL_SANDBOX" ]; then
+    sfile=$(mktemp "${TMPDIR:-/tmp}/quarterdeck-settings.XXXXXX") && chmod 600 "$sfile" && printf '%s' "$QD_CALL_SANDBOX" > "$sfile" \
+      || { log "claude_run: could not write the sandbox settings file"; rm -f "$sfile"; return 1; }
+  fi
+  # claude's own error text goes to a private file first: for an api call it is read back with the key taken out before it reaches the log
+  efile=$(mktemp) || { _QD_API_KEY=""; [ -z "$sfile" ] || rm -f "$sfile"; return 1; }
+  out=$(cd "$QD_CALL_WORKDIR" && _qd_call_env "$bmode" && guard "$QD_CALL_TIMEOUT" "$CLAUDE_BIN" -p \
+        --permission-mode dontAsk \
+        --tools "$QD_CALL_TOOLS" \
+        --allowedTools "$QD_CALL_ALLOW" \
+        --disallowedTools "$QD_CALL_DENY" \
+        --setting-sources "$QD_CALL_SOURCES" \
+        --strict-mcp-config \
+        ${model:+--model "$model"} \
+        ${effort:+--effort "$effort"} \
+        ${QD_CALL_BUDGET:+--max-budget-usd "$QD_CALL_BUDGET"} \
+        ${turns:+--max-turns "$turns"} \
+        ${stable:+"$stable"} \
+        ${sfile:+--settings "$sfile"} \
+        --output-format json 2>"$efile") || rc=$?
+  [ -z "$sfile" ] || rm -f "$sfile"
+  if [ -n "$_QD_API_KEY" ]; then
+    # Belt and braces: a CLI that quotes its key back (an error message) must not write it to the log or the run envelope.
+    local _e; out=${out//"$_QD_API_KEY"/[API key removed]}
+    _e=$(cat "$efile"); printf '%s' "${_e//"$_QD_API_KEY"/[API key removed]}" > "$efile"
+  fi
+  _QD_API_KEY=""
+  cat "$efile" >> "${LOG_FILE:-$QUARTERDECK_HOME/logs/quarterdeck.log}" 2>/dev/null; rm -f "$efile"
+  [ -n "$out" ] || return "$rc"
+  # Keep the raw envelope; when a contract fails to parse this is the only way
+  # to see what the model actually said.
+  printf '%s' "$out" > "$QD_CALL_ENVELOPE"
+  _qd_claude_neutral "$out"
+  return "$rc"
+}
+_qd_claude_neutral() { # _qd_claude_neutral <claude-json-envelope>: the reply envelope (see provider_call_claude)
+  local result stop=""
+  if ! jq -e 'type == "object"' >/dev/null 2>&1 <<<"$1"; then
+    result=$(jq -r '.result // empty' <<<"$1")    # what claude_run always did with such output: an error on stderr, and no text
+    jq -nc --arg t "$result" '{provider: "claude", text: $t, unparsed: true}'; return 0
+  fi
+  case "$(jq -r '.subtype // empty' <<<"$1")" in error_max_budget_usd) stop=cap ;; error_max_turns) stop=turns ;; esac
+  if [ -z "$stop" ]; then
+    result=$(jq -r '.result // empty' <<<"$1")
+    grep -qiE 'session limit|usage limit|hit your (session|usage)' <<<"$result" && stop=limit
+  fi
+  jq -c --arg stop "$stop" '{provider: "claude",
+       text: (.result // "" | if type == "string" then . else tostring end),
+       cost_usd: (.total_cost_usd // 0), cost_known: has("total_cost_usd"),
+       input_tokens: ((.usage.cache_read_input_tokens // 0) + (.usage.cache_creation_input_tokens // 0) + (.usage.input_tokens // 0)),
+       input_new: (.usage.input_tokens // 0), cache_write: (.usage.cache_creation_input_tokens // 0),
+       cache_read: (.usage.cache_read_input_tokens // 0),
+       output_tokens: (.usage.output_tokens // 0),
+       turns: (.num_turns // 0),
+       model: ((.modelUsage // {}) | to_entries | max_by(.value.costUSD // 0) | .key // "unknown"),
+       error: (.is_error == true),
+       stop: (if $stop != "" then $stop elif .is_error == true then "error" else null end)}
+     + (if .reused == true then {reused: true} else {} end)' <<<"$1"
+}
+
 # ---- spend ------------------------------------------------------------------
 # One line per model call in state/spend.jsonl: who, for what, on which model,
 # and what the CLI says it cost. The figure is the CLI's API-equivalent price;
 # on a subscription it is a measure of how much of the usage limit a call ate,
 # which is the thing worth controlling either way. Appends are single short
 # lines, so parallel panel seats writing at once do not interleave.
-record_spend() { # record_spend <envelope-json> <duty> <effort> [reuse-key]   (read is split: in = new input, cache_write, cache_read = the cheap part)
-  jq -c --arg at "$(date -u +%FT%TZ)" --arg p "${QUARTERDECK_PROJECT:-}" --arg d "$2" \
+record_spend() { # record_spend <claude-json-envelope> <duty> <effort> [reuse-key] [plan|api]: for a caller that holds Claude's own envelope
+  record_spend_neutral "$(_qd_claude_neutral "$1" 2>/dev/null)" "$2" "${3:-}" "${4:-}" "${5:-plan}"
+}
+record_spend_neutral() { # record_spend_neutral <reply-envelope-json> <duty> <effort> [reuse-key] [plan|api|none]   (read is split: in = new input, cache_write, cache_read = the cheap part)
+  jq -ec --arg at "$(date -u +%FT%TZ)" --arg p "${QUARTERDECK_PROJECT:-}" --arg d "$2" \
         --arg run "${QUARTERDECK_RUN_ID:-}" --arg fix "${QUARTERDECK_FIX_KEY:-}" --arg e "${3:-}" \
-        --arg seat "${QUARTERDECK_SEAT:-}" --arg key "${4:-}" \
-     '{at: $at, project: $p, duty: $d, run: $run, fix: $fix, effort: $e,
-       model: ((.modelUsage // {}) | to_entries | max_by(.value.costUSD // 0) | .key // "unknown"),
-       cost: (.total_cost_usd // 0), turns: (.num_turns // 0),
-       read: ((.usage.cache_read_input_tokens // 0) + (.usage.cache_creation_input_tokens // 0)
-              + (.usage.input_tokens // 0)),
-       out: (.usage.output_tokens // 0),
-       in: (.usage.input_tokens // 0), cache_write: (.usage.cache_creation_input_tokens // 0),
-       cache_read: (.usage.cache_read_input_tokens // 0),
-       stopped: (if .subtype == "error_max_budget_usd" then "cap"
-                 elif .subtype == "error_max_turns" then "turns"
-                 elif .is_error == true then "error" else null end)}
+        --arg seat "${QUARTERDECK_SEAT:-}" --arg key "${4:-}" --arg b "${5:-plan}" \
+     'if .unparsed then error("unparsed") else . end
+      | {at: $at, project: $p, duty: $d, run: $run, fix: $fix, effort: $e, billing: $b,
+       model: (.model // "unknown"),
+       cost: (.cost_usd // 0), turns: (.turns // 0),
+       read: (.input_tokens // 0),
+       out: (.output_tokens // 0),
+       in: (.input_new // 0), cache_write: (.cache_write // 0),
+       cache_read: (.cache_read // 0),
+       stopped: (if .stop == "cap" then "cap"
+                 elif .stop == "turns" then "turns"
+                 elif .error == true then "error" else null end),
+       provider: (.provider // "unknown"), cost_known: (.cost_known != false)}
      + (if $seat != "" then {seat: $seat} else {} end)
      + (if $key != "" then {key: $key} else {} end)
      + (if .reused == true then {reused: true} else {} end)' <<<"$1" \
@@ -804,6 +1005,11 @@ record_run() { # record_run <project> <duty> <verdict> [detail] [url]
     *[[:space:]]*) rest="${verdict#* }"; verdict="${verdict%%[[:space:]]*}" ;;
   esac
   [ -n "$rest" ] && detail="$rest${detail:+ — $detail}"
+  # A model call this run could not start for billing (no API key, a spend cap) already wrote its NEEDS_HUMAN row and why: the duty's own
+  # "run failed" that follows is the same event, not a second one.
+  if [ "$verdict" = ERROR ] && [ -n "${QUARTERDECK_RUN_ID:-}" ] && [ -e "$TMPDIR/qd-billing-stop.$QUARTERDECK_RUN_ID" ]; then
+    log "record_run: $duty ERROR not recorded: this run already stopped with NEEDS_HUMAN for billing"; return 0
+  fi
   # A run whose model answers were reused (claude_run, QUARTERDECK_REUSE) says so on its row.
   local rf="$QUARTERDECK_HOME/state/tmp/reused.$$"
   if [ -f "$rf" ]; then detail="${detail:+$detail — }reused $(grep -c . "$rf") earlier answer(s), no model call (--fresh asks again)"; rm -f "$rf"; fi
@@ -1238,6 +1444,11 @@ px_prepare() {
       || { rm -rf "$PX_RUN"; cp -R "$wt" "$PX_RUN" 2>/dev/null; } || { rm -rf "$PX_SCRATCH"; PX_SCRATCH=""; return 127; }
     _qd_nm_spread "$(_qd_nm_borrowed "$wt")" "$PX_RUN"
   fi
+  # PX_ADD_SRC (set by the caller for one call, ticket #101): a folder of the owner's copied into the scratch folder as "add", links followed, so a
+  # check can read it where the sandbox lets it read (a prefetched Terraform provider folder). The owner's own folder is never handed to the check.
+  if [ -n "${PX_ADD_SRC:-}" ]; then
+    cp -RL "$PX_ADD_SRC" "$PX_SCRATCH/add" 2>/dev/null || { rm -rf "$PX_SCRATCH"; PX_SCRATCH=""; return 127; }
+  fi
   home="$PX_SCRATCH/home"; [ "$mode" = install ] && home="$HOME"
   PX_ENV=("PATH=$PATH" "HOME=$home" "TMPDIR=$PX_SCRATCH/tmp" "LANG=${LANG:-C}" "TERM=dumb")
   if [ "${QUARTERDECK_CHECK_SANDBOX:-on}" = on ] && [ "$(uname -s)" = Darwin ]; then
@@ -1446,6 +1657,53 @@ run_checks() { # run_checks <project> <workdir> -> one JSON object per check
   done
 }
 
+# tf_checks <worktree> <plugin-dir or ""> <folder>... -> one JSON object per check, the shape run_checks writes (ticket #101). For each Terraform
+# folder a plan's Where field names: `terraform fmt -check`, and `terraform validate` after an offline init (no backend, no module fetch, providers
+# only from a copy of the owner's prefetched plugin folder). Both run through project_exec in check mode: a minimal environment with no cloud
+# credential, a scratch HOME (no ~/.terraformrc, no credentials file), no network, a throwaway clone. Without a plugin folder validate is reported
+# "not run", never passed. plan, apply, destroy, import, state, refresh and an init that reaches the network or a backend are never run here.
+tf_checks() {
+  local wt=$1 plugins=$2 f out rc name cmd pre='CHECKPOINT_DISABLE=1 TF_IN_AUTOMATION=1 TF_INPUT=0'
+  # QUARTERDECK_TERRAFORM, not PATH, names a stand-in (as QUARTERDECK_GH does for gh): lib.sh puts the system folders first, so a test's fake
+  # on PATH would lose to a real terraform installed there. A plain path only: it is written into the command line the check runs.
+  local tf=${QUARTERDECK_TERRAFORM:-terraform}
+  [[ "$tf" =~ ^[A-Za-z0-9._@+/-]+$ ]] || tf=terraform
+  shift 2
+  for f in "$@"; do
+    case "$f" in */|*/*/) ;; *) continue ;; esac
+    [[ "$f" =~ ^[A-Za-z0-9._@+/-]+$ ]] && [[ "$f" != /* ]] && [[ "/$f" != */../* ]] || continue
+    name="terraform fmt $f"; cmd="$pre $tf -chdir='$f' fmt -check -recursive -no-color"
+    if ! command -v "$tf" >/dev/null 2>&1; then
+      _tf_not_run "$name" "$cmd" "terraform is not installed"
+    else
+      say "    $name"
+      project_exec check "${QUARTERDECK_CHECK_TIMEOUT:-900}" "$wt" "$cmd"; rc=$?; out=$EXEC_OUT
+      if [ "$rc" = 126 ]; then _tf_not_run "$name" "$cmd" "${out#not run: }"; else _tf_result "$name" "$cmd" "$rc" "$out"; fi
+    fi
+    name="terraform validate $f"
+    cmd="$pre $tf -chdir='$f' init -backend=false -get=false -input=false -no-color -plugin-dir=\"\$TMPDIR/../add\" >/dev/null && $pre $tf -chdir='$f' validate -no-color"
+    if [ -z "$plugins" ] || [ ! -d "$plugins" ] || [[ "$plugins" != /* ]]; then
+      _tf_not_run "$name" "terraform validate" "no provider plugins available offline"
+    elif ! command -v "$tf" >/dev/null 2>&1; then
+      _tf_not_run "$name" "terraform validate" "terraform is not installed"
+    else
+      say "    $name"
+      PX_ADD_SRC=$plugins project_exec check "${QUARTERDECK_CHECK_TIMEOUT:-900}" "$wt" "$cmd"; rc=$?; out=$EXEC_OUT
+      if [ "$rc" = 126 ]; then _tf_not_run "$name" "$cmd" "${out#not run: }"; else _tf_result "$name" "$cmd" "$rc" "$out"; fi
+    fi
+  done
+}
+_tf_result() { # _tf_result <name> <cmd> <rc> <output>
+  local errs; errs=$(grep -ciE '(^|[^[:alnum:]])error' <<<"$4" || true)
+  say "      exit $3, $errs error line(s) [sandbox: $RUN_SANDBOX]"
+  jq -nc --arg n "$1" --arg c "$2" --argjson rc "$3" --argjson e "${errs:-0}" --arg t "$(tail -25 <<<"$4")" --arg sb "$RUN_SANDBOX" \
+    '{name:$n, cmd:$c, rc:$rc, errors:$e, tail:$t, sandbox:$sb}'
+}
+_tf_not_run() { # _tf_not_run <name> <cmd> <why>: exit 126 and the words "not run", so it is never read as a pass
+  say "      not run: $3"
+  jq -nc --arg n "$1" --arg c "$2" --arg w "not run: $3" '{name:$n, cmd:$c, rc:126, errors:0, tail:$w, not_run:$w, sandbox:"none"}'
+}
+
 # What got worse. A check that passed before and fails now is a regression
 # whatever the error count says, and a check that already failed must at least
 # not fail harder. Exit code first: a command that crashed outright reports no
@@ -1466,10 +1724,10 @@ check_regressions() { # check_regressions <before-json-lines> <after-json-lines>
 # One line per check, for a pull request body that states what was actually run.
 checks_summary() { # checks_summary <after-json-lines>
   jq -rs 'if length == 0 then "No local checks are configured for this project."
-          else map("- `\(.cmd)` — exit `\(.rc)`" + (if .errors > 0 then ", \(.errors) error line(s)" else "" end)
-                   + (if .sandbox_denied then " (the sandbox refused a read or write it needed, so this exit says nothing about the code)" else "" end))
+          else map(if .not_run then "- `\(.name)`: \(.not_run)" else "- `\(.cmd)` — exit `\(.rc)`" + (if .errors > 0 then ", \(.errors) error line(s)" else "" end)
+                   + (if .sandbox_denied then " (the sandbox refused a read or write it needed, so this exit says nothing about the code)" else "" end) end)
                | join("\n") end
-          + (if any(.[]?; .sandbox == "none") then "\n\nThese checks ran without an operating-system sandbox (none is available on that machine); they ran with a minimal environment and no secrets." else "" end)' <<<"$1"
+          + (if any(.[]?; .sandbox == "none" and (.not_run | not)) then "\n\nThese checks ran without an operating-system sandbox (none is available on that machine); they ran with a minimal environment and no secrets." else "" end)' <<<"$1"
 }
 
 # ---- labelling a ruling -------------------------------------------------------

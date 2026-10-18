@@ -3057,6 +3057,67 @@ rc = run(sys.argv[1:]); json.dump(items, open(db, "w")); sys.exit(rc)
     finally:
         _cm.CONFIG_DIR, _cm.HOME, _cm.STATE = _oc
 
+# ---- billing (ticket #38): the API key is written once and only its presence ever comes back ----
+import billing as _bl, outscan as _osc, claudeproc as _cp
+from integrations import keychain as _kc
+with _tf.TemporaryDirectory() as _bd:
+    _bd = Path(_bd)
+    _ob = (_cm.CONFIG_DIR, _cm.HOME, _cm.STATE, d.LOGS)
+    _cm.CONFIG_DIR, _cm.HOME, _cm.STATE = _bd / "sec", _bd / "home", _bd / "home" / "state"
+    (_bd / "home" / "config").mkdir(parents=True); (_bd / "home" / "state").mkdir(); d.LOGS = _bd / "home" / "logs"
+    _osec = _os.environ.get("QUARTERDECK_SECRETS_DIR"); _os.environ["QUARTERDECK_SECRETS_DIR"] = str(_bd / "sec")
+    _bk = "sk-ant-api03-" + "Tq4" + "m" * 40 + "7Lw"
+    try:
+        _sv0 = d.settings_view()
+        check("billing: the Settings view says no key is stored and every duty is on the plan by default",
+              _sv0["billing"]["key_present"] is False and all(x["billing"] == "plan" for x in _sv0["billing"]["duties"]) and len(_sv0["billing"]["duties"]) > 5)
+        _r0 = d.settings_api({"action": "api_key", "value": _bk})
+        _r1 = d.settings_api({"action": "api_key", "value": _bk, "confirm": True})
+        _r2 = d.settings_api({"action": "api_key", "value": "not a key; " + _bk[:30], "confirm": True})
+        check("billing: storing the key needs the owner's confirm, and the answer is a presence flag and nothing else",
+              _r0[0] == 400 and _r1 == (200, {"present": True}) and _r2[0] == 400 and _bk[:30] not in _json.dumps(_r2), (_r0, _r1, _r2))
+        check("billing: the key went into the owner-only credential file under its fixed name",
+              (_bd / "sec" / "integrations.env").read_text().strip() == f"anthropic_api_key={_bk}" and oct((_bd / "sec" / "integrations.env").stat().st_mode & 0o777) == "0o600")
+        _r3 = d.settings_api({"action": "billing", "duty": "shipwright", "mode": "api", "confirm": True})
+        _r4 = d.settings_api({"action": "billing", "duty": "../../x", "mode": "api", "confirm": True})
+        _r5 = d.settings_api({"action": "cap", "scope": "daily", "usd": 12.5, "confirm": True})
+        _r6 = d.settings_api({"action": "cap", "scope": "duty", "duty": "shipwright", "usd": 4, "confirm": True})
+        _sv1 = d.settings_view()
+        check("billing: a duty is switched to the API key and caps are set from the Settings API; a duty that does not exist is refused",
+              _r3[0] == 200 and _r4[0] == 400 and _r5[0] == 200 and _r6[0] == 200 and _bl.mode("shipwright") == "api" and _bl.mode("surveyor") == "plan"
+              and _sv1["billing"]["caps"] == {"daily_usd": 12.5, "duty_usd": {"shipwright": 4.0}} and _sv1["billing"]["key_present"] is True, (_r3, _r4, _r5, _r6))
+        _seen = _json.dumps([_sv0, _sv1, _r0, _r1, _r2, _r3, _r4, _r5, _r6, d.spend_summary(), _bl.summary(), _bl.doctor_lines()])
+        _logs = "".join(p.read_text(errors="replace") for p in (_bd / "home").rglob("*") if p.is_file() and p.name != "integrations.env")
+        check("billing: the key is in no Settings, spend or doctor answer, no log and no file of the data folder", _bk not in _seen and _bk not in _logs)
+        check("billing: the outgoing-text scan knows the key (file store)", _bk in _osc.known_values() and _osc.known_value_hit("posting " + _bk[::-1]))
+        check("billing: a long-lived Helm process (always billed to the plan) gets no ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN from the dashboard's environment",
+              _cp.clean_env({"PATH": "/bin", "ANTHROPIC_API_KEY": _bk, "ANTHROPIC_AUTH_TOKEN": "t" * 20, "ANTHROPIC_MODEL": "m"}) == {"PATH": "/bin", "ANTHROPIC_MODEL": "m", "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB": "1"})
+        # the keychain store: the same key name, carried by a store move both ways, and known to the scan there too
+        _kcdb = {}
+        _kold = (_kc.available, _kc.has, _kc.get, _kc.put, _kc.delete, _kc.fits)
+        _kc.available, _kc.has, _kc.get = (lambda: True), (lambda k: k in _kcdb), (lambda k: _kcdb.get(k))
+        _kc.put, _kc.delete, _kc.fits = (lambda k, v: _kcdb.__setitem__(k, v)), (lambda k: _kcdb.pop(k, None)), (lambda k, v: True)
+        try:
+            _mv = d.connections_api({"action": "store", "to": "keychain", "confirm": True})
+            check("billing: moving credentials to the keychain carries the API key too, and the file no longer holds it",
+                  _mv[0] == 200 and _kcdb.get("anthropic_api_key") == _bk and _bk not in (_bd / "sec" / "integrations.env").read_text() and _bl.key_present() and _bk not in _json.dumps(_mv), _mv)
+            check("billing: with the keychain as the store the outgoing-text scan still knows the key", _bk in _osc.known_values())
+            d.connections_api({"action": "store", "to": "file", "confirm": True})
+            check("billing: and moving back puts it in the file again", "anthropic_api_key" not in _kcdb and _bl.get_key() == _bk)
+        finally:
+            _kc.available, _kc.has, _kc.get, _kc.put, _kc.delete, _kc.fits = _kold
+        _r7 = d.settings_api({"action": "api_key", "value": "", "confirm": True})
+        check("billing: an empty value removes the key", _r7 == (200, {"present": False}) and not _bl.key_present())
+        _ix = (ROOT / "dashboard" / "index.html").read_text()
+        check("billing: the Settings page field for the key is a password field that is cleared after saving and never filled from the server",
+              'id: "set-apikey"' in _ix and 'password: true' in _ix.split('id: "set-apikey"')[1][:200] and "key_present" in _ix and "api_key_value" not in _ix)
+    finally:
+        _cm.CONFIG_DIR, _cm.HOME, _cm.STATE, d.LOGS = _ob
+        if _osec is None:
+            _os.environ.pop("QUARTERDECK_SECRETS_DIR", None)
+        else:
+            _os.environ["QUARTERDECK_SECRETS_DIR"] = _osec
+
 # ---- newproject: start something new, writing only inside the new folder ----
 import newproject as _np
 with _tf.TemporaryDirectory() as _nd:
@@ -3932,7 +3993,7 @@ _oldname = _re0.compile("dry" "dock", _re0.I)        # spelt apart, so this file
 _rn_allow = ()
 _rn_ls = _sp.run(["git", "-C", str(ROOT), "ls-files", "-z"], capture_output=True)
 _rn_files = [f for f in _rn_ls.stdout.decode().split("\0") if f] if _rn_ls.returncode == 0 and _rn_ls.stdout else \
-    [str(p.relative_to(ROOT)) for p in ROOT.rglob("*") if p.is_file() and ".git" not in p.relative_to(ROOT).parts]
+    [str(p.relative_to(ROOT)) for p in ROOT.rglob("*") if p.is_file() and not {".git", "__pycache__"} & set(p.relative_to(ROOT).parts)]
 if (ROOT / "bin" / "publish.py").exists():
     import publish as _pb2
     _rn_files = [f for f in _rn_files if not _pb2.excluded(f) and not (f == "README.md" and (ROOT / "docs" / "public" / "README.md").exists())]
@@ -3968,6 +4029,26 @@ check("project agents: the folder's regular .md files are listed with name, desc
 check("project agents: a symlinked file, a symlinked agents folder, a symlinked .claude folder and a fifo are all ignored",
       "link.md" not in _byn and "pipe.md" not in _byn and _pa.agents_of(_plink) == [] and _pa.agents_of(_plink2) == [])
 check("project agents: at most 50 files are read", len(_pa.agents_of(_pt / "many")) == 50)
+# links: a link to a regular .md file inside the same project is read (the common layout: .claude/agents/x.md -> ../../agents/x.md); every other link is ignored
+_pl = _pt / "linkproj"; _pla = _pl / ".claude" / "agents"; _pla.mkdir(parents=True); (_pl / "agents").mkdir(); (_pl / ".git").mkdir()
+(_pl / "agents" / "inner.md").write_text("---\nname: inner-agent\ndescription: Reviews things\n---\nSECRET-BODY-TEXT\n")
+(_pl / ".git" / "secret.md").write_text("---\nname: from-git\n---\n")
+(_pt / "elsewhere.md").write_text("---\nname: outside-agent\n---\n")
+_ospa.symlink("../../agents/inner.md", _pla / "inner.md")                 # inside the project: read
+_ospa.symlink("../../.git/secret.md", _pla / "gitlink.md")                # under .git: ignored
+_ospa.symlink("../../../elsewhere.md", _pla / "out.md")                   # outside the project: ignored
+_ospa.symlink("inner.md", _pla / "chain-in.md")                           # a link to an inside link to an inside file: read
+_ospa.symlink("out.md", _pla / "chain-out.md")                            # a link to a link that leaves the project: ignored
+_ospa.symlink("../../agents/missing.md", _pla / "dangling.md")            # nothing there: ignored
+_ospa.symlink("../../agents", _pla / "dir.md")                            # a folder, not a file: ignored
+_ospa.symlink("../../../elsewhere", _pl / "sub")                          # a folder link that leaves the project ...
+_ospa.symlink("../../sub/x.md", _pla / "via-sub.md")                      # ... and a file reached through it: ignored
+_ospa.symlink("../../agents/inner.md", _pla / "not-md.txt")               # not an .md name: not listed
+_lk = {a["file"]: a for a in _pa.agents_of(_pl)}
+check("project agents: a link to a regular .md file inside the same project is read (and a chain of inside links), the body still never returned",
+      set(_lk) == {"inner.md", "chain-in.md"} and _lk["inner.md"]["name"] == "inner-agent" and "SECRET-BODY-TEXT" not in str(_lk), sorted(_lk))
+check("project agents: a link to .git, to outside the project, through a folder link that leaves it, to a folder, a dangling link and a chain that leaves are all ignored",
+      not ({"gitlink.md", "out.md", "chain-out.md", "dangling.md", "dir.md", "via-sub.md", "not-md.txt"} & set(_lk)))
 _ev = _byn["evil.md"]
 check("project agents: hostile front matter is capped and inert (name 60, description 240, tools 12 of 40 chars, model 40; no angle brackets, tags, anchors, aliases or control characters; binary files do not raise)",
       len(_ev["name"]) <= 60 and len(_ev["description"]) <= 240 and len(_ev["tools"]) == 12 and all(len(t) <= 40 for t in _ev["tools"]) and len(_ev["model"]) <= 40
@@ -3987,6 +4068,60 @@ check("project agents UI: the section has the pill, the empty state, the coverag
       all(t in _ixp.lower() for t in ("this project's own agents", "from the project", "this project has no agents of its own.", "quarterdeck's crew covers every job.", "suggested match, not confirmed",
                               "no agent of its own", "quarterdeck cannot run a project's own agents yet")) and "function ownAgents" in _ixp)
 shutil.rmtree(_pt, ignore_errors=True)
+
+# website (docs/site): static, self-contained, no external loads, no em dash, no banned words, every internal link resolves
+import re as _re_site
+_site = ROOT / "docs" / "site"
+_site_pages = sorted(_site.glob("*.html")) if _site.is_dir() else []
+_site_bad = []
+_site_files = _site_pages + sorted(_site.glob("*.css"))
+_dash = chr(0x2014)
+_banned = _re_site.compile("kno" "ol|her" "mes", _re_site.I)        # spelt apart, so this file never says them
+_ext = [
+    _re_site.compile(r"<script\b", _re_site.I),
+    _re_site.compile(r"""<link\b[^>]*\bhref\s*=\s*["']?(?:https?:)?//""", _re_site.I),
+    _re_site.compile(r"""<(?:img|source|iframe|video|audio)\b[^>]*\bsrc\s*=\s*["']?(?:https?:)?//""", _re_site.I),
+    _re_site.compile(r"@import", _re_site.I),
+    _re_site.compile(r"url\(\s*[\"']?\s*(?:https?:)?//", _re_site.I),
+]
+for _sf in _site_files:
+    _st = _sf.read_text()
+    if _dash in _st:
+        _site_bad.append(f"{_sf.name}: em dash")
+    if _banned.search(_st):
+        _site_bad.append(f"{_sf.name}: banned word")
+    for _rx in _ext:
+        if _rx.search(_st):
+            _site_bad.append(f"{_sf.name}: external load {_rx.pattern[:20]}")
+for _sf in _site_pages:
+    _st = _sf.read_text()
+    for _href in _re_site.findall(r"""\b(?:href|src)\s*=\s*["']([^"']+)["']""", _st):
+        if _re_site.match(r"(?:https://github\.com/|mailto:)", _href):
+            continue
+        if _re_site.match(r"[a-z][a-z0-9+.-]*:|//", _href, _re_site.I):
+            if not _href.startswith(("https://jqlang.github.io/", "https://cli.github.com/", "https://claude.com/")):
+                _site_bad.append(f"{_sf.name}: link {_href}")
+            continue
+        _tgt, _, _frag = _href.partition("#")
+        _stf = _sf if not _tgt else (_site / _tgt)
+        if not _stf.is_file():
+            _site_bad.append(f"{_sf.name}: broken link {_href}")
+        elif _frag and f'id="{_frag}"' not in _stf.read_text():
+            _site_bad.append(f"{_sf.name}: missing anchor {_href}")
+check("site: docs/site has the five pages, loads nothing from outside, has no em dash and no banned word, every internal link resolves"
+      + (f": {_site_bad[:6]}" if _site_bad else ""),
+      not _site_bad and {p.name for p in _site_pages} >= {"index.html", "features.html", "security.html", "install.html", "faq.html"})
+
+# round 8 review (docs/review-round-8.md): bin/selftest-round8.sh holds one expected-failure check per open finding. An "xfail" line is a
+# finding still open and an "xpass" one is fixed and should move into its own selftest: both are shown here and neither fails this run.
+if (ROOT / "bin" / "selftest-round8.sh").exists():
+    _r8 = _sp.run(["bash", str(ROOT / "bin" / "selftest-round8.sh")], capture_output=True, text=True, env={k: v for k, v in _os0.environ.items() if k not in ("QUARTERDECK_HOME", "QUARTERDECK_HOME_WHY")})
+    for _l in _r8.stdout.splitlines():
+        if _l.startswith("  xfail") or "(xpass" in _l:
+            print("  " + _l.strip().replace("ok    ", "xpass ", 1))
+    check("round 8: the expected-failure script runs to the end; its open findings are xfail and never fail this run",
+          _r8.returncode == 0 and "expected failure(s) still open" in _r8.stdout, [l for l in _r8.stdout.splitlines() if "FAIL" in l][:3] or _r8.stderr[-300:])
+    check("round 8: the doctor runs it, and shows open findings without failing", "selftest-round8.sh" in (ROOT / "bin" / "qtdeck").read_text() and "expected failure(s) still open" in (ROOT / "bin" / "qtdeck").read_text())
 
 # remove after migration: the migration's own tests (bin/selftest-legacy.py, never published), run when the file is here
 if (ROOT / "bin" / "selftest-legacy.py").exists():
@@ -4035,7 +4170,7 @@ _idx = (ROOT / "dashboard" / "index.html").read_text()
 check("spend: the page shows top sinks, output and cache reads, and the seat table", all(s in _idx for s in ('"Top sinks"', '["Cache reads"]', '"By panel seat"')))
 _lib = (ROOT / "bin" / "lib.sh").read_text()
 check("spend: record_spend books new input, cache writes and reads apart, the seat and a stop at the turn cap",
-      all(s in _lib for s in ("cache_read: (.usage.cache_read_input_tokens", "{seat: $seat}", '"error_max_turns" then "turns"')))
+      all(s in _lib for s in ("cache_read: (.usage.cache_read_input_tokens", "{seat: $seat}", "error_max_turns) stop=turns", '.stop == "turns" then "turns"')))
 
 print()
 if FAILS:

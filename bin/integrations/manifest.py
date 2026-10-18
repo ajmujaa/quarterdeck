@@ -180,7 +180,7 @@ def move_store(to, services=None):
         raise ValueError("credentials are already kept there")
     if to == "keychain" and not keychain.available():
         raise ValueError("the macOS Keychain is not available on this computer")
-    keys = known_keys(services)
+    keys = known_keys(services) | set(common.EXTRA_KEYS)
     try:
         if frm == "keychain":
             src = {k: v for k in sorted(keys) for v in [keychain.get(k)] if v}

@@ -22,6 +22,7 @@ HOME = _home.resolve()                                   # your data (bin/home.p
 STATE = HOME / "state"
 CONFIG_DIR = Path(os.environ.get("QUARTERDECK_SECRETS_DIR") or Path.home() / ".config" / "quarterdeck")
 ENV_NAME = "integrations.env"
+EXTRA_KEYS = ("anthropic_api_key",)                      # kept in the same store though no service asks for it (bin/billing.py); moved with the rest
 TIMEOUT = 15
 MAX_ITEMS = 12
 SLEEP = time.sleep

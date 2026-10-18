@@ -30,6 +30,7 @@ _ENV_KEEP = ("HOME", "PATH", "TMPDIR", "USER", "LOGNAME", "SHELL", "LANG", "TERM
              "no_proxy", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "SSL_CERT_DIR", "CLAUDE_BIN")
 _ENV_PREFIX = ("LC_", "ANTHROPIC_", "CLAUDE_CODE_")
 _ENV_CLOUD = ("AWS_", "GOOGLE_", "CLOUD_ML_REGION", "VERTEX_", "GCLOUD_")
+_ENV_DROP = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")   # Helm is billed to the plan: a key in the dashboard's environment must not silently pay for it (ticket #38)
 
 
 def clean_env(environ=None):
@@ -39,6 +40,8 @@ def clean_env(environ=None):
     cloud = any(environ.get(k) for k in ("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"))
     out = {}
     for k, v in environ.items():
+        if k in _ENV_DROP:
+            continue
         if k in _ENV_KEEP or k.startswith(_ENV_PREFIX) or (cloud and k.startswith(_ENV_CLOUD)):
             out[k] = v
     out["CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"] = "1"

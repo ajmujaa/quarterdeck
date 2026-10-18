@@ -6,7 +6,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 fails=0
-FILES=$(ls bin/*.sh bin/fix bin/cycle bin/qtdeck bin/lib.sh duties/*.sh 2>/dev/null | grep -v '^bin/selftest-portable.sh$')
+FILES=$(ls bin/*.sh bin/fix bin/cycle bin/qtdeck bin/lib.sh duties/*.sh providers/*.sh 2>/dev/null | grep -v '^bin/selftest-portable.sh$')
 hits() { # hits <ERE> [<line must ALSO match ERE, or empty>] -> "file:line: text" for every code line that matches
   local f
   for f in $FILES; do

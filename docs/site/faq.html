@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>FAQ - Quarterdeck</title>
+<meta name="description" content="Short answers about what Quarterdeck is, collects, and tests.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site">
+<div class="wrap">
+<a class="brand" href="index.html">Quarterdeck</a>
+<nav aria-label="Main"><ul><li><a href="index.html">Home</a></li><li><a href="features.html">Features</a></li><li><a href="security.html">Security</a></li><li><a href="install.html">Install</a></li><li><a href="faq.html" aria-current="page">FAQ</a></li></ul></nav>
+</div>
+</header>
+<main id="main">
+<div class="wrap">
+<h1>FAQ</h1>
+<p class="lead">Short answers. The other pages give the detail.</p>
+<details><summary>Is Quarterdeck a hosted service?</summary><p>No. It runs on your own machine. The dashboard listens on loopback only.</p></details>
+<details><summary>What does it collect?</summary><p>Nothing about you. It never collects keystrokes, screen contents, which apps or websites you use, the clipboard, your location, or files outside the projects you register and its own data folder.</p></details>
+<details><summary>Does it send my code anywhere?</summary><p>Only to the model you already use, through the <code>claude</code> command on your machine, for the requests you ask for. It uses your own account and limits.</p></details>
+<details><summary>Can an agent change my repository by itself?</summary><p>No. Agents have no credentials and no write tools. A script does the writing, and only when you pass <code>--apply</code> or click.</p></details>
+<details><summary>Which systems does it run on?</summary><p>macOS is the tested system. Linux is next: the Linux sandbox has run in CI only and is listed as unverified.</p></details>
+<details><summary>Are the cloud packs safe to rely on?</summary><p>They are experimental and were tested on small examples only. Read an infra report as a second opinion, not a verdict.</p></details>
+<details><summary>Has it had a security review?</summary><p>Not by a specialist yet. See the <a href="security.html">Security</a> page for what has been tested and what has not.</p></details>
+<details><summary>Can I try it without connecting anything?</summary><p>Yes. The Demo switch in the dashboard fills it with invented data.</p></details>
+<details><summary>Where is my data kept?</summary><p>In <code>~/.quarterdeck</code> by default, apart from the program. You can update or delete the program without touching it.</p></details>
+<details><summary>How do I report a security problem?</summary><p>Use GitHub's private vulnerability reporting on the repository. Please do not open a public issue.</p></details>
+<details><summary>What licence is it under?</summary><p>The Apache License 2.0.</p></details>
+</div>
+</main>
+<footer class="site">
+<div class="wrap">
+<ul><li><a href="features.html">Features</a></li><li><a href="security.html">Security</a></li><li><a href="install.html">Install</a></li><li><a href="faq.html">FAQ</a></li><li><a href="https://github.com/ajmujaa/quarterdeck">Source on GitHub</a></li></ul>
+<p>Quarterdeck is open source under the Apache License 2.0. This site loads nothing from other websites and sets no cookies.</p>
+</div>
+</footer>
+</body>
+</html>

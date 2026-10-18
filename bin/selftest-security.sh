@@ -57,7 +57,7 @@ ck "a number given to bin/fix and bin/cycle is checked too" 'grep -q "need_num \
 H="$T/privhome"; mkdir -p "$H"
 ( umask 022; mkdir -p "$H/state" "$H/logs/runs" "$H/workspace" "$H/config"; cp "$REAL/bin/lib.sh" "$H/lib-probe.sh" )
 out=$(env -i HOME="$T" PATH="$PATH" QUARTERDECK_DIR="$T" QUARTERDECK_HOME="$H" QUARTERDECK_SECRETS_DIR="$T/nosecrets" bash -c 'umask 022; source "$QUARTERDECK_DIR/bin/lib.sh"; log probe; echo x > "$QUARTERDECK_HOME/logs/runs/r.json"; echo "$(umask)"' 2>&1 | tail -1)
-modeof() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"; }
+modeof() { stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"; }   # GNU first: GNU `stat -f FMT FILE` prints the file system's details for FILE before it fails on FMT
 ck "F8 after lib.sh runs, the data folder and its working folders are 0700 and a file it writes is 0600 (even from umask 022)" '[ "$(modeof "$H")" = 700 ] && [ "$(modeof "$H/state")" = 700 ] && [ "$(modeof "$H/logs/runs")" = 700 ] && [ "$(modeof "$H/workspace")" = 700 ] && [ "$(modeof "$H/logs/runs/r.json")" = 600 ] && [ "$(modeof "$H/logs/quarterdeck.log")" = 600 ] && [ "$out" = 0077 ]'
 
 M="$T/oldprog"; mkdir -p "$M/state" "$M/workspace" "$M/config" "$M/outside"
@@ -165,8 +165,8 @@ mkdir -p "$T/sec"; printf 'export DECOY_FROM_ENVFILE=leak-1\nexport GH_TOKEN=ghp
 printf '#!/bin/bash\nenv | sort > "%s/stub-env"\njq -n %s\n' "$T" "'{result:\"ok\", total_cost_usd:0, num_turns:1, usage:{}, modelUsage:{}}'" > "$T/envstub"; chmod +x "$T/envstub"
 ( unset QUARTERDECK_CLAUDE_ENV; export QUARTERDECK_HOME="$DH" QUARTERDECK_SECRETS_DIR="$T/sec" CLAUDE_BIN="$T/envstub" QD_DECOY_SECRET=leak-2 QUARTERDECK_NOTIFY_CMD='curl evil' ANTHROPIC_API_KEY=keep-me AWS_SECRET_ACCESS_KEY=leak-3
   source "$T/bin/lib.sh"; claude_run "$T/work" p >/dev/null 2>&1 )
-ck "F3 the model's process gets no secret: nothing from ~/.config/quarterdeck/env, no GH_TOKEN, no QUARTERDECK_*, no cloud keys; it keeps HOME, PATH, its own sign-in and the subprocess scrub" \
-   '[ -s "$T/stub-env" ] && ! grep -qE "DECOY_FROM_ENVFILE|GH_TOKEN|QD_DECOY_SECRET|^QUARTERDECK_|AWS_SECRET|leak-" "$T/stub-env" && grep -q "^HOME=" "$T/stub-env" && grep -q "^PATH=" "$T/stub-env" && grep -q "^ANTHROPIC_API_KEY=keep-me" "$T/stub-env" && grep -q "^CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1" "$T/stub-env"'
+ck "F3 the model's process gets no secret: nothing from ~/.config/quarterdeck/env, no GH_TOKEN, no QUARTERDECK_*, no cloud keys; it keeps HOME, PATH and the subprocess scrub, and (ticket #38) a call billed to the plan gets no ANTHROPIC_API_KEY from the owner's shell" \
+   '[ -s "$T/stub-env" ] && ! grep -qE "DECOY_FROM_ENVFILE|GH_TOKEN|QD_DECOY_SECRET|^QUARTERDECK_|AWS_SECRET|leak-|keep-me" "$T/stub-env" && grep -q "^HOME=" "$T/stub-env" && grep -q "^PATH=" "$T/stub-env" && ! grep -q "^ANTHROPIC_API_KEY=" "$T/stub-env" && grep -q "^CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1" "$T/stub-env"'
 
 # ---- outgoing text ------------------------------------------------------------------------------------------------
 SK="sk-ant-$(printf 'q%.0s' $(seq 1 30))"; GHP="ghp_$(printf 'a%.0s' $(seq 1 36))"

@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Install on macOS - Quarterdeck</title>
+<meta name="description" content="How to install Quarterdeck on macOS and connect Claude Code.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site">
+<div class="wrap">
+<a class="brand" href="index.html">Quarterdeck</a>
+<nav aria-label="Main"><ul><li><a href="index.html">Home</a></li><li><a href="features.html">Features</a></li><li><a href="security.html">Security</a></li><li><a href="install.html" aria-current="page">Install</a></li><li><a href="faq.html">FAQ</a></li></ul></nav>
+</div>
+</header>
+<main id="main">
+<div class="wrap">
+<h1>Install on macOS</h1>
+<p class="lead">There is no installer. You clone the program, make a data folder, and ask <code>doctor</code> what is missing.</p>
+
+<h2>You need</h2>
+<ul>
+<li>macOS (the tested system), with Python 3.10 or newer, bash and git.</li>
+<li><a href="https://jqlang.github.io/jq/">jq</a>, for example <code>brew install jq</code>.</li>
+<li>The <a href="https://cli.github.com/">GitHub CLI</a>, signed in: <code>brew install gh</code>, then <code>gh auth login</code>.</li>
+<li><a href="https://claude.com/claude-code">Claude Code</a>, signed in: the <code>claude</code> command must work in a terminal.</li>
+<li>Optional: Node 20 or newer, which runs the page-logic tests. Without it those tests are skipped.</li>
+</ul>
+<p>Linux is also supported in principle, but its sandbox has run in CI only. See <a href="security.html">Security</a> before relying on it.</p>
+
+<h2>Then</h2>
+<pre><code>git clone https://github.com/ajmujaa/quarterdeck.git
+cd quarterdeck
+bin/qtdeck home init     # makes ~/.quarterdeck, your data folder
+bin/qtdeck doctor        # checks the wiring and says what is missing</code></pre>
+<p><code>doctor</code> lists each problem in plain words. Fix what it names and run it again until it is quiet. Nothing is placed outside the program folder, your data folder and the private file where credentials you enter are kept.</p>
+
+<h2>Connect Claude Code</h2>
+<p>Quarterdeck has no login of its own. It runs the <code>claude</code> command already on your machine, as you. Every model call uses your own account and your own usage limits. Read the provider's terms for automated use before you schedule many runs.</p>
+
+<h2>First run</h2>
+<pre><code>bin/qtdeck dashboard</code></pre>
+<p>This starts the dashboard and opens a one-time pairing link to <code>http://127.0.0.1:7878</code>. The link is good for five minutes and works once. The <strong>Demo</strong> switch fills the dashboard with invented data so you can look around before you connect anything.</p>
+
+<h2>Attach a project</h2>
+<pre><code>bin/qtdeck attach ~/Projects/my-app            # shows what it found; changes nothing
+bin/qtdeck attach ~/Projects/my-app --apply    # registers it
+bin/qtdeck run my-app surveyor --pr 12         # reports only
+bin/qtdeck run my-app surveyor --pr 12 --apply # posts the review</code></pre>
+<p>Attach only folders you trust: the crew reads their files and the harness runs their test and build commands.</p>
+</div>
+</main>
+<footer class="site">
+<div class="wrap">
+<ul><li><a href="features.html">Features</a></li><li><a href="security.html">Security</a></li><li><a href="install.html">Install</a></li><li><a href="faq.html">FAQ</a></li><li><a href="https://github.com/ajmujaa/quarterdeck">Source on GitHub</a></li></ul>
+<p>Quarterdeck is open source under the Apache License 2.0. This site loads nothing from other websites and sets no cookies.</p>
+</div>
+</footer>
+</body>
+</html>

@@ -14,6 +14,7 @@ discipline: design      # which panel this one sits on: design | dev | spec | qa
 seat: visual system     # a few words, shown on the dashboard
 bias: fewer elements, stricter rhythm    # what this one argues FOR, in a phrase
 model:                  # empty = the account default (Opus); see below
+provider:               # optional; empty = the install default (claude). See docs/design-providers.md
 ---
 ```
 
@@ -22,6 +23,11 @@ reviews, writes or builds is routine work and runs on Sonnet; the seats whose
 job is structure and rulings — the naval-architect and the dockmaster — are the
 hard-to-reverse calls and stay on Opus. A fix can override this for its tier,
 and a decision panel puts every seat on Opus at xhigh.
+
+**Which provider.** Empty for every seat today: the install default is Claude
+Code. `provider:` names the adapter that seat's calls go through, and only the
+names `qtdeck doctor` lists are accepted; anything else stops the seat before a
+model runs.
 
 The body is the persona. Three rules it must hold to:
 

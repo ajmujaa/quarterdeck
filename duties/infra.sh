@@ -17,6 +17,8 @@
 #
 #   qtdeck run <p> infra --pr 218              report only
 #   qtdeck run <p> infra --diff main           the checked-out HEAD against a base branch or commit (committed changes only)
+#   qtdeck run <p> infra --diff <base> --head <commit>   a commit against a base (the shipwright's Terraform change, ticket #101)
+#   ... --report-to FILE                        also write the report into FILE (the shipwright puts it in its pull request)
 #   ... --apply                                 also write the change report into workspace/ (never into the project)
 #
 # Contract:
@@ -44,12 +46,14 @@ GH="${QUARTERDECK_GH:-gh}"
 PER_RUN="${QUARTERDECK_INFRA_MAX_ITEMS:-20}"            # items in one report (its own cap: the fleet-wide QUARTERDECK_MAX_ITEMS is small, and a cut list would hide risks)
 MAX_FILES=40 MAX_DIFF=60000 MAX_TEXT=100000 MAX_ONE=30000
 
-APPLY=0 PR="" DBASE=""
+APPLY=0 PR="" DBASE="" DHEAD="" REPORT_TO=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --apply) APPLY=1 ;;
     --pr)    PR="${2:-}"; need_num "--pr" "$PR"; shift ;;
     --diff)  DBASE="${2:-}"; shift ;;
+    --head)  DHEAD="${2:-}"; shift ;;
+    --report-to) REPORT_TO="${2:-}"; shift ;;
     *) die "infra: unknown argument '$1'" ;;
   esac
   shift
@@ -59,8 +63,9 @@ if [ -n "$PR" ] && [ -n "$DBASE" ]; then die "infra takes --pr <number> or --dif
 if [ -n "$PR" ]; then [[ "$PR" =~ ^[0-9]+$ ]] || die "infra: --pr needs a number"
 elif [ -n "$DBASE" ]; then [[ "$DBASE" =~ ^[A-Za-z0-9][A-Za-z0-9._/@~^-]*$ ]] || die "infra: --diff needs a branch or commit name"
 else die "infra needs a pull request (--pr <number>) or a base to compare with (--diff <base>)"; fi
+if [ -n "$DHEAD" ]; then [ -n "$DBASE" ] && [[ "$DHEAD" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]] || die "infra: --head needs --diff and a full commit id"; fi
 
-if [ -n "$PR" ]; then KEY="pr$PR"; else KEY="diff-$(printf '%s' "$DBASE" | tr -c 'A-Za-z0-9._-' '_')"; fi
+if [ -n "$PR" ]; then KEY="pr$PR"; else KEY="diff-$(printf '%s' "$DBASE" | tr -c 'A-Za-z0-9._-' '_')${DHEAD:+-${DHEAD:0:12}}"; fi
 acquire_lock "infra-$PROJECT-$KEY"
 export QUARTERDECK_RUN_ID="$(tr '/' '_' <<<"$REPO")-infra-$KEY"
 WT="$QUARTERDECK_HOME/workspace/wt-infra-${PROJECT}-${KEY}"
@@ -87,8 +92,9 @@ if [ -n "$PR" ]; then
   working_on "PR #$PR — $title"
 else
   safe_git -C "$SOURCE_REPO_DIR" rev-parse --verify -q "$DBASE^{commit}" >/dev/null || die "infra: no such branch or commit: $DBASE"
-  worktree_at "$SOURCE_REPO_DIR" "$WT" HEAD || blocked "could not create a worktree at $WT"
+  worktree_at "$SOURCE_REPO_DIR" "$WT" "${DHEAD:-HEAD}" || blocked "could not create a worktree at $WT"
   baseref="$DBASE"; title="changes since $DBASE"; subject="the committed changes since $DBASE"
+  [ -z "$DHEAD" ] || { title="Terraform written by the shipwright"; subject="the shipwright's Terraform change"; }
   working_on "infra — $subject"
 fi
 safe_git -C "$WT" rev-parse --verify -q "$baseref^{commit}" >/dev/null || blocked "the base $baseref is not in this checkout"
@@ -270,8 +276,9 @@ $DIFFNOTE}${CUTNOTE:+
 $CUTNOTE}
 $(jq -r '.[] | "\n### \(.risk | ascii_upcase): \(.resource)\(if .needs_human then "  (needs a person)" else "" end)\n**Change:** \(.change)\n\n**Why:** \(.why)\n\n**Blast radius:** \(.blast_radius)\n\n**Rollback:** \(.rollback)"' <<<"$items")
 
-<sub>Quarterdeck rigger. Files only: the harness found the files and wrote the verdict; the rigger judged. Nothing was run, posted or changed.${PACKNOTICE:+ Experimental: $PACKNOTICE}</sub>"
+<sub>Quarterdeck rigger. Files only: the harness found the files and wrote the verdict; the rigger judged. Nothing was run, posted or changed.${PACKNOTICE:+ Experimental: $PACKNOTICE}${DHEAD:+ Experimental: Terraform authoring is a first slice; this change was written by a model and reviewed by a model against the AWS pack, which is experimental too.}${DHEAD:+ No plan was run by Quarterdeck. A person reads the plan from the project CI and applies.}</sub>"
 say ""; say "$report" >&2; say ""
+[ -z "$REPORT_TO" ] || printf '%s\n' "$report" > "$REPORT_TO" || die "infra: could not write the report to $REPORT_TO"
 
 if [ "$APPLY" != 1 ]; then
   say "quarterdeck: report only — pass --apply to write the change report into workspace/"

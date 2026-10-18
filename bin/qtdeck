@@ -61,6 +61,10 @@ Usage: qtdeck <command>
   mockup <brief-id> [--apply] the modelmaker: static pages, one per screen, from an APPROVED brief; checked by the harness
   mockup approve <brief-id> | changes <brief-id> "note"     answer a set of mock-ups
   dashboard [stop|link|sessions revoke]  start and open the live dashboard (loopback only); link prints a new one-time pairing link; sessions revoke signs every paired browser out
+  keys set anthropic          store the Anthropic API key: read from standard input only, never an argument (keys remove anthropic)
+  keys                        which keys are stored (never a value)
+  billing [<duty> plan|api]   who pays for a duty's model calls: your plan (default) or the API key; with no arguments, each duty's setting
+  billing seat <name> plan|api | billing cap daily <usd|off> | billing cap duty <duty|*> <usd|off>
   logs [name] [-f]            tail a log
   runs [n]                    last n entries of the run ledger
 
@@ -154,6 +158,11 @@ case "$cmd" in
       && chk "projects.json" ok "$(project_names | wc -l | tr -d ' ') project(s)" \
       || chk "projects.json" no "does not parse"
     sb=$(qd_sandbox_status); chk "project sandbox" "${sb%% *}" "${sb#* }"
+    # The model providers behind claude_run (docs/design-providers.md): each one, whether it can run here, and every seat or duty that names one.
+    provider_report || fail=1
+    echo
+    # Who pays for each duty's model calls, and whether the API key is stored: its presence, never its value (bin/billing.py).
+    while IFS=$'\t' read -r bok blabel bdetail; do chk "$blabel" "$bok" "$bdetail"; done < <(python3 "$QUARTERDECK_DIR/bin/billing.py" doctor 2>/dev/null)
     echo
     while read -r p; do
       d=$(project_path "$p")
@@ -171,7 +180,7 @@ case "$cmd" in
     echo
     # The wiring above is files and binaries. This is the logic that decides
     # when something runs unattended and what a loopback POST may start.
-    for st_file in selftest.py selftest.sh selftest-fix.sh selftest-panel.sh selftest-harbourmaster.sh selftest-purser.sh selftest-planner.sh selftest-untrusted.sh selftest-pilot.sh selftest-portable.sh selftest-lookout.sh selftest-marshal.sh selftest-caulker.sh selftest-assayer.sh selftest-logkeeper.sh selftest-quartermaster.sh selftest-bosun.sh selftest-packs.sh selftest-cycle.sh selftest-diet.sh selftest-infra.sh selftest-brief.sh selftest-mockup.sh selftest-security.sh selftest-checks.sh selftest-injection.sh; do
+    for st_file in selftest.py selftest.sh selftest-fix.sh selftest-panel.sh selftest-harbourmaster.sh selftest-purser.sh selftest-planner.sh selftest-untrusted.sh selftest-pilot.sh selftest-portable.sh selftest-lookout.sh selftest-marshal.sh selftest-caulker.sh selftest-assayer.sh selftest-logkeeper.sh selftest-quartermaster.sh selftest-bosun.sh selftest-packs.sh selftest-cycle.sh selftest-diet.sh selftest-infra.sh selftest-brief.sh selftest-mockup.sh selftest-security.sh selftest-checks.sh selftest-terraform.sh selftest-injection.sh selftest-providers.sh selftest-billing.sh selftest-round8.sh; do
       [ -f "$QUARTERDECK_DIR/bin/$st_file" ] || continue
       case "$st_file" in
         # the tests build their own throwaway folders: they must not inherit this installation's data folder, which would take precedence
@@ -202,13 +211,19 @@ case "$cmd" in
         selftest-brief.sh) label="self-check (the brief: plain words, bounded, no code, written only to the data folder)" ;;
         selftest-mockup.sh) label="self-check (the mock-ups: only an approved brief, pages parsed against an allowlist, nothing that runs or loads)" ;;
         selftest-checks.sh) label="self-check (project commands: minimal environment, sandbox, protected paths refused before any check)" ;;
+        selftest-terraform.sh) label="self-check (Terraform authoring: a folder Where unlocks .tf only, fmt and validate only, never plan or apply)" ;;
         selftest-injection.sh) label="self-check (prompt injection: hostile text stays data in every prompt; a model that obeys is contained)" ;;
+        selftest-providers.sh) label="self-check (providers: claude started exactly as before the seam; the fake adapter; unknown providers refused)" ;;
         selftest-security.sh) label="self-check (security: the harness checks, one per fix, each written to fail before it)" ;;
         selftest-cycle.sh) label="self-check (the cycle: stage order, caps, resume, report-only writes nothing)" ;;
         selftest-diet.sh) label="self-check (fewer tokens: turn caps, reuse only on identical inputs, panel rounds, seat models)" ;;
+        # expected failures (docs/review-round-8.md): an open finding is "xfail" and a fixed one "xpass"; neither fails the doctor
+        selftest-round8.sh) label="self-check (round 8 review: expected failures until each finding is fixed)" ;;
+        selftest-billing.sh) label="self-check (billing: the API key only in an api duty's environment, plan duties never get one, caps stop with NEEDS_HUMAN)" ;;
       esac
       if [ "$strc" = 0 ]; then
-        chk "$label" ok "$(grep -c '^  ok' <<<"$st") check(s) passed"
+        xf=$(grep -c '^  xfail' <<<"$st"); xp=$(grep -c '(xpass' <<<"$st")
+        chk "$label" ok "$(grep -c '^  ok' <<<"$st") check(s) passed$([ "$xf" = 0 ] || echo ", $xf expected failure(s) still open")$([ "$xp" = 0 ] || echo ", $xp now pass (move them into their selftest)")"
       else
         chk "$label" no "$(grep -c 'FAIL\|ERROR' <<<"$st") failed"
         grep 'FAIL\|ERROR' <<<"$st" | sed 's/^ */      /'
@@ -462,6 +477,27 @@ case "$cmd" in
         }
       fi
     fi
+    ;;
+
+  keys)
+    # The key goes in on standard input only: an argument is visible to every local process (ps) and lands in shell history.
+    case "${1:-} ${2:-}" in
+      "set anthropic")
+        [ $# = 2 ] || die "the key is read from standard input, never an argument: run  qtdeck keys set anthropic  and paste it (nothing was stored)"
+        exec python3 "$QUARTERDECK_DIR/bin/billing.py" set-key ;;
+      "remove anthropic") exec python3 "$QUARTERDECK_DIR/bin/billing.py" remove-key ;;
+      " ") python3 "$QUARTERDECK_DIR/bin/billing.py" doctor | awk -F'\t' '$2 == "API key" { print "  anthropic (API key)  " $3 }' ;;
+      *) die "usage: qtdeck keys set anthropic | keys remove anthropic | keys" ;;
+    esac
+    ;;
+
+  billing)
+    case "${1:-}" in
+      "") python3 "$QUARTERDECK_DIR/bin/billing.py" doctor | awk -F'\t' '{ printf "  %-28s %s\n", $2, $3 }' ;;
+      seat) shift; exec python3 "$QUARTERDECK_DIR/bin/billing.py" set-seat "$@" ;;
+      cap) shift; exec python3 "$QUARTERDECK_DIR/bin/billing.py" cap "$@" ;;
+      *) exec python3 "$QUARTERDECK_DIR/bin/billing.py" set "$@" ;;
+    esac
     ;;
 
   logs)

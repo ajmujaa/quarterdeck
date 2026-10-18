@@ -197,6 +197,7 @@ for seat in $SEATS; do
   (
     trap - EXIT        # a seat's subshell must not run the duty's cleanup (it would stop the app under the others)
     export QUARTERDECK_RUN_ID="${QUARTERDECK_RUN_ID}-$seat"
+    export QUARTERDECK_SEAT="$seat"   # its own billing setting, if any (bin/billing.py)
     m="$(crew_meta "$seat" model)"; [ -n "$m" ] && export QUARTERDECK_MODEL_PERSONA="$m"
     p="$(preamble "$PROJECT")
 

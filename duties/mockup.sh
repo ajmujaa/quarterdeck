@@ -73,6 +73,7 @@ failed() { # failed <detail> — a failed run writes nothing but its own note
 }
 
 export QUARTERDECK_MODEL_PERSONA="${QUARTERDECK_MODEL_MOCKUP:-$(crew_meta modelmaker model)}"
+pv="$(crew_meta modelmaker provider)"; [ -n "$pv" ] && export QUARTERDECK_PROVIDER_PERSONA="$pv"
 BRIEF_TXT=$(jq -r '.brief | tojson' <<<"$ctx"); SLUGS=$(jq -r '.slugs | join(", ")' <<<"$ctx"); NOTES=$(jq -r .notes <<<"$ctx")
 CHANGES_BLOCK=""
 if [ -n "$NOTES" ]; then

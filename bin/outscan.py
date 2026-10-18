@@ -88,13 +88,19 @@ def _env_values(path):
 
 def known_values():
     """Every secret this machine is known to hold that could be pasted into a comment: the values in the harness env file (QUARTERDECK_SECRETS_DIR or
-    ~/.config/quarterdeck), GH_TOKEN / GITHUB_TOKEN and the token the GitHub CLI holds. Only values of 12+ characters with a digit in them (a word like `sonnet`
+    ~/.config/quarterdeck), GH_TOKEN / GITHUB_TOKEN, the token the GitHub CLI holds and the Anthropic API key (file or keychain). Only values of 12+ characters with a digit in them (a word like `sonnet`
     is not a secret). Read here, compared, never printed or logged."""
     d = Path(os.environ.get("QUARTERDECK_SECRETS_DIR") or Path.home() / ".config" / "quarterdeck")
     vals = []
     for f in [d / "env"] + sorted(d.glob("*.env")):
         vals += _env_values(f)
     vals += [os.environ.get(k, "") for k in ("GH_TOKEN", "GITHUB_TOKEN")]
+    try:                                            # the Anthropic API key duties may be billed to (bin/billing.py), in whichever store holds it
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import billing
+        vals.append(billing.get_key() or "")
+    except Exception:
+        pass
     if not os.environ.get("QUARTERDECK_GH"):        # a stand-in gh (the tests) is not asked, and must not see a call it was not meant to see
         try:
             vals.append(subprocess.run(["gh", "auth", "token"], capture_output=True, text=True, timeout=5).stdout.strip())
@@ -152,7 +158,7 @@ def main(argv):
         return 1
     hits = scan_text(text)
     if known_value_hit(text):
-        hits.append("a secret value this machine holds (the harness env file or a GitHub token), in some shape")
+        hits.append("a secret value this machine holds (the harness env file, a GitHub token or the Anthropic API key), in some shape")
     warn = entropy_runs(text)
     if warn:
         print("outscan: warning: %d run(s) of random-looking characters (%s)" % (len(warn), ", ".join(warn[:3])), file=sys.stderr)

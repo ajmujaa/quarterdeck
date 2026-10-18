@@ -5,6 +5,9 @@
     bin/protect.py check [--allow P]... [--plan FILE] [--extra GLOB]... [--root WORKTREE]
                                                 changed paths on stdin; prints each protected one that is not allowed, exits 1 if any;
                                                 with --root, also each one that is a symlink out of the worktree or to a protected place
+    bin/protect.py folders --plan FILE [--root WORKTREE]
+                                                the Terraform folders the plan's Where fields name, one per line; with --root, only those that
+                                                pass the folder rules (inside the worktree, no link, present), else every folder-form Where
     bin/protect.py inputs WORKTREE              a digest of what the verify/test/build commands are made of: every package.json
                                                 "scripts" block and every Makefile; print it before the model runs and after
 
@@ -15,6 +18,9 @@ check runs. A path is allowed only when the project's registry lists it in "prot
 ruling, not the issue text anyone can write) names it. Even then, a changed scripts block or Makefile is refused (see `inputs`).
 A pattern with no slash matches the file name at any depth; a pattern with a slash matches from the repository root; ** crosses folders.
 A trailing /** also matches the bare name: `.claude/**` matches `.claude`, which is what git records for a folder replaced by a symlink (audit 7, M2).
+Terraform (ticket #101): a Where that is one folder in backticks (`infra/net/`) unlocks only the *.tf files under it and the *.tfvars files under it
+that hold no secret-looking value, and only when the folder is in the worktree (--root); state, the provider cache, the CLI config and its credentials
+and the lock file are never unlocked by a plan.
 Standard library only.
 """
 import fnmatch
@@ -42,6 +48,8 @@ DEFAULT = [
     "*.tf", "*.tfvars", "*.tf.json", ".terraform/**",
     # round 6: package-manager files that run code or fetch it (pnpm 10 reads its settings, pnpmfile among them, from pnpm-workspace.yaml)
     ".pnpmfile.*", "pnpm-workspace.yaml", "bunfig.toml",
+    # ticket #101: Terraform state, the provider and module cache at any depth, the CLI config and its credentials, and the provider lock file
+    "*.tfstate", "*.tfstate.backup", "**/.terraform/**", ".terraformrc", "terraform.rc", "credentials.tfrc.json", ".terraform.lock.hcl",
 ]
 
 # What a plan can never unlock, only the project's protected_allow (round 6, H2). A plan's Where line is written by a model, from an issue anyone can
@@ -53,7 +61,13 @@ PLAN_NEVER = [
     ".npmrc", ".yarnrc*", ".pnpmfile.*", "pnpm-workspace.yaml", "bunfig.toml", ".yarn/**", "**/.yarn/**", ".cargo/**", "**/.cargo/**",
     ".husky/**", ".pre-commit-config.yaml", "lefthook.yml", ".lintstagedrc*", "CODEOWNERS", ".claude/**", ".mcp.json", ".env*", "*.env",
     ".gitattributes", ".gitmodules",
+    # ticket #101: state holds live values and secrets, the cache holds provider code that runs, the CLI config and credentials reach a registry
+    # or a backend, and the lock file chooses which provider code CI downloads. A person changes these.
+    "*.tfstate", "*.tfstate.backup", ".terraform/**", "**/.terraform/**", ".terraformrc", "terraform.rc", "credentials.tfrc.json", ".terraform.lock.hcl",
 ]
+
+# What a folder Where unlocks, and nothing else: Terraform source and variable files (a variable file only without a secret-looking value).
+TF_UNLOCK = ["*.tf", "*.tfvars"]
 
 
 def _rx(pat):
@@ -126,17 +140,111 @@ def plan_paths(plan_text):
     return out
 
 
-def allowed_by(path, allow, plan_text):
-    """Listed by the registry (an exact path or a glob) or named, as a whole path, in the Where field of an item of the plan the duty was handed."""
+def plan_folders(plan_text):
+    """The folder-form Where values of a plan (`infra/net/`, a trailing slash), as written, by the same strict rule as plan_paths."""
+    out = []
+    for line in plan_text.splitlines():
+        m = WHERE_PATH.match(line)
+        if m and m.group(1).endswith("/") and norm(m.group(1)) in plan_paths(plan_text):
+            out.append(m.group(1))
+    return list(dict.fromkeys(out))
+
+
+def folder_ok(folder, root):
+    """A folder Where is used only when it is inside the worktree, spelled without `..`, not absolute, not the root itself, is a real folder in the
+    checkout, and no part of it is a link (a link could point out of the worktree or at another folder the plan did not name)."""
+    if not root or not folder.endswith("/") or folder.startswith("/") or folder in ("/", "./"):
+        return False
+    parts = folder.rstrip("/").split("/")
+    if not parts or any(x in ("", ".", "..") for x in parts):
+        return False
+    cur = os.path.realpath(root)
+    for x in parts:
+        cur = os.path.join(cur, x)
+        if os.path.islink(cur) or not os.path.isdir(cur):
+            return False
+    return os.path.realpath(cur).startswith(os.path.realpath(root) + os.sep)
+
+
+def tf_folders(plan_text, root):
+    """The folder Where values of the plan that pass folder_ok, as written: the folders the harness runs terraform fmt and validate on."""
+    return [f for f in plan_folders(plan_text) if folder_ok(f, root)]
+
+
+SECRET_NAME = re.compile(r"(?i)(passw|secret|token|api_?key|private_?key|access_?key|credential|auth|cert|\bkey\b|_key\b|pem\b|connection_?string|dsn)")
+ASSIGN = re.compile(r"^\s*\"?([A-Za-z0-9_.-]+)\"?\s*=\s*(.*)$")
+
+
+def tfvars_secret(text):
+    """A short reason when a variable file looks like it holds a secret, else "". Fail closed: a credential pattern or high-entropy run anywhere
+    (bin/outscan.py), a private key block, or a variable whose name sounds like a secret with any value but an empty string or null."""
+    if "-----BEGIN" in text:
+        return "a key block"
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import outscan
+        hits = outscan.scan_text(text) or (["a random-looking value"] if outscan.entropy_runs(text) else [])
+    except Exception:          # the scanner itself could not run: nothing is trusted
+        return "the secret scan could not run"
+    if hits:
+        return hits[0]
+    for line in text.splitlines():
+        m = ASSIGN.match(line)
+        if m and SECRET_NAME.search(m.group(1)) and m.group(2).strip().rstrip(",") not in ('""', "null", "''"):
+            return "a value for " + m.group(1)
+    return ""
+
+
+def tf_allowed(path, raw, plan_text, root):
+    """Unlocked by a folder Where: a *.tf, or a clean *.tfvars, under a folder the plan names (one per item) that passes folder_ok. Never a path
+    on PLAN_NEVER. `path` is the compared form, `raw` the spelling on disk. A *.tfvars is read from the worktree: a link, something that is not a file, or a secret-looking value keeps it protected."""
+    if not plan_text or not root or matches(path, PLAN_NEVER) or not matches(path, TF_UNLOCK):
+        return False
+    if ".." in path.split("/"):
+        return False
+    if not any(path.startswith(norm(f)) for f in tf_folders(plan_text, root)):
+        return False
+    return tfvars_clean(raw, root) if matches(path, ["*.tfvars"]) else True
+
+
+def tfvars_clean(path, root):
+    full = os.path.join(root, path)
+    if os.path.islink(full):
+        return False
+    if not os.path.lexists(full):
+        return True            # deleted: nothing is written
+    if not os.path.isfile(full):
+        return False
+    try:
+        text = Path(full).read_text(errors="replace")
+    except OSError:
+        return False
+    return not tfvars_secret(text)
+
+
+def allowed_by(path, allow, plan_text, root=""):
+    """Listed by the registry (an exact path or a glob) or named, as a whole path, in the Where field of an item of the plan the duty was handed,
+    or (Terraform) a *.tf or clean *.tfvars under a folder a Where field names. A *.tfvars a plan unlocks must hold no secret-looking value."""
     if matches(path, [a for a in allow if a]):
         return True
     p = norm(path.strip())
     p = p[2:] if p.startswith("./") else p
-    return bool(plan_text) and not matches(p, PLAN_NEVER) and p in plan_paths(plan_text)
+    if not plan_text or matches(p, PLAN_NEVER):
+        return False
+    if p in plan_paths(plan_text):
+        if matches(p, ["*.tfvars"]):
+            return bool(root) and tfvars_clean(_on_disk(path), root)
+        return True
+    return tf_allowed(p, _on_disk(path), plan_text, root)
 
 
-def violations(paths, allow=(), plan_text="", extra=()):
-    return [p for p in paths if p.strip() and matches(p, list(DEFAULT) + list(extra)) and not allowed_by(p.strip(), allow, plan_text)]
+def _on_disk(path):
+    path = path.strip()
+    return path[2:] if path.startswith("./") else path
+
+
+def violations(paths, allow=(), plan_text="", extra=(), root=""):
+    return [p for p in paths if p.strip() and matches(p, list(DEFAULT) + list(extra)) and not allowed_by(p.strip(), allow, plan_text, root)]
 
 
 def link_violations(paths, root, allow=(), extra=()):
@@ -186,6 +294,13 @@ def main(argv):
     if cmd == "inputs" and len(argv) == 2:
         print(inputs_digest(argv[1]))
         return 0
+    if cmd == "folders" and len(argv) in (3, 5) and argv[1] == "--plan" and (len(argv) == 3 or argv[3] == "--root"):
+        try:
+            plan = Path(argv[2]).read_text(errors="replace")
+        except OSError:
+            return 1
+        print("\n".join(tf_folders(plan, argv[4]) if len(argv) == 5 else plan_folders(plan)))
+        return 0
     if cmd == "check":
         allow, extra, plan, root, a = [], [], "", "", argv[1:]
         while a:
@@ -205,7 +320,7 @@ def main(argv):
                 print(__doc__)
                 return 2
         paths = sys.stdin.read().splitlines()
-        bad = violations(paths, allow, plan, extra)
+        bad = violations(paths, allow, plan, extra, root)
         if root:
             bad += [b for b in link_violations(paths, root, allow, extra) if b.split(" (", 1)[0] not in bad]
         print("\n".join(bad))

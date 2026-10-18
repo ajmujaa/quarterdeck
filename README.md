@@ -55,6 +55,18 @@ Quarterdeck has no login of its own. It runs the `claude` command that is alread
 
 Every model call uses your own account and your own usage limits. Quarterdeck never stores or passes on your sign-in, and never uses anyone else's. Read the provider's terms for automated use before you schedule many runs: https://code.claude.com/docs/en/legal-and-compliance
 
+## Billing: your plan or an API key
+
+Each duty is billed to your plan (the `claude` sign-in) unless you choose an Anthropic API key for it. An API key is the supported way to pay for automated and product use (see https://code.claude.com/docs/en/legal-and-compliance), and it keeps your subscription for your own work.
+
+1. Store the key. It is read from standard input, never from an argument: `bin/qtdeck keys set anthropic`, paste the key, press Enter. Or paste it on the Settings page. It goes into the same private store as connection credentials (the 0600 file, or the macOS Keychain if you chose it) and is never shown again; only "stored" or "not stored" comes back.
+2. Choose the duties: `bin/qtdeck billing shipwright api` (or `plan` to go back), `bin/qtdeck billing seat modelmaker api` for one crew seat, or the selects on the Settings page. `bin/qtdeck billing` lists them all.
+3. Set caps, counted only for calls billed to the key, since local midnight: `bin/qtdeck billing cap daily 20` and `bin/qtdeck billing cap duty shipwright 5` (`off` removes one). At a cap the duty stops with NEEDS_HUMAN and says which cap. Each call is also given at most what is left.
+
+A duty set to the API key never falls back to your plan: with no key stored it stops with NEEDS_HUMAN. A duty on the plan never gets an `ANTHROPIC_API_KEY`, even one set in your shell, so a stray key cannot quietly pay for it. `bin/qtdeck doctor` shows each duty's billing and whether the key is stored. The settings are in your data folder, `config/billing.json`.
+
+Not verified: this was built and tested against a stand-in `claude`, not the real CLI with a real key. That the real CLI bills a `-p` call to `ANTHROPIC_API_KEY` from its environment ahead of your sign-in, and how it reports a refused key, was not checked here. Try one cheap duty first and look at the API console before you move scheduled work over.
+
 ## First run
 
 ```bash
@@ -124,7 +136,7 @@ Beyond the single duties:
 
 The crew themselves are files in `crew/`. Each knows no project and holds one point of view, such as a security reviewer, a copy editor, or someone whose only question is what an earlier fix could have broken. Read `crew/_README.md` to add one.
 
-**A project's own agents.** On the Agents page, a project that keeps Claude Code agents in its own `.claude/agents/` folder sees them listed under "This project's own agents", marked "from the project", with a note on which of the crew's jobs they plausibly cover and which Quarterdeck's crew still covers for it. It reads only the name, description, tools and model line at the top of each file in that one folder (at most 50 files, 64 KB each, links never followed, the prompt itself never read or shown), only for projects you registered, and writes nothing. The matches are a keyword guess, labelled as such. Quarterdeck cannot run a project's own agents; that would be a separate step you opt into.
+**A project's own agents.** On the Agents page, a project that keeps Claude Code agents in its own `.claude/agents/` folder sees them listed under "This project's own agents", marked "from the project", with a note on which of the crew's jobs they plausibly cover and which Quarterdeck's crew still covers for it. It reads only the name, description, tools and model line at the top of each file in that one folder (at most 50 files, 64 KB each, a link is followed only to a file inside the same project, the prompt itself never read or shown), only for projects you registered, and writes nothing. The matches are a keyword guess, labelled as such. Quarterdeck cannot run a project's own agents; that would be a separate step you opt into.
 
 ## Packs
 

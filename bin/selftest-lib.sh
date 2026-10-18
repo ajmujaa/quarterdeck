@@ -25,7 +25,8 @@ st_gone() { local i; for i in $(seq 1 40); do pgrep -f "$1" >/dev/null 2>&1 || r
 st_init() { # st_init <duty>... — a throwaway Quarterdeck holding the harness, those duties and the real crew
   mkdir -p "$T"/{bin,config,crew,duties,state,workspace,logs/runs,path,ghdata,replies}
   cp "$REAL"/bin/{lib.sh,markers.py,outscan.py,guard.py,home.py,protect.py,safegit.py,gitrisky.re,behaviour.py,routes.py} "$T/bin/"
-  for f in browse.mjs decisions.sh; do [ -f "$REAL/bin/$f" ] && cp "$REAL/bin/$f" "$T/bin/"; done
+  for f in browse.mjs decisions.sh billing.py; do [ -f "$REAL/bin/$f" ] && cp "$REAL/bin/$f" "$T/bin/"; done
+  mkdir -p "$T/bin/integrations"; cp -R "$REAL"/bin/integrations/. "$T/bin/integrations/"; rm -rf "$T/bin/integrations/__pycache__"   # billing.py keeps the API key in the same store
   for d in "$@"; do cp "$REAL/duties/$d.sh" "$T/duties/"; done
   cp "$REAL"/config/quarterdeck.env "$T/config/"; cp "$REAL"/crew/*.md "$T/crew/"
   cat > "$T/path/gh" <<'GH'
@@ -66,7 +67,7 @@ done
 # one writer at a time: seats run in parallel, and on macOS a long line is written in 4 KB pieces that interleave
 lk="$QUARTERDECK_DIR/.calls.lock"; until mkdir "$lk" 2>/dev/null; do sleep 0.02; done
 spath=""; smode=""
-[ -f "${settings:-/nonexistent}" ] && { spath="$settings"; smode="$(stat -f %Lp "$settings" 2>/dev/null || stat -c %a "$settings")"; settings="$(cat "$settings")"; }
+[ -f "${settings:-/nonexistent}" ] && { spath="$settings"; smode="$(stat -c %a "$settings" 2>/dev/null || stat -f %Lp "$settings")"; settings="$(cat "$settings")"; }
 jq -nc --arg p "$p" --arg deny "${deny:-}" --arg allow "${allow:-}" --arg model "${model:-}" --arg tools "${tools:-}" --arg settings "${settings:-}" --arg sources "${sources-unset}" --argjson argv "$argv" --arg spath "$spath" --arg smode "$smode" '{spath:$spath, smode:$smode, argv:$argv, prompt:$p, deny:$deny, allow:$allow, model:$model, tools:$tools, settings:$settings, sources:$sources}' >> "$QUARTERDECK_DIR/claude-calls"
 rmdir "$lk"
 [ -x "$QUARTERDECK_DIR/claude-hook" ] && "$QUARTERDECK_DIR/claude-hook" "$p" >/dev/null 2>&1
@@ -78,6 +79,19 @@ STUB
   # The checks change what the stand-in answers between runs with the same inputs, so reuse of an earlier answer stays off here
   # (bin/selftest-diet.sh turns it on to test it).
   export QUARTERDECK_REUSE=""
+  # ST_PROVIDER=fake: the same duty through the fake adapter (providers/fake.sh) instead of this stand-in. It answers from the same replies
+  # folder, runs the same hook and records in the same file; the claude stand-in becomes a tripwire, so a call that went around the
+  # adapter seam leaves claude-was-run behind.
+  if [ "${ST_PROVIDER:-claude}" = fake ]; then
+    cp -R "$REAL/providers" "$T/providers"
+    printf '#!/bin/bash
+echo "$*" >> "$QUARTERDECK_DIR/claude-was-run"
+exit 1
+' > "$T/claude"; chmod +x "$T/claude"
+    export QUARTERDECK_PROVIDER=fake QUARTERDECK_FAKE_REPLIES="$T/replies" QUARTERDECK_FAKE_HOOK="$T/claude-hook" QUARTERDECK_FAKE_RECORD="$T/claude-calls" QUARTERDECK_FAKE_COST="${STUB_COST:-0.05}"
+  else
+    unset QUARTERDECK_PROVIDER QUARTERDECK_FAKE_REPLIES QUARTERDECK_FAKE_HOOK QUARTERDECK_FAKE_RECORD QUARTERDECK_FAKE_COST   # left by an earlier st_init in this shell
+  fi
   export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_AUTHOR_NAME=fixture GIT_AUTHOR_EMAIL=fixture@example.invalid GIT_COMMITTER_NAME=fixture GIT_COMMITTER_EMAIL=fixture@example.invalid
   echo '[]' > "$T/state/runs.json"
 }

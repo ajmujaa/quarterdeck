@@ -177,7 +177,14 @@ def cmd_structural(a):
         need = ["Bash(git*)", "Bash(gh*)", "Bash(curl*)", "WebFetch", "WebSearch"]
         res(all(x in deny for x in need), "%s: git, gh, curl and the web tools are denied whatever the duty passes" % tag)
         res(any(r.startswith("Read(**/.env") for r in deny) and any(".ssh" in r for r in deny), "%s: .env files and the owner's .ssh are denied for Read" % tag)
-        res(c["sources"] == "" and "--strict-mcp-config" in c["argv"], "%s: no repository settings and no MCP servers load" % tag)
+        if c.get("provider") == "fake":
+            # at the adapter seam (providers/fake.sh records what claude_run handed it): the same inputs any adapter gets
+            res(c["sources"] == "", "%s: the adapter is asked to load no settings of the repository's or the owner's" % tag)
+            res(c.get("stdin") is True and c.get("prompt_in_argv") is False, "%s: the adapter got the prompt on standard input, in no argument" % tag)
+            leaked_env = [n for n in c.get("env", []) if n.startswith(("QUARTERDECK_", "GH_", "GITHUB_", "ANTHROPIC_", "AWS_"))]
+            res(not leaked_env, "%s: the adapter's environment holds nothing of the owner's%s" % (tag, "" if not leaked_env else " (%s)" % ", ".join(leaked_env)))
+        else:
+            res(c["sources"] == "" and "--strict-mcp-config" in c["argv"], "%s: no repository settings and no MCP servers load" % tag)
     sys.exit(1 if bad else 0)
 
 

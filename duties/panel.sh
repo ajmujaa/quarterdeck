@@ -203,6 +203,7 @@ seat_env() { # seat_env <seat>
   v="QUARTERDECK_MODEL_SEAT_$(tr '[:lower:]-' '[:upper:]_' <<<"$1")"
   m="${!v:-$(crew_meta "$1" model)}"; [ -n "$m" ] && export QUARTERDECK_MODEL_PERSONA="$m"
   e="$(crew_meta "$1" effort)"; [ -n "$e" ] && export QUARTERDECK_EFFORT_PERSONA="$e"
+  pv="$(crew_meta "$1" provider)"; [ -n "$pv" ] && export QUARTERDECK_PROVIDER_PERSONA="$pv"
   export QUARTERDECK_SEAT="$1"
 }
 if [ -z "$RESUME" ]; then   # rounds 1 and 2; a resumed panel reloads them instead

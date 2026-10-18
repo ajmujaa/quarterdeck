@@ -3,8 +3,10 @@
 
 Read-only. Only the front matter fields name, description, tools and model are read; the prompt body is never returned.
 Everything in a file is untrusted text: lengths are capped, control characters and angle brackets are dropped, YAML tags, anchors and aliases
-are not interpreted. Links are never followed (the folders, the files), at most 50 files of 64 KB each. Standard library only.
+are not interpreted. The folders are never followed through a link. A file that is a link is read only when its real target is a regular .md file inside the same project
+(and not under .git); any other link is ignored. At most 50 files of 64 KB each. Standard library only.
 """
+import fcntl
 import os
 import re
 import stat
@@ -80,11 +82,48 @@ def _agents_fd(path):
         return None
 
 
+def _fd_path(f):
+    """Where an open file really lives (macOS F_GETPATH, Linux /proc), or None when that cannot be told."""
+    try:
+        if hasattr(fcntl, "F_GETPATH"):
+            return os.path.realpath(fcntl.fcntl(f, fcntl.F_GETPATH, b"\0" * 1024).split(b"\0", 1)[0].decode("utf-8", "replace"))
+        return os.path.realpath(os.readlink("/proc/self/fd/%d" % f))
+    except (OSError, ValueError):
+        return None
+
+
+def _inside(path, root):
+    parts = path.split(os.sep)
+    return path.startswith(root + os.sep) and ".git" not in parts[len(root.split(os.sep)):]
+
+
+def _open_inside_link(dirfd, fn, root):
+    """An open descriptor for a link whose real target is a regular .md file inside the project root, else None.
+
+    The target is resolved, opened without following a last-component link, and then checked again from the open file itself,
+    so a folder swapped for a link between the two steps is caught. Anything that cannot be proven inside is refused."""
+    try:
+        if not stat.S_ISLNK(os.lstat(fn, dir_fd=dirfd).st_mode):
+            return None
+        target = os.path.realpath(os.path.join(root, ".claude", "agents", os.readlink(fn, dir_fd=dirfd)))
+        if not target.endswith(".md") or not _inside(target, root):
+            return None
+        f = os.open(target, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return None
+    real = _fd_path(f)
+    if real is None or real != target or not _inside(real, root):
+        os.close(f)
+        return None
+    return f
+
+
 def agents_of(path):
     """The project's own agents, sorted by name: [{file, name, description, tools, model}]. Empty when there are none."""
     fd = _agents_fd(str(path))
     if fd is None:
         return []
+    root = os.path.realpath(str(path))
     out = []
     try:
         for fn in sorted(os.listdir(fd)):
@@ -93,9 +132,11 @@ def agents_of(path):
             if not fn.endswith(".md") or fn.startswith("."):
                 continue
             try:
-                f = os.open(fn, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)      # a link is refused; a fifo or device fails the check below
+                f = os.open(fn, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)      # a link is refused here; a fifo or device fails the check below
             except OSError:
-                continue
+                f = _open_inside_link(fd, fn, root)                                           # a link to a file inside this project is the one exception
+                if f is None:
+                    continue
             try:
                 if not stat.S_ISREG(os.fstat(f).st_mode):
                     continue

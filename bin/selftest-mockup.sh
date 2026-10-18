@@ -188,6 +188,6 @@ if st_have_browser; then
   for v in A B C D; do eval "h=\$BYP_$v"; printf '%s' "$h" > "$T/byp-$v.html"; done
   ctl=""; for v in A B C D; do r=$(node "$REAL/bin/selftest-refresh-probe.js" "$T/byp-$v.html" 2>&1 | tail -1); [ "$r" = NAVIGATED ] || ctl="$ctl $v:$r"; done
   ck "R7 control, real Chromium: each bypass page, served as it was, DOES navigate to the other address (so the strings mean something)${ctl:+ — did not:$ctl}" '[ -z "$ctl" ]'
-else st_skip "R7 real-browser control (no playwright/Chromium here)"; fi
+else st_skip_browser "the R7 real-browser control did not run"; fi
 
 st_done

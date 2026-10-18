@@ -1,5 +1,5 @@
 #!/bin/bash
-# The bash-side checks doctor runs. These cover the commit gate: the thing that
+# The bash-side checks qtdeck check runs. These cover the commit gate: the thing that
 # decides whether work a model did is allowed to reach a branch. It is the most
 # safety-critical logic here and it is pure shell, so it gets asserted rather
 # than assumed.

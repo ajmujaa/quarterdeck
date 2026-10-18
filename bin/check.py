@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """qtdeck check: one command that says whether everything is fine.
 
-Runs the selftest, the node assistant test, the smoke test and the rehearsal, then asks the live
+Runs every selftest (bin/selftest.py and every bin/selftest*.sh, the list `qtdeck doctor` used to run), the privacy, secrets and vendor
+checks, the node assistant test, the smoke test and the rehearsal, then asks the live
 dashboard (127.0.0.1, QUARTERDECK_DASHBOARD_PORT or 7878) for /api/health. Prints a green or red summary
 and, if red, the first failing line. A dashboard that is not running is reported, not treated as a
 failure of the code. Stdlib only. Exit 0 only if every step passed and the dashboard, if running, is ok."""
@@ -24,18 +25,47 @@ def paint(code, s):
     return f"\033[{code}m{s}\033[0m" if sys.stdout.isatty() else s
 
 
+# what each suite checks, for the summary line; a suite missing here is shown by its file name
+LABELS = {
+    "selftest.py": "logic", "selftest.sh": "commit gate", "selftest-fix.sh": "fix pipeline", "selftest-panel.sh": "panel prompts",
+    "selftest-harbourmaster.sh": "board notes stay local", "selftest-portable.sh": "scripts run on macOS bash 3.2 and BSD tools",
+    "selftest-purser.sh": "requirements reach the issue body only", "selftest-planner.sh": "the planner: validated plans, no card moves before approval",
+    "selftest-packs.sh": "stack notes from listed packs only", "selftest-untrusted.sh": "third-party text reaches prompts only as data",
+    "selftest-pilot.sh": "the pilot: the harness drives the browser", "selftest-lookout.sh": "the lookout: only pictures the harness took",
+    "selftest-marshal.sh": "the marshal: forbidden paths block before any model", "selftest-caulker.sh": "the caulker: only what was found, three cycles",
+    "selftest-assayer.sh": "the assayer: tests that fail first", "selftest-logkeeper.sh": "the logkeeper: records",
+    "selftest-quartermaster.sh": "the quartermaster: facts by the harness", "selftest-bosun.sh": "the bosun: nothing is written to a repo",
+    "selftest-infra.sh": "the infra duty: files only, no cloud tool", "selftest-brief.sh": "the brief: plain words, no code",
+    "selftest-mockup.sh": "the mock-ups: only an approved brief, allowlisted pages", "selftest-checks.sh": "project commands: sandbox, protected paths",
+    "selftest-terraform.sh": "Terraform: fmt and validate only", "selftest-injection.sh": "prompt injection: hostile text stays data",
+    "selftest-providers.sh": "providers: the claude adapter, unknown ones refused", "selftest-security.sh": "security: one check per fix",
+    "selftest-cycle.sh": "the cycle: stage order, caps, resume", "selftest-diet.sh": "fewer tokens: turn caps, reuse, rounds",
+    "selftest-round8.sh": "round 8 review: expected failures until fixed", "selftest-billing.sh": "billing: the API key only where it is chosen",
+    "selftest-firstrun.sh": "first use: data folder, help, doctor, attach, setup",
+}
+
+
+def suites(root=ROOT):
+    """Every selftest `qtdeck check` runs: bin/selftest.py, then every bin/selftest*.sh but the shared library, found by name so a new one is never left out."""
+    return ["selftest.py"] + sorted(p.name for p in (Path(root) / "bin").glob("selftest*.sh") if p.name != "selftest-lib.sh")
+
+
 def step(label, argv, timeout=600):
-    """(ok, summary, first failing line) for one command."""
+    """(ok, summary, failing lines) for one command. The tests build their own throwaway folders: they must not inherit this installation's data
+    folder, which would take precedence."""
+    env = {k: v for k, v in os.environ.items() if k not in ("QUARTERDECK_HOME", "QUARTERDECK_HOME_WHY")}
     try:
-        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, cwd=str(ROOT))
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, cwd=str(ROOT), env=env)
     except (OSError, subprocess.TimeoutExpired) as e:
-        return False, "did not run", f"{label}: {type(e).__name__}"
+        return False, "did not run", [f"{label}: {type(e).__name__}"]
     lines = (r.stdout + "\n" + r.stderr).splitlines()
     oks = sum(1 for ln in lines if ln.lstrip().startswith("ok"))
-    first = next((ln.strip() for ln in lines if BAD.match(ln) and not ln.lstrip().startswith("ok")), "")      # a passing line that says "failed" is not the failure
-    if r.returncode != 0 and not first:
-        first = next((ln.strip() for ln in reversed(lines) if ln.strip()), f"exit code {r.returncode}")
-    return r.returncode == 0, f"{oks} ok", first
+    skips = sum(1 for ln in lines if ln.lstrip().startswith("skip"))
+    xf = sum(1 for ln in lines if ln.startswith("  xfail"))
+    bad = [ln.strip() for ln in lines if BAD.match(ln) and not ln.lstrip().startswith("ok")]      # a passing line that says "failed" is not the failure
+    if r.returncode != 0 and not bad:
+        bad = [next((ln.strip() for ln in reversed(lines) if ln.strip()), f"exit code {r.returncode}")]
+    return r.returncode == 0, f"{oks} ok" + (f", {skips} skipped" if skips else "") + (f", {xf} expected failure(s) still open" if xf else ""), bad
 
 
 def health():
@@ -56,17 +86,19 @@ def health():
 
 
 def main():
-    steps = [("selftest", [sys.executable, "bin/selftest.py"]), ("privacy limit", [sys.executable, "bin/forbidden_signals.py"]), ("secrets", [sys.executable, "bin/guard.py"]), ("vendor files", [sys.executable, "bin/vendor-verify.py"]), ("smoke test", [sys.executable, "bin/smoke.py"]),
+    steps = [(LABELS.get(f, f), [sys.executable if f.endswith(".py") else "bash", "bin/" + f]) for f in suites()]
+    steps += [("privacy limit", [sys.executable, "bin/forbidden_signals.py"]), ("secrets", [sys.executable, "bin/guard.py"]), ("vendor files", [sys.executable, "bin/vendor-verify.py"]), ("smoke test", [sys.executable, "bin/smoke.py"]),
              ("rehearsal", [sys.executable, "bin/rehearse.py"])]
     if nodeok.path():
         steps.insert(1, ("assistant test", ["node", "--no-warnings", "bin/selftest-assistant.mjs"]))
     print("── Quarterdeck check ──\n")
     failed = []
     for label, argv in steps:
-        ok, summary, first = step(label, argv)
-        print(f"  {paint('32', '✓') if ok else paint('31', '✗')} {label:<16} {summary}")
+        ok, summary, bad = step(label, argv)
+        print(f"  {paint('32', '✓') if ok else paint('31', '✗')} {label:<16} {summary}", flush=True)
         if not ok:
-            failed.append((label, first))
+            print("".join(f"      {ln}\n" for ln in bad[:40]), end="", flush=True)
+            failed.append((label, bad[0]))
     if not nodeok.path():
         print(f"  {paint('33', '–')} {'assistant test':<16} skipped, node 20 or newer is not installed")
     ok, text, first = health()

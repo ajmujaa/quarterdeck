@@ -25,7 +25,18 @@ export QUARTERDECK_DIR
 if [ -n "${QUARTERDECK_HOME:-}" ]; then QUARTERDECK_HOME_WHY="QUARTERDECK_HOME is set"
 elif [ -n "$_dd_explicit" ]; then QUARTERDECK_HOME="$_dd_explicit"; QUARTERDECK_HOME_WHY="QUARTERDECK_DIR is set (a throwaway Quarterdeck keeps its data with its code)"
 elif [ -f "$HOME/.quarterdeck/.quarterdeck-home" ]; then QUARTERDECK_HOME="$HOME/.quarterdeck"; QUARTERDECK_HOME_WHY="~/.quarterdeck has the marker file"
-else QUARTERDECK_HOME="$QUARTERDECK_DIR"; QUARTERDECK_HOME_WHY="no data folder set up yet: data stays inside the program folder, as before"; fi
+else
+  # Rule 4, nothing set up yet: bin/home.py first_run makes ~/.quarterdeck unless your data already lives in the program folder (issue #123:
+  # a first command must not write a registry, state or logs into the program). If python cannot answer, the older layout, as before.
+  _qd_fr=$(python3 "$QUARTERDECK_DIR/bin/home.py" first-run 2>/dev/null) || _qd_fr=""
+  if [ -n "$_qd_fr" ]; then
+    { read -r QUARTERDECK_HOME; read -r QUARTERDECK_HOME_WHY; read -r _qd_made; } <<<"$_qd_fr"
+    if [ "$_qd_made" = 1 ]; then
+      printf '  made your data folder: %s (first run; your projects, runs and logs live here, apart from the program)\n  next: qtdeck attach <your project folder>\n' "$QUARTERDECK_HOME" >&2
+    fi
+  else QUARTERDECK_HOME="$QUARTERDECK_DIR"; QUARTERDECK_HOME_WHY="no data folder set up yet: data stays inside the program folder, as before"; fi
+  unset _qd_fr _qd_made
+fi
 QUARTERDECK_HOME="${QUARTERDECK_HOME/#\~/$HOME}"
 export QUARTERDECK_HOME
 

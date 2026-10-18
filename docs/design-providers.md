@@ -163,7 +163,7 @@ A panel may mix providers across seats. That is a feature (different views) and 
 
 ## Doctor checks
 
-`qtdeck doctor` already checks binaries and runs the self-tests. For each provider that is configured on any seat:
+`qtdeck doctor` checks binaries; `qtdeck check` runs the self-tests. For each provider that is configured on any seat:
 
 1. The program or endpoint is present and its version is recorded. A version outside the range the adapter was tested against is a warning, because flags are the safety boundary (this is also on the list in [MODEL-PROVIDER-NOTES.md](../MODEL-PROVIDER-NOTES.md)).
 2. Sign-in works, using the cheapest possible call. No prompt content from a project.

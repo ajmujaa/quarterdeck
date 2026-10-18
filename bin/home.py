@@ -9,8 +9,10 @@ Which folder is the home, in this order (bin/lib.sh follows the same four rules)
   1. QUARTERDECK_HOME, if set;
   2. QUARTERDECK_DIR, if set: a throwaway Quarterdeck (the tests) keeps its data with its code;
   3. ~/.quarterdeck, once it carries the marker file .quarterdeck-home (made by `qtdeck home init`);
-  4. the program folder itself: the layout every earlier version had, so nothing moves until you say so.
+  4. on a first run, ~/.quarterdeck is made (first_run); the program folder itself only when your data already lives there (the older layout,
+     moved by `home migrate`) or ~/.quarterdeck cannot be made.
 """
+import json
 import os
 import sys
 from pathlib import Path
@@ -70,6 +72,37 @@ def init(path):
     if not marker.exists() and not marker.is_symlink():
         marker.write_text("This folder is a Quarterdeck home: your projects, state and logs live here, apart from the program.\n")
     return path
+
+
+def program_has_data(code=CODE):
+    """Whether someone's data already lives in the program folder (the older layout): a run on record, or a registry with a project in it.
+    A registry that does not parse counts as data: it is not ours to ignore."""
+    code = Path(code)
+    if (code / "state" / "runs.json").exists():
+        return True
+    reg = code / "config" / "projects.json"
+    if not reg.is_file():
+        return False
+    try:
+        return json.loads(reg.read_text()) != {}
+    except (OSError, ValueError):
+        return True
+
+
+def first_run(user_home=None, code=CODE):
+    """Rule 4, when nothing is set up yet: (home, why, made). Makes ~/.quarterdeck (0700, the marker, an empty registry) so nothing of yours is
+    written into the program folder. It does not when your data is already in the program folder (moving it is `home migrate`, a checked step),
+    when ~/.quarterdeck exists without the marker (`home rollback` switched it off on purpose), or when it cannot be made."""
+    default = Path(user_home or Path.home()) / ".quarterdeck"
+    if program_has_data(code):
+        return Path(code), "your data is still inside the program folder: `qtdeck home migrate` copies it to ~/.quarterdeck, checked", False
+    if default.exists() or default.is_symlink():
+        return Path(code), "~/.quarterdeck is there without its marker (switched off?): data stays inside the program folder", False
+    try:
+        init(default)
+    except OSError:
+        return Path(code), "~/.quarterdeck could not be made: data stays inside the program folder", False
+    return default, "~/.quarterdeck has the marker file", True
 
 
 # ---- moving an existing setup across: copy, check, switch, never delete -------------------------------------------------------------
@@ -258,6 +291,10 @@ if __name__ == "__main__":
         print(why())
     elif cmd == "init":
         print(init(sys.argv[2] if len(sys.argv) > 2 else Path.home() / ".quarterdeck"))
+        print("  next: qtdeck attach <your project folder>")
+    elif cmd == "first-run":                      # bin/lib.sh, rule 4: three lines, the home, why, and 1 if it was just made
+        h, w, made = first_run()
+        print(f"{h}\n{w}\n{int(made)}")
     elif cmd == "migrate":
         a = sys.argv[2:]
         dst = a[a.index("--to") + 1] if "--to" in a else str(Path.home() / ".quarterdeck")

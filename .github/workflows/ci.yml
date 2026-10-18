@@ -1,6 +1,7 @@
 name: ci
 
-# The same steps `bin/check.py` runs, minus the live dashboard health call.
+# `bin/check.py` runs every test: bin/selftest.py, every bin/selftest*.sh, the secrets guard (no denylist here), the privacy limit,
+# the vendor hashes, the node assistant test, the smoke test and the rehearsal. The live dashboard is not running, so its health is skipped.
 # Every step uses a throwaway HOME, so the tests start from a clean data folder.
 # Nothing here needs a secret, a private denylist or a real data folder.
 
@@ -20,7 +21,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       # Linux only (ignored on macOS): the pilot and lookout tests start an app a browser must reach, which on Linux needs the owner's opt-in (SECURITY.md)
       QUARTERDECK_APP_NET: ${{ matrix.os == 'ubuntu-latest' && 'share' || '' }}
@@ -45,25 +46,8 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/home"
           echo "HOME=$RUNNER_TEMP/home" >> "$GITHUB_ENV"
-      - name: Selftest
-        run: python3 bin/selftest.py
-      - name: Secrets guard (no denylist, credentials only)
-        run: python3 bin/guard.py
-      - name: Privacy limit
-        run: python3 bin/forbidden_signals.py
-      - name: Assistant page logic (node)
-        run: |
-          if command -v node >/dev/null; then node --no-warnings bin/selftest-assistant.mjs; else echo "node not installed, skipped"; fi
-      - name: Shell selftests
-        run: |
-          for t in bin/selftest.sh bin/selftest-fix.sh bin/selftest-harbourmaster.sh bin/selftest-panel.sh bin/selftest-purser.sh bin/selftest-planner.sh bin/selftest-untrusted.sh bin/selftest-packs.sh bin/selftest-portable.sh bin/selftest-pilot.sh bin/selftest-lookout.sh bin/selftest-marshal.sh bin/selftest-caulker.sh bin/selftest-assayer.sh bin/selftest-logkeeper.sh bin/selftest-quartermaster.sh bin/selftest-bosun.sh bin/selftest-cycle.sh bin/selftest-infra.sh bin/selftest-brief.sh bin/selftest-mockup.sh; do
-            echo "== $t"
-            bash "$t"
-          done
-      - name: Smoke test
-        run: python3 bin/smoke.py
-      - name: Rehearsal
-        run: python3 bin/rehearse.py
+      - name: Every test (what `qtdeck check` runs; the suite list is found by name, so none is left out)
+        run: python3 bin/check.py
 
 # Dependencies: there are none to audit. Quarterdeck is Python standard library and
 # bash only (jq, git and gh are tools it calls, not packages it installs); node is

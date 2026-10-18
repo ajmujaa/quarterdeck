@@ -149,9 +149,14 @@ no_gh_writes() { [ ! -f "$T/gh-calls" ] || [ "$(gh_writes)" = 0 ]; }
 
 # Browser checks need playwright and a browser; say plainly when this machine has neither, and run nothing then. The probe launches the way
 # bin/browse.mjs does (its executable, the renderer sandbox on: round 8, L18), so a machine where that cannot start is a skip, not 50 failures.
+# Whether a browser can start here, asked of bin/browse.mjs itself (`probe`: the same launch, renderer sandbox on, same flags, as a run), so a
+# machine where it cannot start (root in a container, no Chromium) skips the browser checks instead of failing them. Asked once per suite.
 st_have_browser() {
   [ -z "${NODE_PATH:-}" ] && [ -d /opt/node-tools/node_modules ] && export NODE_PATH=/opt/node-tools/node_modules
-  command -v node >/dev/null 2>&1 && node -e 'require("playwright")' 2>/dev/null \
-    && node -e 'require("playwright").chromium.launch({executablePath:process.env.QUARTERDECK_CHROMIUM||undefined,chromiumSandbox:true}).then(b=>b.close()).then(()=>process.exit(0),()=>process.exit(1))' 2>/dev/null
+  if [ -z "${_ST_BROWSER:-}" ]; then
+    command -v node >/dev/null 2>&1 && node "$REAL/bin/browse.mjs" probe >/dev/null 2>&1 && _ST_BROWSER=yes || _ST_BROWSER=no
+  fi
+  [ "$_ST_BROWSER" = yes ]
 }
 st_skip() { printf '  skip  %s\n' "$1"; }
+st_skip_browser() { st_skip "skipped: no usable browser (playwright or Chromium cannot start here): $1"; }

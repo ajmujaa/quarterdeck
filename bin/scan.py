@@ -137,6 +137,11 @@ def scan(path):
                     add(prof, "frameworks", label, f"{ev} lists {dep}")
             if "pytest" in text or "tests" in dirs or "test" in dirs:
                 add(prof, "commands", "test: python -m pytest", ev)
+    # pytest without a manifest that names it: its own config files, or test files laid out the way it finds them
+    pyt = [f for f in files if base(f) in ("pytest.ini", "conftest.py", "tox.ini")] + \
+          [f for f in files if f.endswith(".py") and (base(f).startswith("test_") or base(f).endswith("_test.py"))]
+    if pyt and not any(c["name"].startswith("test:") for c in prof["commands"]):
+        add(prof, "commands", "test: python -m pytest", pyt[0])
     for manifest, mgr in (("go.mod", "go modules"), ("Cargo.toml", "cargo"), ("pom.xml", "maven"), ("build.gradle", "gradle"), ("build.gradle.kts", "gradle"),
                           ("Gemfile", "bundler"), ("composer.json", "composer"), ("Package.swift", "swift package manager")):
         if manifest in names:

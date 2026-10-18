@@ -18,19 +18,38 @@ if [ "${1:-}" = home ] && [[ "${2:-}" == migrate-from-* ]]; then
   from="${2#migrate-from-}"; shift 2
   exec python3 "$SELF/legacy_home.py" migrate "$from" "$@"
 fi
-source "$SELF/lib.sh"
 
-usage() {
+usage() {   # the day-one commands; `qtdeck help more` lists the rest
   cat <<'EOF'
 Usage: qtdeck <command>
 
+  setup                       check the tools you need and say how to install what is missing (installs nothing)
+  attach <dir> [--apply]      scan a project folder and propose a set-up; --apply registers it
+  run <project> <duty> [...]  run one duty once, for example: run my-app surveyor --pr 12 (reports only unless --apply)
+  dashboard [--no-open]       start the dashboard on this machine and open it (--no-open: only print the link)
+  doctor                      a quick wiring check: tools, sign-ins, data folder, dashboard, sandbox
+  status                      what is registered, what has run
+  plan list <project>         sprint plans the planner wrote, and their status
+  cycle <project> --issue <n> one issue through the whole crew, then stop for you
+  help [more]                 this list; help more lists every command and flag
+
+Settings: QUARTERDECK_HOME (your data folder, default ~/.quarterdeck), QUARTERDECK_DASHBOARD_PORT (default 7878).
+EOF
+}
+
+usage_more() {
+  cat <<'EOF'
+Usage: qtdeck <command>
+
+  setup                       check the tools and print the install command for anything missing; installs nothing
   status                      what is registered, what has run, what is pending
-  doctor                      check the wiring: claude, gh, jq, repos, config
+  doctor [--full]             a quick wiring check; --full also runs every test (what check runs)
   check                       run every test and ask the dashboard if it is healthy: green or red
   home [init [path]]          show where your data lives (apart from the program); init makes ~/.quarterdeck
   home migrate [--apply]      copy your data from the program folder to ~/.quarterdeck, verified; dry run unless --apply
   home rollback               switch back to the program folder (nothing is deleted)
-  projects                    list registered projects and their duties
+  projects                    list registered projects
+  repo <project> <owner/name> set the GitHub repo of a registered project
   duties                      list available duties
   crew                        list the crew and which panel each sits on
   add [name]                  register a project (infers repo and path from the
@@ -60,7 +79,7 @@ Usage: qtdeck <command>
   brief approve <id> | changes <id> "note" | list     answer a brief; brief --revise <id> writes the next version
   mockup <brief-id> [--apply] the modelmaker: static pages, one per screen, from an APPROVED brief; checked by the harness
   mockup approve <brief-id> | changes <brief-id> "note"     answer a set of mock-ups
-  dashboard [stop|link|sessions revoke]  start and open the live dashboard (loopback only); link prints a new one-time pairing link; sessions revoke signs every paired browser out
+  dashboard [--no-open|stop|link|sessions revoke]  start and open the live dashboard (loopback only); --no-open only prints the link; link prints a new one-time pairing link; sessions revoke signs every paired browser out
   keys set anthropic          store the Anthropic API key: read from standard input only, never an argument (keys remove anthropic)
   keys                        which keys are stored (never a value)
   billing [<duty> plan|api]   who pays for a duty's model calls: your plan (default) or the API key; with no arguments, each duty's setting
@@ -94,7 +113,7 @@ Flags for add:
 
 qtdeck new <name> [--in DIR] [--about "..."]
                         start something new: a folder with git and a README, nothing registered
-  qtdeck attach <dir> [--name N] [--apply]
+  qtdeck attach <dir> [--name N] [--verify "<command>"] [--verbose] [--apply]
                         scan a folder and propose the crew set-up; --apply registers it
 
 Onboarding any project is two commands:
@@ -114,6 +133,15 @@ EOF
 }
 
 cmd="${1:-status}"; shift || true
+
+# Answered before lib.sh, which makes the data folder: help writes nothing, and a typo is an error, not a usage page and exit 0.
+case "$cmd" in
+  -h|--help|help) if [ "${1:-}" = more ]; then usage_more; else usage; fi; exit 0 ;;
+  setup) exec python3 "$SELF/setup.py" "$@" ;;
+  status|doctor|check|home|projects|duties|crew|add|remove|repo|run|spend|fix|cycle|plan|brief|mockup|dashboard|keys|billing|logs|runs|new|attach) ;;
+  *) { echo "qtdeck: unknown command '$cmd'"; echo; usage; } >&2; exit 2 ;;
+esac
+source "$SELF/lib.sh"
 
 case "$cmd" in
   status)
@@ -136,102 +164,70 @@ case "$cmd" in
       echo "  recent:"
       jq -r '.[-5:] | reverse[] | "    \(.at[0:16])  \(.project)/\(.duty)  \(.verdict)\(if .detail != "" then "  — " + .detail else "" end)"' "$RUNS_LEDGER"
     fi
+    if [ -z "$(project_names)" ]; then echo; echo "  next: qtdeck attach <your project folder>"
+    elif [ "$local_n" = 0 ]; then echo; echo "  next: qtdeck run $(project_names | head -1) surveyor --pr <number>"; fi
     ;;
 
   doctor)
-    fail=0
-    chk() { # chk <label> <ok?> <detail>
-      if [ "$2" = ok ]; then printf '  \033[32m✓\033[0m %-22s %s\n' "$1" "$3"
-      else printf '  \033[31m✗\033[0m %-22s %s\n' "$1" "$3"; fail=1; fi
+    # The wiring only, in seconds: tools, sign-ins, data folder, dashboard, sandbox, providers, billing. Every test is `qtdeck check`
+    # (or `doctor --full`, which runs it after this).
+    probs=()
+    chk() { # chk <label> <ok|no|info> <detail>
+      case "$2" in
+        ok) printf '  \033[32m✓\033[0m %-22s %s\n' "$1" "$3" ;;
+        info) printf '  - %-22s %s\n' "$1" "$3" ;;
+        *) printf '  \033[31m✗\033[0m %-22s %s\n' "$1" "$3"; probs+=("$1") ;;
+      esac
     }
     echo "── Quarterdeck doctor ──"
     echo
-    [ -n "$CLAUDE_BIN" ] && chk "claude" ok "$CLAUDE_BIN" || chk "claude" no "not on PATH"
-    command -v jq >/dev/null && chk "jq" ok "$(command -v jq)" || chk "jq" no "missing"
-    command -v gh >/dev/null && chk "gh" ok "$(command -v gh)" || chk "gh" no "missing"
-    if gh auth status >/dev/null 2>&1; then
-      chk "gh auth" ok "$(gh api user --jq .login 2>/dev/null || echo 'authenticated')"
-    else
-      chk "gh auth" no "not logged in — run: gh auth login"
-    fi
+    ghb="${QUARTERDECK_GH:-gh}"
+    if [ -n "$CLAUDE_BIN" ]; then
+      chk "claude" ok "$CLAUDE_BIN"
+      if guard 8 "$CLAUDE_BIN" auth status >/dev/null 2>&1; then chk "claude sign-in" ok "yes"
+      else chk "claude sign-in" no "not signed in: run claude once in a terminal and sign in"; fi
+    else chk "claude" no "not found: install Claude Code (https://claude.com/claude-code), then run: qtdeck setup"; fi
+    command -v jq >/dev/null && chk "jq" ok "$(command -v jq)" || chk "jq" no "missing: run qtdeck setup for the install command"
+    command -v git >/dev/null && chk "git" ok "$(command -v git)" || chk "git" no "missing: run qtdeck setup for the install command"
+    if command -v "$ghb" >/dev/null; then
+      chk "gh" ok "$(command -v "$ghb")"
+      if guard 8 "$ghb" auth status >/dev/null 2>&1; then chk "gh sign-in" ok "yes"
+      else chk "gh sign-in" no "not signed in: run gh auth login"; fi
+    else chk "gh" no "missing: run qtdeck setup for the install command"; fi
+    if [ "$QUARTERDECK_HOME" = "$QUARTERDECK_DIR" ]; then chk "data folder" info "$QUARTERDECK_HOME (inside the program folder: $QUARTERDECK_HOME_WHY)"
+    else chk "data folder" ok "$QUARTERDECK_HOME"; fi
     jq -e . "$PROJECTS_FILE" >/dev/null 2>&1 \
       && chk "projects.json" ok "$(project_names | wc -l | tr -d ' ') project(s)" \
       || chk "projects.json" no "does not parse"
-    sb=$(qd_sandbox_status); chk "project sandbox" "${sb%% *}" "${sb#* }"
-    # The model providers behind claude_run (docs/design-providers.md): each one, whether it can run here, and every seat or duty that names one.
-    provider_report || fail=1
-    echo
-    # Who pays for each duty's model calls, and whether the API key is stored: its presence, never its value (bin/billing.py).
-    while IFS=$'\t' read -r bok blabel bdetail; do chk "$blabel" "$bok" "$bdetail"; done < <(python3 "$QUARTERDECK_DIR/bin/billing.py" doctor 2>/dev/null)
-    echo
     while read -r p; do
       d=$(project_path "$p")
-      if [ -d "$d/.git" ]; then
-        chk "repo: $p" ok "$d"
-      elif [ -d "$d" ]; then
-        chk "repo: $p" no "$d exists but is not a git checkout"
-      else
-        chk "repo: $p" no "$d not found"
-      fi
+      if [ -d "$d/.git" ]; then chk "repo: $p" ok "$d"
+      elif [ -d "$d" ]; then chk "repo: $p" no "$d exists but is not a git checkout"
+      else chk "repo: $p" no "$d not found"; fi
       for duty in $(jq -r --arg p "$p" '(.[$p].duties // [])[]' "$PROJECTS_FILE"); do
         duty_exists "$duty" || chk "  duty: $p/$duty" no "duties/$duty.sh not implemented yet"
       done
     done < <(project_names)
+    port="${QUARTERDECK_DASHBOARD_PORT:-7878}"
+    if curl -sf -m 2 -o /dev/null "http://127.0.0.1:$port/api/health" 2>/dev/null; then chk "dashboard" ok "running on 127.0.0.1:$port"
+    else chk "dashboard" info "not running (start it with: qtdeck dashboard)"; fi
+    sb=$(qd_sandbox_status); chk "project sandbox" "${sb%% *}" "${sb#* }"
+    # The model providers behind claude_run (docs/design-providers.md): each one, whether it can run here, and every seat or duty that names one.
+    provider_report || probs+=("providers")
+    # Who pays for each duty's model calls, and whether the API key is stored: its presence, never its value (bin/billing.py). While nothing is
+    # on the API key that is one line; `qtdeck billing` lists every duty.
+    bl=$(python3 "$QUARTERDECK_DIR/bin/billing.py" doctor 2>/dev/null)
+    if awk -F'\t' '$2 ~ /^billing: / && $3 !~ /^your plan/ { f = 1 } END { exit !f }' <<<"$bl"; then
+      while IFS=$'\t' read -r bok blabel bdetail; do [ -n "$blabel" ] && chk "$blabel" "$bok" "$bdetail"; done <<<"$bl"
+    else
+      while IFS=$'\t' read -r bok blabel bdetail; do [ "$blabel" = "API key" ] && chk "billing" "$bok" "$bdetail"; done <<<"$bl"
+    fi
     echo
-    # The wiring above is files and binaries. This is the logic that decides
-    # when something runs unattended and what a loopback POST may start.
-    for st_file in selftest.py selftest.sh selftest-fix.sh selftest-panel.sh selftest-harbourmaster.sh selftest-purser.sh selftest-planner.sh selftest-untrusted.sh selftest-pilot.sh selftest-portable.sh selftest-lookout.sh selftest-marshal.sh selftest-caulker.sh selftest-assayer.sh selftest-logkeeper.sh selftest-quartermaster.sh selftest-bosun.sh selftest-packs.sh selftest-cycle.sh selftest-diet.sh selftest-infra.sh selftest-brief.sh selftest-mockup.sh selftest-security.sh selftest-checks.sh selftest-terraform.sh selftest-injection.sh selftest-providers.sh selftest-billing.sh selftest-round8.sh; do
-      [ -f "$QUARTERDECK_DIR/bin/$st_file" ] || continue
-      case "$st_file" in
-        # the tests build their own throwaway folders: they must not inherit this installation's data folder, which would take precedence
-        *.py) st=$(env -u QUARTERDECK_HOME -u QUARTERDECK_HOME_WHY python3 "$QUARTERDECK_DIR/bin/$st_file" 2>&1) ;;
-        *.sh) st=$(env -u QUARTERDECK_HOME -u QUARTERDECK_HOME_WHY bash "$QUARTERDECK_DIR/bin/$st_file" 2>&1) ;;
-      esac
-      strc=$?
-      case "$st_file" in
-        selftest.py)     label="self-check (logic)" ;;
-        selftest.sh)     label="self-check (commit gate)" ;;
-        selftest-fix.sh) label="self-check (fix pipeline)" ;;
-        selftest-panel.sh) label="self-check (panel prompts)" ;;
-        selftest-harbourmaster.sh) label="self-check (board notes stay local)" ;;
-        selftest-portable.sh) label="self-check (scripts run on macOS bash 3.2 and BSD tools)" ;;
-        selftest-purser.sh) label="self-check (requirements reach the issue body only)" ;;
-        selftest-planner.sh) label="self-check (the planner: validated plans, measured cost only, no card moves before approval)" ;;
-        selftest-packs.sh) label="self-check (stack notes reach prompts from listed packs only)" ;;
-        selftest-untrusted.sh) label="self-check (third-party text reaches prompts only as data)" ;;
-        selftest-pilot.sh) label="self-check (the pilot: the harness drives the browser)" ;;
-        selftest-lookout.sh) label="self-check (the lookout: only pictures the harness took)" ;;
-        selftest-marshal.sh) label="self-check (the marshal: forbidden paths block before any model)" ;;
-        selftest-caulker.sh) label="self-check (the caulker: only what was found, only the PR's own branch, three cycles)" ;;
-        selftest-assayer.sh) label="self-check (the assayer: tests that fail first, written without the builder's code)" ;;
-        selftest-logkeeper.sh) label="self-check (the logkeeper: records, and what a review is shown)" ;;
-        selftest-quartermaster.sh) label="self-check (the quartermaster: facts by the harness, notes are data)" ;;
-        selftest-bosun.sh) label="self-check (the bosun: the harness finds, nothing is written to a repo)" ;;
-        selftest-infra.sh) label="self-check (the infra duty: files only, no cloud tool, no credential, report-only writes nothing)" ;;
-        selftest-brief.sh) label="self-check (the brief: plain words, bounded, no code, written only to the data folder)" ;;
-        selftest-mockup.sh) label="self-check (the mock-ups: only an approved brief, pages parsed against an allowlist, nothing that runs or loads)" ;;
-        selftest-checks.sh) label="self-check (project commands: minimal environment, sandbox, protected paths refused before any check)" ;;
-        selftest-terraform.sh) label="self-check (Terraform authoring: a folder Where unlocks .tf only, fmt and validate only, never plan or apply)" ;;
-        selftest-injection.sh) label="self-check (prompt injection: hostile text stays data in every prompt; a model that obeys is contained)" ;;
-        selftest-providers.sh) label="self-check (providers: claude started exactly as before the seam; the fake adapter; unknown providers refused)" ;;
-        selftest-security.sh) label="self-check (security: the harness checks, one per fix, each written to fail before it)" ;;
-        selftest-cycle.sh) label="self-check (the cycle: stage order, caps, resume, report-only writes nothing)" ;;
-        selftest-diet.sh) label="self-check (fewer tokens: turn caps, reuse only on identical inputs, panel rounds, seat models)" ;;
-        # expected failures (docs/review-round-8.md): an open finding is "xfail" and a fixed one "xpass"; neither fails the doctor
-        selftest-round8.sh) label="self-check (round 8 review: expected failures until each finding is fixed)" ;;
-        selftest-billing.sh) label="self-check (billing: the API key only in an api duty's environment, plan duties never get one, caps stop with NEEDS_HUMAN)" ;;
-      esac
-      if [ "$strc" = 0 ]; then
-        xf=$(grep -c '^  xfail' <<<"$st"); xp=$(grep -c '(xpass' <<<"$st")
-        chk "$label" ok "$(grep -c '^  ok' <<<"$st") check(s) passed$([ "$xf" = 0 ] || echo ", $xf expected failure(s) still open")$([ "$xp" = 0 ] || echo ", $xp now pass (move them into their selftest)")"
-      else
-        chk "$label" no "$(grep -c 'FAIL\|ERROR' <<<"$st") failed"
-        grep 'FAIL\|ERROR' <<<"$st" | sed 's/^ */      /'
-      fi
-    done
-    echo
-    [ "$fail" = 0 ] && echo "  all good." || echo "  some checks failed — see above."
-    exit "$fail"
+    if [ "${#probs[@]}" = 0 ]; then echo "  all good"
+    else n=${#probs[@]}; echo "  $n problem$([ "$n" = 1 ] || echo s): $(printf '%s, ' "${probs[@]}" | sed 's/, $//')"; fi
+    rc=$([ "${#probs[@]}" = 0 ] && echo 0 || echo 1)
+    if [ "${1:-}" = --full ]; then echo; python3 "$QUARTERDECK_DIR/bin/check.py" || rc=1; fi
+    exit "$rc"
     ;;
 
   spend)
@@ -254,7 +250,7 @@ case "$cmd" in
       printf '  %-14s %s\n' "$d/" "$([ -d "$QUARTERDECK_HOME/$d" ] && echo "$(ls "$QUARTERDECK_HOME/$d" 2>/dev/null | wc -l | tr -d ' ') item(s)" || echo "not there yet")"
     done
     if [ "$QUARTERDECK_HOME" = "$QUARTERDECK_DIR" ]; then
-      echo; echo "  your data still sits inside the program folder. 'qtdeck home init' makes ~/.quarterdeck; moving what you have there is a separate, checked step."
+      echo; echo "  your data still sits inside the program folder. 'qtdeck home migrate' copies it to ~/.quarterdeck, checked, and switches over (the originals stay)."
     fi
     ;;
 
@@ -279,8 +275,14 @@ case "$cmd" in
     if [ "$(jq 'length' "$PROJECTS_FILE" 2>/dev/null || echo 0)" = 0 ]; then
       echo "  no projects yet. Run 'qtdeck add' inside a repository, or copy config/projects.example.json to $QUARTERDECK_HOME/config/projects.json and edit it."
     else
-      jq -r 'to_entries[] | "\(.key)\t\(.value.repo)\t\(.value.summary // "")"' "$PROJECTS_FILE" | column -t -s $'\t'
+      # printf, not column: a bare Linux has no column, and the list came out empty
+      jq -r 'to_entries[] | "\(.key)\t\(.value.repo // "" | if . == "" then "(no GitHub repo)" else . end)\t\(.value.summary // "")"' "$PROJECTS_FILE" \
+        | while IFS=$'\t' read -r pn pr ps; do printf '  %-20s %-34s %s\n' "$pn" "$pr" "$ps"; done
     fi ;;
+  repo)
+    # repo <project> <owner/name>: the GitHub repo a project's duties read and post to; checked the same way attach checks one
+    [ $# = 2 ] || die "usage: qtdeck repo <project> <owner/name>"
+    exec python3 "$QUARTERDECK_DIR/bin/attach.py" set-repo "$1" "$2" ;;
   duties)
     # Two kinds of thing, never again in one list. An agent does a job alone;
     # a panel seats several crew on one question and has a chair rule on it.
@@ -382,6 +384,10 @@ case "$cmd" in
       || die "'$duty' is not enabled for '$project' — add it to duties[] in config/projects.json"
     wdir=$(project_path "$project")
     [ -d "$wdir/.git" ] || die "no git checkout at $wdir"
+    # every duty reads or posts to GitHub, except the infra duty on a local diff
+    if [ -z "$(project_get "$project" repo)" ] && ! { [ "$duty" = infra ] && [[ " $* " == *" --diff "* ]]; }; then
+      die "this project has no GitHub repo set; set it with: qtdeck repo $project <owner/name>"
+    fi
     export QUARTERDECK_PROJECT="$project" QUARTERDECK_WORKDIR="$wdir"
     # --fresh: ask the model again even when an earlier answer to the same inputs could be reused (QUARTERDECK_REUSE)
     args=(); for a in "$@"; do if [ "$a" = --fresh ]; then export QUARTERDECK_FRESH=1; else args+=("$a"); fi; done
@@ -458,6 +464,7 @@ case "$cmd" in
     link=$(python3 "$QUARTERDECK_DIR/bin/dashboard.py" link) || { echo "could not make a link; is the data folder writable?"; exit 1; }
     echo "dashboard: $link"
     echo "  (a one-time link, good for 5 minutes; \`qtdeck dashboard link\` makes another)"
+    echo "  Switch Demo on to look around before you connect anything."
     if [ "${1:-}" != "--no-open" ]; then
       # The code is never given to a program as an argument: every process of this user can read the arguments of every other (ps, pgrep, and a
       # sandbox cannot hide them), so `open "$link"` published the one-time code for as long as the browser took to start (round-3 S4). The browser
@@ -508,5 +515,4 @@ case "$cmd" in
 
   runs) jq --argjson n "${1:-20}" '.[-$n:]' "$RUNS_LEDGER" ;;
 
-  *) usage ;;
 esac

@@ -144,7 +144,7 @@ seen = [kind[e["type"]] + " " + json.dumps(e.get("params", {}))[:120] for e in d
 print("\n".join(seen[:5])); sys.exit(1 if seen else 0)
 PY'
 else
-  st_skip "H2 live WebSocket check (no playwright or no browser on this machine)"
+  st_skip_browser "the H2 live WebSocket check did not run"
 fi
 
 # route choice is a pure function: no browser needed
@@ -171,7 +171,7 @@ ck "  and told to use invented data only" 'grep -q "invented data only" "$T/clau
 ck "  the project guardrails reach every seat" 'grep -q "Never touch money code" "$T/claude-calls"'
 
 else
-  st_skip "no playwright or no browser on this machine: the checks that need the first-screen preflight to pass did not run"
+  st_skip_browser "the checks that need the first-screen preflight to pass did not run"
 fi
 
 if st_have_browser; then
@@ -216,7 +216,7 @@ RESULT: PLAN 8 flow(s)"
   QUARTERDECK_MAX_ITEMS=2 st_duty pilot --pr 1 --apply
   ck "QUARTERDECK_MAX_ITEMS caps the flows each seat may bring (2 each, 6 in all)" 'grep -q "6 flow(s)" "$T/workspace/tp-pilot-pr1.md"'
 else
-  st_skip "no playwright or no browser on this machine: the browser checks did not run (they run on the Mac, and in any session with chromium)"
+  st_skip_browser "the browser checks did not run (they run on the Mac, and in any session with chromium)"
 fi
 
 # ---- an app that could not start properly is BLOCKED, never FAILED or PASSED --------------------------------------------------------------
@@ -263,7 +263,7 @@ RESULT: PLAN 1 flow(s)'
   st_duty pilot --pr 2 --apply
   ck "one flow failing while the others pass is still a real FAILED 1" '[ "$(last_verdict)" = FAILED ]'
 else
-  st_skip "no playwright or no browser on this machine: the BLOCKED-app checks did not run"
+  st_skip_browser "the BLOCKED-app checks did not run"
 fi
 # ---- route list and coverage, with a stand-in driver so no browser is needed ----------------------------------------------------
 # The stand-in answers like bin/browse.mjs: shoot -> a clean first screen, check -> every flow valid, run -> every flow ok (a title with FAIL fails at step 2).

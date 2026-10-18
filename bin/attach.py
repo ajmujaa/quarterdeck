@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """attach: scan a project folder, propose how the crew should work on it, and register it only when you say so.
 
-    bin/attach.py PATH [--name NAME]            show the profile and the proposal; changes nothing
-    bin/attach.py PATH [--name NAME] --apply    register it in your registry and keep the profile and a record of what was proposed
+    bin/attach.py PATH [--name NAME] [--verify "CMD"] [--verbose]   a short summary of the proposal; changes nothing
+    bin/attach.py PATH [--name NAME] [--verify "CMD"] --apply       register it in your registry and keep the profile and a record of what was proposed
+    bin/attach.py set-repo NAME OWNER/REPO                         set the GitHub repo of a registered project
+
+--verify sets the command that proves a change works when the scan found none (or found the wrong one). --verbose shows the whole scan and every
+protected path.
 
 The proposal is what the scan supports and no more: the read-only duties first, the verify command only if the project has one, the
 paths the crew may not touch taken from the sensitive folders and secret files found. Nothing is written into the project itself.
@@ -10,7 +14,9 @@ The registry, the profile and the record all live in your data folder. Standard 
 """
 import json
 import os
+import platform
 import re
+import shlex
 import sys
 import time
 from pathlib import Path
@@ -43,8 +49,15 @@ def default_branch(root, prof):
     return b if _safegit.valid_branch(b) else "main"
 
 
-WARNING = ("Attaching a folder lets it influence what runs on this machine: the crew reads its files, and the harness runs its verify, test and build commands "
-           "(with a minimal environment and no secrets, inside the macOS sandbox where there is one). Its own agent set-up (.claude/settings.json, hooks, .mcp.json) is never loaded by the crew. Attach only folders you trust.")
+def warning(system=None):
+    """The attach warning, naming the sandbox this platform has: macOS sandbox-exec, Linux bubblewrap."""
+    system = system or platform.system()
+    sandbox = "inside the macOS sandbox" if system == "Darwin" else "inside the bubblewrap sandbox; without it they are not run" if system == "Linux" else "inside the operating-system sandbox where there is one"
+    return ("Attaching a folder lets it influence what runs on this machine: the crew reads its files, and the harness runs its verify, test and build commands "
+            f"(with a minimal environment and no secrets, {sandbox}). Its own agent set-up (.claude/settings.json, hooks, .mcp.json) is never loaded by the crew. Attach only folders you trust.")
+
+
+WARNING = warning()
 REPO_OK = re.compile(r"[A-Za-z0-9_.][A-Za-z0-9_.-]{0,38}/[A-Za-z0-9_.][A-Za-z0-9_.-]{0,99}")   # a GitHub owner/name; never a leading dash, quote, $ or ;
 
 
@@ -52,6 +65,18 @@ def repo_of(prof):
     """owner/repo from the origin URL, only if it is a plain GitHub name: a folder's .git/config is untrusted text and this ends up in gh -R and URLs."""
     m = re.search(r"github\.com[:/]([^/\s]+/[^/\s]+?)(?:\.git)?$", prof["git"].get("origin", ""))
     return m.group(1) if m and REPO_OK.fullmatch(m.group(1)) and ".." not in m.group(1) else ""
+
+
+def tilde(root):
+    """~/... for a folder inside the home folder (as given, or with its links resolved), else the path as it is. A plain text replace turned
+    /private/var/x/home/p into /private~/p when the home folder itself sits behind a link."""
+    root = Path(root)
+    for h in dict.fromkeys((Path.home(), Path.home().resolve())):
+        try:
+            return "~/" + str(root.relative_to(h)) if root != h else "~"
+        except ValueError:
+            continue
+    return str(root)
 
 
 def propose(prof, name=None):
@@ -70,7 +95,7 @@ def propose(prof, name=None):
            "forbidden_paths": "sensitive folders and secret files found by the scan, and the build, CI and dependency files no model-made change may touch (bin/protect.py)"}
     fit = _packs.select(prof)
     why["packs"] = ("stack notes for " + ", ".join(p["label"] for p, _ in fit) + ": " + "; ".join(h[0] for _, h in fit)) if fit else "no stack pack fits this project"
-    entry = {"repo": repo_of(prof), "path": str(root).replace(str(Path.home()), "~", 1), "summary": "", "default_branch": default_branch(root, prof),
+    entry = {"repo": repo_of(prof), "path": tilde(root), "summary": "", "default_branch": default_branch(root, prof),
              "duties": duties, "guardrails": list(GUARDRAILS), "verify": verify, "forbidden_paths": sorted(dict.fromkeys(forbidden)),
              "packs": [p["id"] for p, _ in fit]}
     agent = [f"{c['name']}: {', '.join(c['evidence'][:3])}" for c in prof.get("agent_config", [])]
@@ -211,6 +236,37 @@ def apply(prop, prof, reg=None, proposed=None, by="owner, with --apply"):
     return reg
 
 
+def set_repo(name, repo, reg=None):
+    """Set the GitHub repo of a registered project. Only a plain owner/name: it ends up in gh -R and URLs."""
+    reg = Path(reg or registry_path())
+    cur = load_registry(reg)
+    if name not in cur:
+        raise ValueError(f"'{name}' is not registered (see: qtdeck projects)")
+    if not REPO_OK.fullmatch(repo or "") or ".." in repo:
+        raise ValueError(f"'{repo[:60]}' is not a GitHub owner/name, like octocat/hello-world")
+    cur[name]["repo"] = repo
+    tmp = reg.with_suffix(".tmp")
+    tmp.write_text(json.dumps(cur, indent=2) + "\n")
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, reg)
+    return reg
+
+
+def summary(prof, prop, path):
+    """The short version: what was found, what would run, how a change is proved, and what to do next."""
+    e, n = prop["entry"], prop["name"]
+    langs = ", ".join(f"{l['name']} ({l['evidence'][0].split(' ', 1)[0]})" for l in prof["languages"][:4]) or "none recognised"
+    print(f"  {n}  ({path})")
+    print(f"    languages     {langs}")
+    print(f"    duties        {', '.join(e['duties'])}")
+    print(f"    verify        {e['verify'] + '   (' + prop['reasons']['verify'] + ')' if e['verify'] else 'none found; set it with --verify \"<command that runs the tests>\"'}")
+    print(f"    repo          {e['repo'] or 'none (no GitHub remote); set it after --apply with: qtdeck repo ' + n + ' <owner/name>'}")
+    print(f"    protected     {len(e['forbidden_paths'])} paths the crew may not change (--verbose lists them)")
+    if prof["secret_files"]:
+        print(f"    secret files  {len(prof['secret_files'])} found, never opened, on the protected list")
+    print(f"  WARNING  {prop['warning']}")
+
+
 def say(prop):
     e = prop["entry"]
     print(f"  proposal for '{prop['name']}'")
@@ -225,11 +281,27 @@ def say(prop):
 
 
 def main(argv):
-    args, path, name, do = list(argv), None, None, False
+    if argv[:1] == ["set-repo"]:
+        if len(argv) != 3:
+            print("usage: qtdeck repo <project> <owner/name>")
+            return 2
+        try:
+            set_repo(argv[1], argv[2])
+        except ValueError as e:
+            print(f"  {e}")
+            return 2
+        print(f"  {argv[1]}: GitHub repo set to {argv[2]}")
+        print(f"  next: qtdeck run {argv[1]} surveyor --pr <number>")
+        return 0
+    args, path, name, do, verify, verbose = list(argv), None, None, False, None, False
     while args:
         a = args.pop(0)
         if a == "--name" and args:
             name = args.pop(0)
+        elif a == "--verify" and args:
+            verify = args.pop(0)
+        elif a == "--verbose":
+            verbose = True
         elif a == "--apply":
             do = True
         elif a in ("-h", "--help"):
@@ -245,13 +317,23 @@ def main(argv):
         return 2
     try:
         prof = _scan.scan(path)
-        _scan.say(prof)
         prop = propose(prof, name)
-        say(prop)
-        if do:
-            print(f"  registered in {apply(prop, prof)}; the profile and a record of this proposal are in {_scan.profile_dir()}")
+        if verify is not None:
+            prop = edit(prop, {"verify": verify})
+            prop["reasons"]["verify"] = "set with --verify"
+        if verbose:
+            _scan.say(prof)
+            say(prop)
         else:
-            print("  nothing was changed. Add --apply to register it.")
+            summary(prof, prop, path)
+        again = f"qtdeck attach {shlex.quote(path)}" + (f" --name {shlex.quote(name)}" if name else "") + (f" --verify {shlex.quote(verify)}" if verify else "")
+        if do:
+            reg = apply(prop, prof)
+            print(f"  registered '{prop['name']}'" + (f" in {reg}; the profile and a record of this proposal are in {_scan.profile_dir()}" if verbose else " in your data folder"))
+            print(f"  next: qtdeck repo {prop['name']} <owner/name>" if not prop["entry"]["repo"] else f"  next: qtdeck run {prop['name']} surveyor --pr <number>")
+        else:
+            print("  nothing was changed.")
+            print(f"  next: {again} --apply")
     except ValueError as e:
         print(f"  {e}")
         return 2

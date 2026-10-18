@@ -225,6 +225,12 @@ export async function shoot(spec, outdir) {
 
 async function main() {
   const [cmd, input, outdir] = process.argv.slice(2);
+  if (cmd === "probe") {      // can a browser start here, exactly as a run starts one (the selftests skip their browser checks when not)
+    const l = await launch("http://127.0.0.1:9/");
+    if (l.browser) await l.browser.close();
+    console.log(JSON.stringify(l.browser ? {ok: true} : {error: l.error}));
+    process.exit(l.browser ? 0 : 1);
+  }
   let data;
   try { data = JSON.parse(fs.readFileSync(input, "utf8")); } catch { console.log(JSON.stringify({error: "cannot read the input file", code: 2})); process.exit(2); }
   let out;
@@ -232,7 +238,7 @@ async function main() {
   else if (cmd === "screen") out = classifyScreen(data)
   else if (cmd === "run" && outdir) out = await run(data, outdir);
   else if (cmd === "shoot" && outdir) out = await shoot(data, outdir);
-  else { console.log(JSON.stringify({error: "usage: browse.mjs check|run|shoot <input.json> [outdir]", code: 2})); process.exit(2); }
+  else { console.log(JSON.stringify({error: "usage: browse.mjs probe | check|run|shoot <input.json> [outdir]", code: 2})); process.exit(2); }
   console.log(JSON.stringify(out));
   process.exit(out.code === 3 ? 3 : out.code === 2 ? 2 : 0);
 }

@@ -80,7 +80,7 @@ VERDICT: FINDINGS 1"; rm -f "$T/gh-calls"; rm -rf "$T/state/findings"
   QUARTERDECK_QA_READY_WAIT=3 st_duty lookout --pr 1
   ck "a trunk that will not start is said so to the model and in the report, and the head is still judged" 'grep -q "could not be started" "$T/claude-calls" && grep -q "nothing was compared" <<<"$OUT" && [ "$(last_verdict)" = DRY-RUN ]'
 else
-  st_skip "no playwright or no browser on this machine: the capture checks did not run (they run on the Mac, and in any session with chromium)"
+  st_skip_browser "the capture checks did not run (they run on the Mac, and in any session with chromium)"
 fi
 # ---- an app that did not render is BLOCKED, never CLEAN -------------------------------------------------------------------------------------
 if st_have_browser; then
@@ -115,7 +115,7 @@ VERDICT: FINDINGS 1"; rm -rf "$T/state/findings"
   st_duty lookout --pr 2 --apply
   ck "  and a finding that cites a picture of the error screen is refused like any picture the harness did not give it" '[ "$(last_verdict)" = ERROR ] && [ -z "$(ls "$T"/state/findings 2>/dev/null)" ]'
 else
-  st_skip "no playwright or no browser on this machine: the BLOCKED-app checks did not run"
+  st_skip_browser "the BLOCKED-app checks did not run"
 fi
 for qe in '{"A-B":"x"}' '{"QUARTERDECK_X":"x"}' '{"PATH":"/tmp"}' '["a"]'; do
   st_registry '["lookout"]' "$(jq -nc --argjson e "$qe" '{qa:{start:"true", env:$e}}')"

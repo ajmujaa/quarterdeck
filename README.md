@@ -6,6 +6,18 @@ Quarterdeck runs on your own machine. It gives you one dashboard for all your pr
 
 > Status: early. Built and used daily on macOS; Linux is next. Expect rough edges, and read what is tested and what is not before you trust it with anything you care about.
 
+## Quick start
+
+```bash
+git clone https://github.com/ajmujaa/quarterdeck.git && cd quarterdeck   # 1. get the program
+bin/qtdeck setup                       # 2. checks the tools, prints the install command for anything missing, makes your data folder
+bin/qtdeck dashboard                   # 3. opens the dashboard on this machine (a one-time link)
+                                       # 4. switch Demo on to look around with invented data before you connect anything
+bin/qtdeck attach ~/Projects/my-app    # 5. shows what it found and what the crew would do; add --apply to register it
+```
+
+`bin/qtdeck help` lists the day-one commands, `bin/qtdeck help more` all of them. `bin/qtdeck doctor` checks the wiring in a few seconds; `bin/qtdeck check` runs every test.
+
 ## Words used here
 
 - **Quarterdeck**: the product, and the name of its command (`bin/qtdeck`).
@@ -27,8 +39,8 @@ Quarterdeck runs on your own machine. It gives you one dashboard for all your pr
 
 You need:
 
-- macOS (the tested system) or Linux, with Python 3.10 or newer, bash, and git. On Linux, project commands need `bubblewrap` (`bwrap`) or they are refused; that backend has not been run on a real Linux machine (see SECURITY.md).
-- [jq](https://jqlang.github.io/jq/), for example `brew install jq`.
+- macOS (the tested system) or Linux, with Python 3.10 or newer, bash, and git. On Linux, project commands need `bubblewrap` (`bwrap`) or they are refused; that backend has run only in the project's CI (see SECURITY.md).
+- [jq](https://jqlang.github.io/jq/), for example `brew install jq`, or on Debian and Ubuntu `sudo apt-get update && sudo apt-get install -y jq bubblewrap` (without the update a fresh image answers 404).
 - The [GitHub CLI](https://cli.github.com/), signed in: `brew install gh`, then `gh auth login`.
 - [Claude Code](https://claude.com/claude-code), signed in: the `claude` command must work in a terminal.
 - Optional: Node 20 or newer. It runs the page-logic tests; without it those tests are skipped.
@@ -38,11 +50,11 @@ Then:
 ```bash
 git clone https://github.com/ajmujaa/quarterdeck.git
 cd quarterdeck
-bin/qtdeck home init     # makes ~/.quarterdeck, your data folder, apart from the program
-bin/qtdeck doctor        # checks the wiring and says what is missing
+bin/qtdeck setup         # checks the tools and says how to install what is missing; installs nothing
+bin/qtdeck doctor        # a quick wiring check: tools, sign-ins, data folder, dashboard, sandbox
 ```
 
-`doctor` lists each problem in plain words. Fix what it names and run it again until it is quiet. There is no installer and nothing is placed outside the program folder, your data folder and the private file where credentials you enter are kept.
+The first command makes your data folder, `~/.quarterdeck`, apart from the program (`bin/qtdeck home init` does the same by hand). `doctor` lists each problem in plain words and ends with `all good` or `N problems: ...`. Fix what it names and run it again. There is no installer and nothing is placed outside the program folder, your data folder and the private file where credentials you enter are kept.
 
 ## Connect Claude Code
 
@@ -55,22 +67,10 @@ Quarterdeck has no login of its own. It runs the `claude` command that is alread
 
 Every model call uses your own account and your own usage limits. Quarterdeck never stores or passes on your sign-in, and never uses anyone else's. Read the provider's terms for automated use before you schedule many runs: https://code.claude.com/docs/en/legal-and-compliance
 
-## Billing: your plan or an API key
-
-Each duty is billed to your plan (the `claude` sign-in) unless you choose an Anthropic API key for it. An API key is the supported way to pay for automated and product use (see https://code.claude.com/docs/en/legal-and-compliance), and it keeps your subscription for your own work.
-
-1. Store the key. It is read from standard input, never from an argument: `bin/qtdeck keys set anthropic`, paste the key, press Enter. Or paste it on the Settings page. It goes into the same private store as connection credentials (the 0600 file, or the macOS Keychain if you chose it) and is never shown again; only "stored" or "not stored" comes back.
-2. Choose the duties: `bin/qtdeck billing shipwright api` (or `plan` to go back), `bin/qtdeck billing seat modelmaker api` for one crew seat, or the selects on the Settings page. `bin/qtdeck billing` lists them all.
-3. Set caps, counted only for calls billed to the key, since local midnight: `bin/qtdeck billing cap daily 20` and `bin/qtdeck billing cap duty shipwright 5` (`off` removes one). At a cap the duty stops with NEEDS_HUMAN and says which cap. Each call is also given at most what is left.
-
-A duty set to the API key never falls back to your plan: with no key stored it stops with NEEDS_HUMAN. A duty on the plan never gets an `ANTHROPIC_API_KEY`, even one set in your shell, so a stray key cannot quietly pay for it. `bin/qtdeck doctor` shows each duty's billing and whether the key is stored. The settings are in your data folder, `config/billing.json`.
-
-Not verified: this was built and tested against a stand-in `claude`, not the real CLI with a real key. That the real CLI bills a `-p` call to `ANTHROPIC_API_KEY` from its environment ahead of your sign-in, and how it reports a refused key, was not checked here. Try one cheap duty first and look at the API console before you move scheduled work over.
-
 ## First run
 
 ```bash
-bin/qtdeck dashboard
+bin/qtdeck dashboard              # or --no-open to print the link without opening a browser
 ```
 
 This starts the dashboard and opens a one-time pairing link to `http://127.0.0.1:7878`. The server listens on your own machine only (loopback).
@@ -90,7 +90,9 @@ bin/qtdeck attach ~/Projects/my-app            # shows what it found and propose
 bin/qtdeck attach ~/Projects/my-app --apply    # registers it
 ```
 
-Adding a project accepts folders under your home directory only, never a hidden folder. `QUARTERDECK_PROJECT_ROOTS` in `config/quarterdeck.env` allows others. Attach only folders you trust: the crew reads their files and the harness runs their test and build commands (with a minimal environment, no secrets, and inside the macOS sandbox where there is one).
+The summary names the languages, the duties it proposes and the command that proves a change works (pytest, npm test, go test and others are found). When none is found, set it with `--verify "<command>"`. `--verbose` shows the whole scan and every path the crew may not change. A folder with no GitHub remote gets one with `bin/qtdeck repo my-app <owner/name>`.
+
+Adding a project accepts folders under your home directory only, never a hidden folder. `QUARTERDECK_PROJECT_ROOTS` in `config/quarterdeck.env` allows others. Attach only folders you trust: the crew reads their files and the harness runs their test and build commands (with a minimal environment, no secrets, and inside the operating-system sandbox: sandbox-exec on macOS, bubblewrap on Linux).
 
 Then run an agent on it. Nothing is written until you add `--apply`:
 
@@ -138,45 +140,9 @@ The crew themselves are files in `crew/`. Each knows no project and holds one po
 
 **A project's own agents.** On the Agents page, a project that keeps Claude Code agents in its own `.claude/agents/` folder sees them listed under "This project's own agents", marked "from the project", with a note on which of the crew's jobs they plausibly cover and which Quarterdeck's crew still covers for it. It reads only the name, description, tools and model line at the top of each file in that one folder (at most 50 files, 64 KB each, a link is followed only to a file inside the same project, the prompt itself never read or shown), only for projects you registered, and writes nothing. The matches are a keyword guess, labelled as such. Quarterdeck cannot run a project's own agents; that would be a separate step you opt into.
 
-## Packs
-
-A pack is a short note about one stack that the crew reads before it works on a matching project. `qtdeck packs list` shows the packs found. The six infrastructure packs (aws, vercel-supabase, azure, google-cloud, cloudflare, fly) are labelled **experimental**: they were tested on small examples only, and every infra report says so in its footer. Read such a report as a second opinion, not a verdict. The tag shows in `qtdeck packs list`, in Settings and when you attach a project. The python and typescript-node packs carry no tag.
-
-## Using fewer tokens
-
-Every model call is booked in `state/spend.jsonl` with its turns, output, new input, cache reads and cost. `bin/qtdeck spend` (or the Spend page) shows them per duty and per panel seat, and names the three dearest project and duty pairs of the last 7 days. Start there: a builder that takes a hundred turns costs far more than any prompt wording.
-
-The settings live in `config/quarterdeck.env` (override them in `~/.config/quarterdeck/env`):
-
-- **Turn caps.** `QUARTERDECK_MAX_TURNS_<DUTY>` stops a call after that many turns. The inspector and panels default to 20. The builder has no cap by default; with one set, a build that reaches it ends as "NEEDS_HUMAN: ran out of turns", keeps its partial work in the worktree and commits nothing. `QUARTERDECK_BUILD_FOCUS=on` also hands the builder the files the plan names and tells it to stop once the checks pass.
-- **Skip when nothing changed.** A panel, inspector or surveyor call whose inputs match an earlier answered call of the last 7 days returns that answer without a model call and says "reused". The inputs are the prompt, the model, the tools and the commit of a clean working folder. `bin/qtdeck run ... --fresh` asks again. `QUARTERDECK_REUSE=""` turns it off.
-- **Panels.** `--rounds auto` (or `QUARTERDECK_PANEL_ROUNDS=auto`) holds a second round only on the items where the seats contradict each other. `QUARTERDECK_PANEL_SMALL_LINES` sits fewer seats on a small target. `QUARTERDECK_MODEL_SEAT_<NAME>` picks a model for one seat. These are all off by default.
-- **Shorter answers.** `QUARTERDECK_TERSE=on` adds a short rule to every prompt: say only what the contract needs, but never skip validation, security checks or the required fields. It is off by default because the measured runs did not show that review quality held.
-- **Cache.** `QUARTERDECK_STABLE_PROMPT=on` keeps the long system prompt the same across worktrees, so it is read from the prompt cache instead of being written again.
-
 ## Calm mode
 
 Calm mode is a switch in the top bar. It shows larger text in one column and only what needs you, and folds the rest behind **Show everything**. It starts on by itself if your system asks for reduced motion. The dashboard in every mode has one clear next thing to do, shows real data or nothing, and puts every change behind a click.
-
-## The Brain
-
-The Brain is one map of your projects, your agents and the services you connect. It is built from what you have added, so adding or removing a project or a connection changes it with no code edit. Click any dot to see what it is, what state it is in and where it leads. The counts on the map are buttons that open a list.
-
-![Fleet, in demo mode](images/fleet.png)
-
-### Connecting services
-
-Gmail or Mac Mail, team chat, web analytics, the numbers for your posts on Facebook, Instagram, LinkedIn, Threads and X, and your Mac's calendar and reminders can be shown in the Brain. Each is a small script that calls the service's own API with a read-only credential, with no model in the path. Set them up from the **Connections** page: each service shows where it stands, when it last refreshed and what it still needs, and a credential you enter goes into a private file on your computer and is never shown again.
-
-Each service has a help icon that says what it reads and never reads, how to get what it needs, the steps, the permissions to grant, how to revoke access and what was tested. Nothing is claimed as tested against a real service unless its file says so. Quarterdeck never posts to a social account. A service is one small JSON file, so adding another does not mean touching the core.
-
-![Connections, in demo mode](images/connections.png)
-
-## Helm, the optional voice
-
-Helm is an assistant you can talk to and listen to. It is off until you set it up, and the rest of Quarterdeck works without it. Speech recognition (whisper.cpp), the voice (Kokoro) and the small language model that answers (llama.cpp) all run on your machine. You choose the voice and speed with `QUARTERDECK_HELM_VOICE` and `QUARTERDECK_HELM_SPEED` in `config/quarterdeck.env`.
-
-Helm can optionally think with Claude for open questions. That is off by default, capped per day, never on in demo mode, and when you switch it on you choose what it may be told. By default no calendar title, reminder, mail subject or note text goes with the question.
 
 ## What it will never do
 
@@ -203,7 +169,61 @@ Adding capability means adding an instance of one of these, never editing the ma
 
 The program and your data are separate folders. The program (`bin/`, `duties/`, `crew/`, `dashboard/`) is what you cloned. Your registry, runs, notes, logs and settings live in your data folder, `~/.quarterdeck` by default (`QUARTERDECK_HOME` to change it). Update or delete the program any time without touching your data. `bin/qtdeck home` shows where everything is. The repository ships example files only (`config/projects.example.json` and others); your real registry is never inside it.
 
-## Vendored files are hash-checked
+---
+
+## More
+
+Everything below is detail a first look does not need: how billing works, stack packs, using fewer tokens, the Brain and its connections, Helm, and the vendored files.
+
+### Billing: your plan or an API key
+
+Each duty is billed to your plan (the `claude` sign-in) unless you choose an Anthropic API key for it. An API key is the supported way to pay for automated and product use (see https://code.claude.com/docs/en/legal-and-compliance), and it keeps your subscription for your own work.
+
+1. Store the key. It is read from standard input, never from an argument: `bin/qtdeck keys set anthropic`, paste the key, press Enter. Or paste it on the Settings page. It goes into the same private store as connection credentials (the 0600 file, or the macOS Keychain if you chose it) and is never shown again; only "stored" or "not stored" comes back.
+2. Choose the duties: `bin/qtdeck billing shipwright api` (or `plan` to go back), `bin/qtdeck billing seat modelmaker api` for one crew seat, or the selects on the Settings page. `bin/qtdeck billing` lists them all.
+3. Set caps, counted only for calls billed to the key, since local midnight: `bin/qtdeck billing cap daily 20` and `bin/qtdeck billing cap duty shipwright 5` (`off` removes one). At a cap the duty stops with NEEDS_HUMAN and says which cap. Each call is also given at most what is left.
+
+A duty set to the API key never falls back to your plan: with no key stored it stops with NEEDS_HUMAN. A duty on the plan never gets an `ANTHROPIC_API_KEY`, even one set in your shell, so a stray key cannot quietly pay for it. `bin/qtdeck billing` lists each duty's billing; `bin/qtdeck doctor` shows whether the key is stored, in one line while every duty is on your plan. The settings are in your data folder, `config/billing.json`.
+
+Not verified: this was built and tested against a stand-in `claude`, not the real CLI with a real key. That the real CLI bills a `-p` call to `ANTHROPIC_API_KEY` from its environment ahead of your sign-in, and how it reports a refused key, was not checked here. Try one cheap duty first and look at the API console before you move scheduled work over.
+
+### Packs
+
+A pack is a short note about one stack that the crew reads before it works on a matching project. `qtdeck packs list` shows the packs found. The six infrastructure packs (aws, vercel-supabase, azure, google-cloud, cloudflare, fly) are labelled **experimental**: they were tested on small examples only, and every infra report says so in its footer. Read such a report as a second opinion, not a verdict. The tag shows in `qtdeck packs list`, in Settings and when you attach a project. The python and typescript-node packs carry no tag.
+
+### Using fewer tokens
+
+Every model call is booked in `state/spend.jsonl` with its turns, output, new input, cache reads and cost. `bin/qtdeck spend` (or the Spend page) shows them per duty and per panel seat, and names the three dearest project and duty pairs of the last 7 days. Start there: a builder that takes a hundred turns costs far more than any prompt wording.
+
+The settings live in `config/quarterdeck.env` (override them in `~/.config/quarterdeck/env`):
+
+- **Turn caps.** `QUARTERDECK_MAX_TURNS_<DUTY>` stops a call after that many turns. The inspector and panels default to 20. The builder has no cap by default; with one set, a build that reaches it ends as "NEEDS_HUMAN: ran out of turns", keeps its partial work in the worktree and commits nothing. `QUARTERDECK_BUILD_FOCUS=on` also hands the builder the files the plan names and tells it to stop once the checks pass.
+- **Skip when nothing changed.** A panel, inspector or surveyor call whose inputs match an earlier answered call of the last 7 days returns that answer without a model call and says "reused". The inputs are the prompt, the model, the tools and the commit of a clean working folder. `bin/qtdeck run ... --fresh` asks again. `QUARTERDECK_REUSE=""` turns it off.
+- **Panels.** `--rounds auto` (or `QUARTERDECK_PANEL_ROUNDS=auto`) holds a second round only on the items where the seats contradict each other. `QUARTERDECK_PANEL_SMALL_LINES` sits fewer seats on a small target. `QUARTERDECK_MODEL_SEAT_<NAME>` picks a model for one seat. These are all off by default.
+- **Shorter answers.** `QUARTERDECK_TERSE=on` adds a short rule to every prompt: say only what the contract needs, but never skip validation, security checks or the required fields. It is off by default because the measured runs did not show that review quality held.
+- **Cache.** `QUARTERDECK_STABLE_PROMPT=on` keeps the long system prompt the same across worktrees, so it is read from the prompt cache instead of being written again.
+
+### The Brain
+
+The Brain is one map of your projects, your agents and the services you connect. It is built from what you have added, so adding or removing a project or a connection changes it with no code edit. Click any dot to see what it is, what state it is in and where it leads. The counts on the map are buttons that open a list.
+
+![Fleet, in demo mode](images/fleet.png)
+
+#### Connecting services
+
+Gmail or Mac Mail, team chat, web analytics, the numbers for your posts on Facebook, Instagram, LinkedIn, Threads and X, and your Mac's calendar and reminders can be shown in the Brain. Each is a small script that calls the service's own API with a read-only credential, with no model in the path. Set them up from the **Connections** page: each service shows where it stands, when it last refreshed and what it still needs, and a credential you enter goes into a private file on your computer and is never shown again.
+
+Each service has a help icon that says what it reads and never reads, how to get what it needs, the steps, the permissions to grant, how to revoke access and what was tested. Nothing is claimed as tested against a real service unless its file says so. Quarterdeck never posts to a social account. A service is one small JSON file, so adding another does not mean touching the core.
+
+![Connections, in demo mode](images/connections.png)
+
+### Helm, the optional voice
+
+Helm is an assistant you can talk to and listen to. It is off until you set it up, and the rest of Quarterdeck works without it. Speech recognition (whisper.cpp), the voice (Kokoro) and the small language model that answers (llama.cpp) all run on your machine. You choose the voice and speed with `QUARTERDECK_HELM_VOICE` and `QUARTERDECK_HELM_SPEED` in `config/quarterdeck.env`.
+
+Helm can optionally think with Claude for open questions. That is off by default, capped per day, never on in demo mode, and when you switch it on you choose what it may be told. By default no calendar title, reminder, mail subject or note text goes with the question.
+
+### Vendored files are hash-checked
 
 The third-party files in `dashboard/assets/vendor/` (Shoelace, fonts, three.js) are pinned by sha256 in `dashboard/assets/vendor/HASHES.json`. `python3 bin/vendor-verify.py` fails and lists any file that changed, was added or was removed; `python3 bin/selftest.py` runs it too. After updating a vendored file on purpose, run `python3 bin/vendor-verify.py --write` and review the diff (see `dashboard/assets/vendor/VENDOR.md`).
 

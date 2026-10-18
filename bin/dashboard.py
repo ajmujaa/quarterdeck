@@ -46,6 +46,7 @@ import home as _home
 import markers as _markers                              # the marks written into GitHub bodies (bin/markers.py)
 import safegit as _safegit
 import packs as _packs_mod                              # stack and infrastructure packs (bin/packs.py)
+import spend as _spend                                  # where the tokens went: the Spend view and `qtdeck spend` share it (bin/spend.py)
 
 ROOT = Path(__file__).resolve().parent.parent           # the program: bin/, duties/, crew/, dashboard/
 HOME = _home.resolve()                                  # YOUR data: state/, logs/, workspace/, config/ (see bin/home.py)
@@ -1297,12 +1298,7 @@ def spend_summary():
     week = local_midnight_utc(6)
     wk = [r for r in rows if (r.get("at") or "") >= week]
     def group(key, src):
-        out = {}
-        for r in src:
-            k = r.get(key) or "unknown"
-            g = out.setdefault(k, {"cost": 0.0, "calls": 0, "turns": 0})
-            g["cost"] += r.get("cost") or 0; g["calls"] += 1; g["turns"] += r.get("turns") or 0
-        return dict(sorted(out.items(), key=lambda kv: -kv[1]["cost"]))
+        return _spend.group(src, lambda r: r.get(key) or "unknown")
     by_day = {}
     for r in wk:
         day = datetime.fromisoformat(r["at"].replace("Z", "+00:00")).astimezone().strftime("%Y-%m-%d")
@@ -1326,6 +1322,7 @@ def spend_summary():
         "call_budget": env_flag("QUARTERDECK_CALL_BUDGET", "") or None,
         "planning": env_flag("QUARTERDECK_FIX_PLANNING", "tiered"),
         "by_duty": group("duty", wk), "by_model": group("model", wk),
+        "by_seat": _spend.group(wk, "seat"), "sinks": _spend.sinks(wk),
         "by_day": dict(sorted(by_day.items())), "fixes": fixes,
         "roles": roles, "tiers": tiers,
         "capped": sum(1 for r in wk if r.get("stopped") == "cap"),
@@ -3272,6 +3269,7 @@ def understand(text, views, projects=None, duties_of=None):
 import chatctx
 import claudeproc
 import fleetview
+import projagents
 from integrations import manifest as integrations_manifest
 
 # Local fleets (bin/fleetview.py): the agent folders the owner registered in config/fleet.local.json, shown on one screen and
@@ -3391,6 +3389,19 @@ def newproject_api(b):
     except OSError as e:
         return 500, {"error": "could not create it: " + type(e).__name__}
     return 200, {"path": str(dest)}
+
+
+def project_agents_api(name):
+    """(status, body) for GET /api/project-agents?project=NAME: the agents that registered project defines for itself, plus the coverage table.
+    Only a name in the registry is read, and only inside its own folder; nothing is written."""
+    p = read_json(PROJECTS_FILE, {}).get(name) if isinstance(name, str) and name else None
+    if not isinstance(p, dict) or not p.get("path"):
+        return 400, {"error": "unknown project"}
+    try:
+        root = Path(str(p["path"])).expanduser().resolve()
+    except (OSError, RuntimeError, ValueError):
+        return 400, {"error": "unknown project"}
+    return 200, {"project": name, **projagents.project_agents(str(root))}
 
 
 def attach_api(b):
@@ -4569,6 +4580,8 @@ class Handler(BaseHTTPRequestHandler):
                 w = DEMO["world"]; pr = (q.get("project") or [""])[0]
                 return self._demo_reply((200, {"project": pr, "opted_in": pr in w.cycle_projects(), **cycle_estimate_calc(
                     [r["cost"] for r in w.cycle_records().values() if r["project"] == pr and r["status"] == "awaiting-review"], 15.0, 25.0, w.spend(w.elapsed())["today"])}))
+            if u.path == "/api/project-agents":     # the made-up projects have no folders: none, and nothing is read from disk
+                return self._demo_reply((200, {"project": (q.get("project") or [""])[0], "agents": [], "coverage": projagents.coverage([])}))
             if u.path == "/api/mockup":             # a made-up page, still served the strict way
                 return self._mockup_page((q.get("brief") or [""])[0], (q.get("name") or [""])[0])
             return self._demo_reply(DEMO["world"].get(u.path, q))
@@ -4624,6 +4637,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, json.dumps({"lines": []}))
             n = min(int((q.get("n") or ["200"])[0] or 200), 2000)
             return self._send(200, json.dumps({"lines": f.read_text(errors="replace").splitlines()[-n:]}))
+
+        if u.path == "/api/project-agents":
+            code, body = project_agents_api((q.get("project") or [""])[0])
+            return self._send(code, json.dumps(body))
 
         if u.path == "/api/board":
             name = (q.get("project") or [""])[0]

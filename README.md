@@ -124,9 +124,23 @@ Beyond the single duties:
 
 The crew themselves are files in `crew/`. Each knows no project and holds one point of view, such as a security reviewer, a copy editor, or someone whose only question is what an earlier fix could have broken. Read `crew/_README.md` to add one.
 
+**A project's own agents.** On the Agents page, a project that keeps Claude Code agents in its own `.claude/agents/` folder sees them listed under "This project's own agents", marked "from the project", with a note on which of the crew's jobs they plausibly cover and which Quarterdeck's crew still covers for it. It reads only the name, description, tools and model line at the top of each file in that one folder (at most 50 files, 64 KB each, links never followed, the prompt itself never read or shown), only for projects you registered, and writes nothing. The matches are a keyword guess, labelled as such. Quarterdeck cannot run a project's own agents; that would be a separate step you opt into.
+
 ## Packs
 
 A pack is a short note about one stack that the crew reads before it works on a matching project. `qtdeck packs list` shows the packs found. The six infrastructure packs (aws, vercel-supabase, azure, google-cloud, cloudflare, fly) are labelled **experimental**: they were tested on small examples only, and every infra report says so in its footer. Read such a report as a second opinion, not a verdict. The tag shows in `qtdeck packs list`, in Settings and when you attach a project. The python and typescript-node packs carry no tag.
+
+## Using fewer tokens
+
+Every model call is booked in `state/spend.jsonl` with its turns, output, new input, cache reads and cost. `bin/qtdeck spend` (or the Spend page) shows them per duty and per panel seat, and names the three dearest project and duty pairs of the last 7 days. Start there: a builder that takes a hundred turns costs far more than any prompt wording.
+
+The settings live in `config/quarterdeck.env` (override them in `~/.config/quarterdeck/env`):
+
+- **Turn caps.** `QUARTERDECK_MAX_TURNS_<DUTY>` stops a call after that many turns. The inspector and panels default to 20. The builder has no cap by default; with one set, a build that reaches it ends as "NEEDS_HUMAN: ran out of turns", keeps its partial work in the worktree and commits nothing. `QUARTERDECK_BUILD_FOCUS=on` also hands the builder the files the plan names and tells it to stop once the checks pass.
+- **Skip when nothing changed.** A panel, inspector or surveyor call whose inputs match an earlier answered call of the last 7 days returns that answer without a model call and says "reused". The inputs are the prompt, the model, the tools and the commit of a clean working folder. `bin/qtdeck run ... --fresh` asks again. `QUARTERDECK_REUSE=""` turns it off.
+- **Panels.** `--rounds auto` (or `QUARTERDECK_PANEL_ROUNDS=auto`) holds a second round only on the items where the seats contradict each other. `QUARTERDECK_PANEL_SMALL_LINES` sits fewer seats on a small target. `QUARTERDECK_MODEL_SEAT_<NAME>` picks a model for one seat. These are all off by default.
+- **Shorter answers.** `QUARTERDECK_TERSE=on` adds a short rule to every prompt: say only what the contract needs, but never skip validation, security checks or the required fields. It is off by default because the measured runs did not show that review quality held.
+- **Cache.** `QUARTERDECK_STABLE_PROMPT=on` keeps the long system prompt the same across worktrees, so it is read from the prompt cache instead of being written again.
 
 ## Calm mode
 

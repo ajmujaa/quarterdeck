@@ -38,7 +38,7 @@ WORKDIR="${QUARTERDECK_WORKDIR:?}"
 LOG_FILE="$QUARTERDECK_HOME/logs/panel-$PROJECT.log"
 GH="${QUARTERDECK_GH:-gh}"   # a seam for the self-tests and for a stand-in; lib.sh puts the real gh first on PATH
 
-PANEL="" TARGET="" ISSUE="" IDEA="" FROM="" SEATS="" BRIEF_EXTRA="" RESUME=""
+PANEL="" TARGET="" ISSUE="" IDEA="" FROM="" SEATS="" SEATS_GIVEN="" BRIEF_EXTRA="" RESUME=""
 ROUNDS="${QUARTERDECK_PANEL_ROUNDS:-2}"
 PER_SEAT="${QUARTERDECK_PANEL_MAX:-10}"
 while [ $# -gt 0 ]; do
@@ -48,9 +48,9 @@ while [ $# -gt 0 ]; do
     --issue)  ISSUE="${2:-}"; need_num "--issue" "$ISSUE"; shift ;;
     --idea|--question) IDEA="${2:-}"; shift ;;
     --from)   FROM="${2:-}"; shift ;;
-    --seats)  SEATS="$(tr ',' ' ' <<<"${2:-}")"; shift ;;
+    --seats)  SEATS="$(tr ',' ' ' <<<"${2:-}")"; SEATS_GIVEN=1; shift ;;
     --brief)  BRIEF_EXTRA="${2:-}"; shift ;;
-    --rounds) ROUNDS="${2:-2}"; shift ;;
+    --rounds) ROUNDS="${2:-2}"; shift ;;   # 1, 2, or auto: a second round only on the items where seats contradict each other
     --resume) RESUME="${2:-}"; shift ;;
     --apply)  : ;;  # accepted and ignored: a panel only ever writes a document
     *) die "panel: unknown argument '$1'" ;;
@@ -101,6 +101,21 @@ SEATS="$(xargs <<<"$SEATS")"
 [ -n "$SEATS" ] || die "panel: no crew for '$PANEL' (see: qtdeck crew)"
 set -- $SEATS
 [ $# -ge 2 ] || die "panel: '$PANEL' has only $# seat(s); a panel of one is just a duty"
+case "$ROUNDS" in 1|2|auto) ;; *) die "panel: --rounds takes 1, 2 or auto" ;; esac
+
+# Fewer seats for a small subject (issue 121): a findings panel on a --target whose tracked files hold at most QUARTERDECK_PANEL_SMALL_LINES
+# lines sits only its first QUARTERDECK_PANEL_SMALL_SEATS seats (2 by default; roster order). 0, the default, keeps every seat. Seats named
+# with --seats are always kept.
+SMALL_LINES="${QUARTERDECK_PANEL_SMALL_LINES:-0}" SMALL_SEATS="${QUARTERDECK_PANEL_SMALL_SEATS:-2}"
+if [ "$MODE" = findings ] && [ -n "$TARGET" ] && [ -z "$SEATS_GIVEN$RESUME" ] && [[ "$SMALL_LINES" =~ ^[0-9]+$ ]] && [ "$SMALL_LINES" -gt 0 ] \
+   && [[ "$SMALL_SEATS" =~ ^[2-9]$ ]] && [ $# -gt "$SMALL_SEATS" ]; then
+  size=$(safe_git -C "$WORKDIR" ls-files -z -- "$TARGET" 2>/dev/null | (cd "$WORKDIR" && xargs -0 cat 2>/dev/null) | wc -l | tr -d ' ')
+  if [ "${size:-0}" -gt 0 ] && [ "$size" -le "$SMALL_LINES" ]; then
+    SEATS="$(tr ' ' '\n' <<<"$SEATS" | head -n "$SMALL_SEATS" | xargs)"
+    say "quarterdeck: $TARGET is small ($size lines, at most $SMALL_LINES): $SMALL_SEATS seats sit — $SEATS"
+    set -- $SEATS
+  fi
+fi
 crew_exists dockmaster || die "panel: crew/dockmaster.md is missing — nobody can rule"
 
 # Keyed by the issue when planning one (two fixes on the same project, on
@@ -181,13 +196,22 @@ ${issues:-(none)}"
 esac
 
 tx() { local t; t="$(mktemp)"; jq "$@" "$TX" > "$t" && mv "$t" "$TX"; }
+# A seat's model: QUARTERDECK_MODEL_SEAT_<NAME> (Settings, per seat; NAVAL_ARCHITECT for naval-architect) wins over the crew file's `model:`.
+# Every call is booked under its seat (QUARTERDECK_SEAT), so the Spend view and `qtdeck spend` show what each seat costs.
+seat_env() { # seat_env <seat>
+  local v m e
+  v="QUARTERDECK_MODEL_SEAT_$(tr '[:lower:]-' '[:upper:]_' <<<"$1")"
+  m="${!v:-$(crew_meta "$1" model)}"; [ -n "$m" ] && export QUARTERDECK_MODEL_PERSONA="$m"
+  e="$(crew_meta "$1" effort)"; [ -n "$e" ] && export QUARTERDECK_EFFORT_PERSONA="$e"
+  export QUARTERDECK_SEAT="$1"
+}
 if [ -z "$RESUME" ]; then   # rounds 1 and 2; a resumed panel reloads them instead
 # The transcript exists from the first second, not at the end: a panel that is
 # still arguing is exactly what the dashboard most wants to show.
 jq -n --arg id "$PANEL_ID" --arg p "$PROJECT" --arg d "$PANEL" --arg m "$MODE" \
-      --arg s "$SUBJECT" --arg at "$(date -u +%FT%TZ)" --argjson r "$ROUNDS" \
+      --arg s "$SUBJECT" --arg at "$(date -u +%FT%TZ)" --arg r "$ROUNDS" \
       --args '{id:$id, project:$p, discipline:$d, mode:$m, subject:$s, started:$at,
-               rounds:$r, phase:"round 1", status:"running",
+               rounds:($r | tonumber? // $r), phase:"round 1", status:"running",
                seats:($ARGS.positional|map({name:., items:null, ok:null})),
                items:[], stances:[], ruling:[], doc:null, verdict:null}' \
       $SEATS > "$TX"
@@ -258,8 +282,7 @@ ITEM_SHAPE='{"area":"'"$ITEM_AREAS"'","severity":"critical|major|minor","title":
 for seat in $SEATS; do
   (
     export QUARTERDECK_RUN_ID="${PANEL_ID}-r1-$seat"
-    m="$(crew_meta "$seat" model)"; [ -n "$m" ] && export QUARTERDECK_MODEL_PERSONA="$m"
-    e="$(crew_meta "$seat" effort)"; [ -n "$e" ] && export QUARTERDECK_EFFORT_PERSONA="$e"
+    seat_env "$seat"
     p="$(preamble "$PROJECT")
 
 You are the ${seat} on a $PANEL panel. Your seat: $(crew_meta "$seat" seat).
@@ -321,15 +344,46 @@ tx --argjson i "$ITEMS" '.items = $i'
 
 # ---- round 2: the seats read each other -------------------------------------
 STANCES='[]'
-if [ "$ROUNDS" -ge 2 ] && [ "$TOTAL" -gt 1 ]; then
+# --rounds auto (issue 121): round 2 only where the seats disagree. One cheap call with no tools (QUARTERDECK_MODEL_LABEL, Haiku) reads the
+# round-1 items and names those that contradict another seat's; only they go back to the floor, and when there are none the panel goes
+# straight to the chair, which still settles what is left. A call that fails or does not parse sends every item back, as round 2 always did.
+FLOOR_ITEMS="$ITEMS" R2=0
+case "$ROUNDS" in
+  2) R2=1 ;;
+  auto)
+    R2=1
+    if [ "$TOTAL" -gt 1 ]; then
+      agree_prompt="Several reviewers each raised the items below without seeing the others' items. Do not use any tools: judge from the
+text alone. Name every item that conflicts with an item from a DIFFERENT seat: the two state opposite facts about the
+code, or propose actions that cannot both be done. Items that agree, overlap, or simply cover different ground do not
+conflict. Name both sides of each conflict.
+
+$(jq -r '.[] | "[\(.id)] (\(.seat)) \(.title)\n    \(.claim)\n    where: \(.where)\n    proposes: \(.action)"' <<<"$ITEMS" | untrusted "seat findings")
+
+End your reply with exactly these two lines and nothing after them:
+CONTESTED_JSON: <one-line JSON array of item ids, [] when nothing conflicts>
+RESULT: CONTESTED <count>"
+      agree="$(QUARTERDECK_MODEL_OVERRIDE="${QUARTERDECK_MODEL_LABEL:-claude-haiku-4-5}" QUARTERDECK_RUN_ID="${PANEL_ID}-agree" \
+               claude_run "$QUARTERDECK_DIR" "$agree_prompt" "Read")" || agree=""
+      ids="$(grep -o 'CONTESTED_JSON: .*' <<<"$agree" | tail -1 | sed 's/^CONTESTED_JSON: //')"
+      if jq -e 'type == "array" and all(.[]; type == "string")' <<<"$ids" >/dev/null 2>&1; then
+        FLOOR_ITEMS="$(jq -c --argjson ids "$ids" 'map(select(.id | IN($ids[])))' <<<"$ITEMS")"
+        if [ "$(jq length <<<"$FLOOR_ITEMS")" = 0 ]; then
+          R2=0; say "  — round 2 skipped: the seats did not contradict each other"; tx '.rounds = 1'
+        fi
+      else
+        say "  — could not tell whether the seats agree: every item goes back to the floor"
+      fi
+    fi ;;
+esac
+if [ "$R2" = 1 ] && [ "$TOTAL" -gt 1 ]; then
   tx '.phase = "round 2"'
-  say "  — round 2: $TOTAL item(s) go back to the floor"
-  BOARD="$(jq -r '.[] | "[\(.id)] (\(.seat), \(.severity)) \(.title)\n    \(.claim)\n    where: \(.where)\n    proposes: \(.action)"' <<<"$ITEMS")"
+  say "  — round 2: $(jq length <<<"$FLOOR_ITEMS") of $TOTAL item(s) go back to the floor"
+  BOARD="$(jq -r '.[] | "[\(.id)] (\(.seat), \(.severity)) \(.title)\n    \(.claim)\n    where: \(.where)\n    proposes: \(.action)"' <<<"$FLOOR_ITEMS")"
   for seat in $present; do
     (
       export QUARTERDECK_RUN_ID="${PANEL_ID}-r2-$seat"
-      m="$(crew_meta "$seat" model)"; [ -n "$m" ] && export QUARTERDECK_MODEL_PERSONA="$m"
-    e="$(crew_meta "$seat" effort)"; [ -n "$e" ] && export QUARTERDECK_EFFORT_PERSONA="$e"
+      seat_env "$seat"
       p="$(preamble "$PROJECT")
 
 You are the ${seat} on a $PANEL panel, and the panel has reported back. Your
@@ -471,8 +525,7 @@ case "${ruling_prompt:-}" in
 esac
 
 export QUARTERDECK_RUN_ID="${PANEL_ID}-ruling"
-m="$(crew_meta dockmaster model)"; [ -n "$m" ] && export QUARTERDECK_MODEL_PERSONA="$m"
-e="$(crew_meta dockmaster effort)"; [ -n "$e" ] && export QUARTERDECK_EFFORT_PERSONA="$e"
+seat_env dockmaster
 result="$(claude_run "$WORKDIR" "$ruling_prompt")"; rc=$?
 [ $rc = 2 ] && { tx '.status="stalled" | .verdict="usage limit before the ruling"'; say "quarterdeck: usage limit before the ruling — the argument is kept in $TX"; exit 0; }
 HEADLINE="$(grep -o 'HEADLINE: .*' <<<"$result" | tail -1 | sed 's/^HEADLINE: //' | cut -c1-80)"

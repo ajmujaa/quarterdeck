@@ -802,7 +802,7 @@ class World:
                 f["cost"] += r["cost"]; f["calls"] += 1
         return {"today": sum(r["cost"] for r in rows if r["at"] >= midnight), "week": sum(r["cost"] for r in wk), "all": sum(r["cost"] for r in rows),
                 "calls": len(rows), "since": min(r["at"] for r in rows), "daily_budget": 25.0, "over_budget": False, "call_budget": None,
-                "planning": "tiered", "by_duty": group("duty"), "by_model": group("model"), "by_day": dict(sorted(by_day.items())), "fixes": fixes,
+                "planning": "tiered", "by_duty": group("duty"), "by_model": group("model"), "by_seat": {}, "sinks": [], "by_day": dict(sorted(by_day.items())), "fixes": fixes,
                 "roles": {k: "account default" for k in ("foreman", "shipwright", "surveyor", "inspector", "joiner", "harbourmaster", "trials")},
                 "tiers": {k: "account default" for k in ("mechanical", "routine", "intricate", "hard")}, "capped": 0}
 

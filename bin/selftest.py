@@ -3944,6 +3944,50 @@ for _f in _rn_files:
         _rn_bad.append(_f)
 check("rename: the old product name is in no file that ships, by name or content" + (f": {_rn_bad[:8]}" if _rn_bad else ""), not _rn_bad and len(_rn_files) > 50)
 
+# ---- a project's own agents (bin/projagents.py, GET /api/project-agents): read-only, registered folders only, front matter only ----
+import projagents as _pa, json as _jpa, os as _ospa, re as _repa
+_pt = Path(_tf.mkdtemp(prefix="qd-pagents-")).resolve(); _pproj = _pt / "proj"; _pag = _pproj / ".claude" / "agents"; _pag.mkdir(parents=True)
+(_pag / "code-critic.md").write_text("---\nname: code-critic\ndescription: Reviews a diff and audits it for mistakes\ntools: Read, Grep, Bash\nmodel: sonnet\n---\nSECRET-BODY-TEXT do the thing\n")
+(_pag / "mason.md").write_text("---\nname: mason\ndescription: >\n  Implements features\n  from an issue\ntools:\n  - Read\n  - Edit\nmodel: opus\n---\nSECRET-BODY-TEXT\n")
+(_pag / "notes.md").write_text("no front matter at all\nSECRET-BODY-TEXT\n")
+(_pag / "evil.md").write_bytes(b"---\nname: !!python/object:os.system &a <script>alert(1)</script>" + b"x" * 5000 + b"\ndescription: *a <!-- quarterdeck:requirements --> " + b"y" * 9000
+                               + b"\ntools: " + b",".join(b"t%d" % i for i in range(40)) + b"\nmodel: \x00\xff\xfe bin\n---\nSECRET-BODY-TEXT\n" + b"z" * 200000)
+(_pag / "bin.md").write_bytes(bytes(range(256)) * 300)
+(_pt / "outside.md").write_text("---\nname: outside-agent\n---\n"); _ospa.symlink(_pt / "outside.md", _pag / "link.md")
+_pe = _pt / "elsewhere"; (_pe / ".claude" / "agents").mkdir(parents=True); (_pe / ".claude" / "agents" / "x.md").write_text("---\nname: via-folder-link\n---\n")
+_plink = _pt / "linked"; (_plink / ".claude").mkdir(parents=True); _ospa.symlink(_pe / ".claude" / "agents", _plink / ".claude" / "agents")
+_plink2 = _pt / "linked2"; _plink2.mkdir(); _ospa.symlink(_pe / ".claude", _plink2 / ".claude")
+_ospa.mkfifo(_pag / "pipe.md")
+_pm = _pt / "many" / ".claude" / "agents"; _pm.mkdir(parents=True)
+for _i in range(60): (_pm / f"a{_i:02}.md").write_text(f"---\nname: a{_i}\n---\n")
+_pa._cache.clear()
+_ag = _pa.agents_of(_pproj); _byn = {a["file"]: a for a in _ag}
+check("project agents: the folder's regular .md files are listed with name, description, tools (list or comma text) and model; a file with no front matter falls back to its file name",
+      set(_byn) == {"code-critic.md", "mason.md", "notes.md", "evil.md", "bin.md"} and _byn["code-critic.md"]["tools"] == ["Read", "Grep", "Bash"] and _byn["mason.md"]["tools"] == ["Read", "Edit"]
+      and _byn["mason.md"]["description"] == "Implements features from an issue" and _byn["mason.md"]["model"] == "opus" and _byn["notes.md"]["name"] == "notes", sorted(_byn))
+check("project agents: a symlinked file, a symlinked agents folder, a symlinked .claude folder and a fifo are all ignored",
+      "link.md" not in _byn and "pipe.md" not in _byn and _pa.agents_of(_plink) == [] and _pa.agents_of(_plink2) == [])
+check("project agents: at most 50 files are read", len(_pa.agents_of(_pt / "many")) == 50)
+_ev = _byn["evil.md"]
+check("project agents: hostile front matter is capped and inert (name 60, description 240, tools 12 of 40 chars, model 40; no angle brackets, tags, anchors, aliases or control characters; binary files do not raise)",
+      len(_ev["name"]) <= 60 and len(_ev["description"]) <= 240 and len(_ev["tools"]) == 12 and all(len(t) <= 40 for t in _ev["tools"]) and len(_ev["model"]) <= 40
+      and not _repa.search(r"[<>\x00-\x1f]", _jpa.dumps(_ev, ensure_ascii=False)) and "!!" not in _ev["name"] and "&a" not in _ev["name"] and _ev["description"] == "", _ev)
+_pj0 = d.PROJECTS_FILE; d.PROJECTS_FILE = _pt / "projects.json"; d.PROJECTS_FILE.write_text(_jpa.dumps({"fake-app": {"path": str(_pproj), "repo": "x/y"}}))
+_c, _b = d.project_agents_api("fake-app"); _out = _jpa.dumps(_b); _cov = {r["job"]: r["fits"] for r in _b.get("coverage", [])}
+check("project agents API: a registered project returns its agents and a coverage row for each job; the prompt body never appears; matches are by name or description",
+      _c == 200 and "SECRET-BODY-TEXT" not in _out and "do the thing" not in _out and list(_cov) == ["review", "build", "plan", "check", "infra", "design"]
+      and _cov["review"] == ["code-critic"] and "mason" in _cov["build"] and _cov["infra"] == [], _out[:300])
+check("project agents API: an unregistered name or path, an empty name and a name with a path in it are refused with 400",
+      all(d.project_agents_api(n)[0] == 400 for n in (str(_pproj), "nope", "", "../proj", None)))
+_pa._cache.clear(); d.PROJECTS_FILE = _pj0
+_crew_ids = _repa.findall(r'\{id: "(\w+)", title:', (ROOT / "dashboard" / "assets" / "crew.js").read_text())[:6]
+check("project agents: the keyword table covers exactly the jobs crew.js groups", list(_pa.JOB_WORDS) == _crew_ids, _crew_ids)
+_ixp = (ROOT / "dashboard" / "index.html").read_text()
+check("project agents UI: the section has the pill, the empty state, the coverage wording and the not-yet-runnable note",
+      all(t in _ixp.lower() for t in ("this project's own agents", "from the project", "this project has no agents of its own.", "quarterdeck's crew covers every job.", "suggested match, not confirmed",
+                              "no agent of its own", "quarterdeck cannot run a project's own agents yet")) and "function ownAgents" in _ixp)
+shutil.rmtree(_pt, ignore_errors=True)
+
 # remove after migration: the migration's own tests (bin/selftest-legacy.py, never published), run when the file is here
 if (ROOT / "bin" / "selftest-legacy.py").exists():
     _lg = _sp.run([sys.executable, str(ROOT / "bin" / "selftest-legacy.py")], capture_output=True, text=True)
@@ -3963,6 +4007,35 @@ if (ROOT / "bin" / "selftest-legacy.py").exists():
           _lge.get("QUARTERDECK_HOME", "").startswith(str(_lgh)) and _lge.get("TMPDIR", "").startswith(str(_lgh)) and _lg2.returncode == 0,
           ([l for l in _lg2.stdout.splitlines() if "FAIL" in l][:5] or _lg2.stderr[-300:], _lge.get("QUARTERDECK_HOME")))
     shutil.rmtree(_lgh, ignore_errors=True)
+
+# ---- where the tokens went (issue 121): bin/spend.py, shared by the Spend view and `qtdeck spend` ----------------------------
+import spend as _spm
+_now = d.iso(datetime.now(timezone.utc)) if hasattr(d, "iso") else datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+_sr = [{"at": _now, "project": "app", "duty": "shipwright", "cost": 9.0, "turns": 110, "out": 80000, "in": 20, "cache_read": 900000, "cache_write": 5000},
+       {"at": _now, "project": "app", "duty": "shipwright", "cost": 1.0, "turns": 10, "out": 5000, "in": 10, "cache_read": 90000, "cache_write": 1000},
+       {"at": _now, "project": "app", "duty": "panel", "seat": "naval-architect", "cost": 2.0, "turns": 9, "out": 4000},
+       {"at": _now, "project": "app", "duty": "panel", "seat": "naval-architect", "cost": 0, "reused": True, "turns": 0},
+       {"at": _now, "project": "web", "duty": "inspector", "cost": 0.5, "turns": 5, "out": 2000},
+       {"at": _now, "project": "web", "duty": "surveyor", "cost": 0.25, "turns": 4},
+       {"at": "2020-01-01T00:00:00Z", "project": "old", "duty": "shipwright", "cost": 99.0, "turns": 1}]
+_g = _spm.group(_sr, "duty")
+check("spend: grouped per duty with tokens and turns, the dearest first; a reused answer is counted apart and costs nothing",
+      list(_g)[0] == "shipwright" and _g["shipwright"]["calls"] == 3 and _g["shipwright"]["out"] == 85000 and _g["panel"]["calls"] == 1 and _g["panel"]["reused"] == 1,
+      _g)
+_sk = _spm.sinks(_spm.since(_sr, 7))
+check("spend: the top three sinks of the last 7 days, per project and duty, with cost and turns per call",
+      [s["what"] for s in _sk] == ["app/shipwright", "app/panel", "web/inspector"] and _sk[0]["turns_per_call"] == 60 and abs(_sk[0]["per_call"] - 5.0) < 1e-9, _sk)
+_spend1 = d.SPEND; d.SPEND = Path(_tf.mkdtemp()) / "spend.jsonl"
+d.SPEND.write_text("\n".join(_json.dumps(r) for r in _sr) + "\nnot json\n")
+_ss = d.spend_summary()
+check("spend: the Spend view carries tokens per role, the cost per panel seat and the top sinks",
+      _ss["by_duty"]["shipwright"]["cache_read"] == 990000 and "naval-architect" in _ss["by_seat"] and _ss["sinks"][0]["what"] == "app/shipwright", _ss.get("sinks"))
+d.SPEND = _spend1
+_idx = (ROOT / "dashboard" / "index.html").read_text()
+check("spend: the page shows top sinks, output and cache reads, and the seat table", all(s in _idx for s in ('"Top sinks"', '["Cache reads"]', '"By panel seat"')))
+_lib = (ROOT / "bin" / "lib.sh").read_text()
+check("spend: record_spend books new input, cache writes and reads apart, the seat and a stop at the turn cap",
+      all(s in _lib for s in ("cache_read: (.usage.cache_read_input_tokens", "{seat: $seat}", '"error_max_turns" then "turns"')))
 
 print()
 if FAILS:

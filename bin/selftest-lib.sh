@@ -75,6 +75,9 @@ STUB
   chmod +x "$T/claude"
   # QUARTERDECK_GH, not PATH: lib.sh puts the real gh first, and a stand-in that is bypassed would touch a real repository.
   export QUARTERDECK_DIR="$T" QUARTERDECK_SECRETS_DIR="$T/nosecrets" CLAUDE_BIN="$T/claude" QUARTERDECK_CLAUDE_ENV=inherit QUARTERDECK_GH="$T/path/gh"
+  # The checks change what the stand-in answers between runs with the same inputs, so reuse of an earlier answer stays off here
+  # (bin/selftest-diet.sh turns it on to test it).
+  export QUARTERDECK_REUSE=""
   export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_AUTHOR_NAME=fixture GIT_AUTHOR_EMAIL=fixture@example.invalid GIT_COMMITTER_NAME=fixture GIT_COMMITTER_EMAIL=fixture@example.invalid
   echo '[]' > "$T/state/runs.json"
 }

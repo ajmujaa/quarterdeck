@@ -27,6 +27,7 @@ const ALL_VIEWS = ["overview", "brain", "inbox", "missions", "prs", "board", "ti
 const VIEWS = String(arg("views", QUICK ? "overview,crew,settings" : ALL_VIEWS.join(","))).split(",");
 const THEMES = String(arg("themes", QUICK ? "dark" : "dark,light")).split(",");
 const CALMS = { both: [false, true], off: [false], on: [true] }[String(arg("calm", QUICK ? "off" : "both"))] || [false];
+const SEED = arg("seed-agents", false);      // "one" | "all": no Demo; a made-up registry whose project has 3 agent files, so the Crew page's own-agents section is measured
 const [W, H] = String(arg("size", "1500x900")).split("x").map(Number);
 const FOCUS = !!arg("focus", false) && !QUICK, FLOWS = !!arg("flows", false) || QUICK;
 
@@ -46,6 +47,13 @@ catch (e) { console.log(JSON.stringify({skipped: true, why: "no browser: " + Str
 // ---- a throwaway dashboard ----
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "qd-a11y-"));
 const port = await new Promise(r => { const s = net.createServer(); s.listen(0, "127.0.0.1", () => { const p = s.address().port; s.close(() => r(p)); }); });
+if (SEED) {
+  const pdir = path.join(home, "fakeproj"), ad = path.join(pdir, ".claude", "agents"); fs.mkdirSync(ad, {recursive: true}); fs.mkdirSync(path.join(home, "config"), {recursive: true});
+  fs.writeFileSync(path.join(home, ".quarterdeck-home"), "");
+  for (const [n, d, m] of [["code-critic", "Reviews a diff and audits it for mistakes.", "sonnet"], ["mason", "Implements features from an issue.", "opus"], ["pixel", "Design and mockup help for the UI.", ""]])
+    fs.writeFileSync(path.join(ad, n + ".md"), `---\nname: ${n}\ndescription: ${d}\ntools: Read, Edit\nmodel: ${m}\n---\nPROMPT BODY\n`);
+  fs.writeFileSync(path.join(home, "config", "projects.json"), JSON.stringify({"fake-app": {repo: "x/fake-app", path: pdir, summary: "A made-up project."}, "empty-app": {repo: "x/empty-app", path: path.join(home, "none"), summary: "No agents."}}));
+}
 const env = {...process.env, QUARTERDECK_HOME: home, QUARTERDECK_DASHBOARD_PORT: String(port)};
 const srv = spawn("python3", [path.join(ROOT, "bin", "dashboard.py")], {env, stdio: "ignore"});
 const done = async code => { try { await browser.close(); } catch (e) { /* closed */ } srv.kill(); try { fs.rmSync(home, {recursive: true, force: true}); } catch (e) { /* gone */ } process.exit(code); };
@@ -58,7 +66,8 @@ const page = await ctx.newPage();
 await page.goto("about:blank");
 await page.goto(link);
 await page.waitForFunction(() => document.querySelector("#view") && document.querySelector("#view").children.length > 0, null, {timeout: 20000}).catch(() => {});
-await page.evaluate(async () => { await post("/api/demo", {on: true}); await tick(); });
+if (!SEED) await page.evaluate(async () => { await post("/api/demo", {on: true}); await tick(); });
+else await page.evaluate(async all => { await tick(); sel = all === "all" ? "" : "fake-app"; localStorage.setItem("quarterdeck.project", sel); await tick(); }, SEED);
 await page.waitForTimeout(600);
 const cdp = await ctx.newCDPSession(page);
 await cdp.send("Accessibility.enable"); await cdp.send("DOM.enable");

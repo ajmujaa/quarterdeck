@@ -36,7 +36,10 @@ Usage: qtdeck <command>
   add [name]                  register a project (infers repo and path from the
                               current git checkout when run inside one)
   remove <name>               unregister a project
-  run <project> <duty> [...]  run one duty once. Reports only unless --apply.
+  run <project> <duty> [...]  run one duty once. Reports only unless --apply. --fresh asks the
+                              model again even when an earlier answer to the same inputs exists.
+  spend [--days N]            where the tokens went: per duty and per panel seat (calls, turns,
+                              output, new input, cache reads, cost) and the top three sinks
   fix <project> --panel <id> --item <n>
                               carry one item of a panel's ruling to a pull
                               request: file it, build it, inspect it. Runs the
@@ -168,7 +171,7 @@ case "$cmd" in
     echo
     # The wiring above is files and binaries. This is the logic that decides
     # when something runs unattended and what a loopback POST may start.
-    for st_file in selftest.py selftest.sh selftest-fix.sh selftest-panel.sh selftest-harbourmaster.sh selftest-purser.sh selftest-planner.sh selftest-untrusted.sh selftest-pilot.sh selftest-portable.sh selftest-lookout.sh selftest-marshal.sh selftest-caulker.sh selftest-assayer.sh selftest-logkeeper.sh selftest-quartermaster.sh selftest-bosun.sh selftest-packs.sh selftest-cycle.sh selftest-infra.sh selftest-brief.sh selftest-mockup.sh selftest-security.sh selftest-checks.sh selftest-injection.sh; do
+    for st_file in selftest.py selftest.sh selftest-fix.sh selftest-panel.sh selftest-harbourmaster.sh selftest-purser.sh selftest-planner.sh selftest-untrusted.sh selftest-pilot.sh selftest-portable.sh selftest-lookout.sh selftest-marshal.sh selftest-caulker.sh selftest-assayer.sh selftest-logkeeper.sh selftest-quartermaster.sh selftest-bosun.sh selftest-packs.sh selftest-cycle.sh selftest-diet.sh selftest-infra.sh selftest-brief.sh selftest-mockup.sh selftest-security.sh selftest-checks.sh selftest-injection.sh; do
       [ -f "$QUARTERDECK_DIR/bin/$st_file" ] || continue
       case "$st_file" in
         # the tests build their own throwaway folders: they must not inherit this installation's data folder, which would take precedence
@@ -202,6 +205,7 @@ case "$cmd" in
         selftest-injection.sh) label="self-check (prompt injection: hostile text stays data in every prompt; a model that obeys is contained)" ;;
         selftest-security.sh) label="self-check (security: the harness checks, one per fix, each written to fail before it)" ;;
         selftest-cycle.sh) label="self-check (the cycle: stage order, caps, resume, report-only writes nothing)" ;;
+        selftest-diet.sh) label="self-check (fewer tokens: turn caps, reuse only on identical inputs, panel rounds, seat models)" ;;
       esac
       if [ "$strc" = 0 ]; then
         chk "$label" ok "$(grep -c '^  ok' <<<"$st") check(s) passed"
@@ -213,6 +217,10 @@ case "$cmd" in
     echo
     [ "$fail" = 0 ] && echo "  all good." || echo "  some checks failed — see above."
     exit "$fail"
+    ;;
+
+  spend)
+    exec python3 "$QUARTERDECK_DIR/bin/spend.py" "$@" "$QUARTERDECK_HOME"
     ;;
 
   check)
@@ -360,7 +368,9 @@ case "$cmd" in
     wdir=$(project_path "$project")
     [ -d "$wdir/.git" ] || die "no git checkout at $wdir"
     export QUARTERDECK_PROJECT="$project" QUARTERDECK_WORKDIR="$wdir"
-    exec bash "$QUARTERDECK_DIR/duties/$duty.sh" "$@"
+    # --fresh: ask the model again even when an earlier answer to the same inputs could be reused (QUARTERDECK_REUSE)
+    args=(); for a in "$@"; do if [ "$a" = --fresh ]; then export QUARTERDECK_FRESH=1; else args+=("$a"); fi; done
+    exec bash "$QUARTERDECK_DIR/duties/$duty.sh" ${args[@]+"${args[@]}"}
     ;;
 
   plan)

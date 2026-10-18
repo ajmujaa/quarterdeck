@@ -855,6 +855,7 @@ body.unpaired > :not(#unpaired){display:none!important}
 .crew-sum .stat b{font-size:26px}
 .crew-group .card-b{padding-top:6px}
 .crew-why{margin:0 0 var(--s2)}
+.crew-cov{font:500 12px/1.3 var(--font-mono);letter-spacing:.1em;text-transform:uppercase;color:var(--dim);margin:var(--s4) 0 var(--s2)}
 .crew-row .li{padding:14px 0}
 .crew-row:first-of-type .li{border-top:0}
 .crew-proj{font:500 12px var(--font-mono);color:var(--dim);border:1px solid var(--line-2);border-radius:5px;padding:1px 6px;margin:0 4px}

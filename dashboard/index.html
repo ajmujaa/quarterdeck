@@ -1765,9 +1765,42 @@ function viewCrew(){
   const none = crewFilter === "attention" ? emptyState({inline: true, title: "Nothing needs attention.", body: "Every agent's last run finished cleanly.", label: "Show all agents", click: act("crewFilter", "all")})
     : crewFilter === "running" ? emptyState({inline: true, title: "Nothing is running.", body: "Pick an agent below and press Run.", label: "Show all agents", click: act("crewFilter", "all")})
     : emptyState({inline: true, title: "No agent matches the search.", body: "Clear the search box to see them all."});
-  return strip + (groups ? `<div class="stack">${groups}</div>` : none);
+  return strip + (groups ? `<div class="stack">${groups}</div>` : none) + `<div class="stack">${ownAgents()}</div>`;
 }
 function crewFilterSet(k){ crewFilter = k; render(); }
+/* A project's own agents (.claude/agents in its folder): read-only, listed beside the crew, never run from here. Everything from the file is text, escaped. */
+const ownAg = {};   // project name -> {at, busy, data|null, bad}
+function ownLoad(name){
+  const o = ownAg[name] || (ownAg[name] = {at: 0, busy: false, data: null, bad: false});
+  if(o.busy || Date.now() - o.at < 30000) return;
+  o.busy = true;
+  fetch("/api/project-agents?project=" + encodeURIComponent(name)).then(r => r.ok ? r.json() : Promise.reject(r.status))
+    .then(j => { o.data = j; o.bad = false; }).catch(() => { o.bad = true; })
+    .finally(() => { o.busy = false; o.at = Date.now(); if(view === "crew") render(); });
+}
+function ownAgents(){
+  const names = sel ? [sel] : S.projects.map(p => p.name);
+  names.forEach(ownLoad);
+  const title = sel ? "This project's own agents" : "Projects' own agents";
+  if(!sel){
+    const rows = names.map(n => { const o = ownAg[n] || {}, c = o.data ? o.data.agents.length : null;
+      return li({title: `<span class="mono">${esc(n)}</span>`, sub: c == null ? (o.bad ? "Could not be read." : "Looking.") : c ? `${c} ${plural(c, "agent")} of its own` : "No agents of its own"}); }).join("");
+    return card(title, `${rows}<p class="hint">Choose a project to see its agents and what Quarterdeck's crew covers for it.</p>`, {label: title});
+  }
+  const o = ownAg[sel] || {};
+  if(!o.data) return card(title, `<p class="hint">${o.bad ? "This project's agents could not be read." : "Looking."}</p>`, {label: title});
+  const ag = o.data.agents;
+  const list = ag.length ? ag.map(a => li({title: `<span class="mono">${esc(a.name)}</span> ${pill("", "from the project")}`,
+      sub: `${esc(a.description || "No description.")}${a.model ? `<br><span class="sub">Model: ${esc(a.model)}</span>` : ""}`})).join("")
+    : emptyState({inline: true, title: "This project has no agents of its own.", body: "Quarterdeck's crew covers every job."});
+  const lead = Object.fromEntries(crewMod.GROUPS.map(g => [g.id, g]));
+  const cov = (o.data.coverage || []).filter(c => lead[c.job]).map(c => { const g = lead[c.job];
+    return li({title: esc(g.title), sub: c.fits.length ? `Suggested match, not confirmed: ${c.fits.map(esc).join(", ")}.`
+      : `No agent of its own: Quarterdeck's <span class="mono">${esc(g.duties[0])}</span> covers this.`}); }).join("");
+  return card(title, `${list}<h3 class="crew-cov">Which jobs are covered</h3>${cov}
+    <p class="hint">Quarterdeck cannot run a project's own agents yet. That would be a later step, and one you switch on yourself.</p>`,
+    {count: `${ag.length} ${plural(ag.length, "agent")}`, label: title});
+}
 function runRead(){
   const box = $("#run-body"), values = {};
   box.querySelectorAll("[data-flag]").forEach(e => { values[e.dataset.flag] = e.tagName === "SL-SELECT" ? selVal(e) : String(e.value ?? "").trim(); });
@@ -1856,9 +1889,13 @@ function viewSpend(){
   const b = sp.daily_budget;
   const days = Object.entries(sp.by_day || {});
   const peak = Math.max(1, ...days.map(([, v]) => v));
-  const row = (k, g) => `<tr><td class="g">${esc(k)}</td><td>${g.calls}</td><td>${(g.turns / Math.max(1, g.calls)).toFixed(1)}</td><td class="r">${usd(g.cost)}</td><td class="r">${usd(g.cost / Math.max(1, g.calls))}</td></tr>`;
-  const table = (title, first, obj) => card(null, tbl([first, "Calls", "Turns per call", ["Total"], ["Per call"]], Object.entries(obj || {}).map(([k, g]) => row(k, g)).join("")),
+  const tok = n => n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(n || 0);
+  const row = (k, g) => `<tr><td class="g">${esc(k)}</td><td>${g.calls}${g.reused ? ` <span class="sub">+${g.reused} reused</span>` : ""}</td><td>${(g.turns / Math.max(1, g.calls)).toFixed(1)}</td><td class="r">${tok(g.out)}</td><td class="r">${tok(g.cache_read)}</td><td class="r">${usd(g.cost)}</td><td class="r">${usd(g.cost / Math.max(1, g.calls))}</td></tr>`;
+  const table = (title, first, obj) => card(null, tbl([first, "Calls", "Turns per call", ["Output"], ["Cache reads"], ["Total"], ["Per call"]], Object.entries(obj || {}).map(([k, g]) => row(k, g)).join("")),
     {kicker: title, count: "last 7 days", flush: true, label: title});
+  const sinks = (sp.sinks || []).length ? card(null, tbl(["Where", "Calls", "Turns per call", ["Per call"], ["Total"]], sp.sinks.map(x => `<tr><td class="g">${esc(x.what)}</td><td>${x.calls}</td><td>${x.turns_per_call.toFixed(0)}</td><td class="r">${usd(x.per_call)}</td><td class="r">${usd(x.cost)}</td></tr>`).join("")),
+    {kicker: "Top sinks", count: "last 7 days", flush: true, label: "Top sinks"}) : "";
+  const seats = Object.keys(sp.by_seat || {}).length ? table("By panel seat", "Seat", sp.by_seat) : "";
   const fixes = Object.entries(sp.fixes || {}).map(([k, v]) => ({k, ...v, rec: S.fixes[k]})).sort((a, c) => c.cost - a.cost);
   const stats = `<div class="stats" data-calm="hide">
       ${stat("Spent today", usd(sp.today), {tone: sp.over_budget ? "awaiting" : "", sub: b ? "of " + usd(b) + " a day" : "no daily budget set"})}
@@ -1878,7 +1915,7 @@ function viewSpend(){
       <div class="cluster" style="margin-top:var(--s2)">${pill("", "planning: " + sp.planning)}${pill("", "per-call cap: " + (sp.call_budget ? usd(Number(sp.call_budget)) : "off"))}${pill(b ? "" : "warn", "daily budget: " + (b ? usd(b) : "not set"))}</div>
       <p class="sub" style="margin-top:var(--s3)">Set in <code>config/quarterdeck.env</code>, overridden per machine in <code>~/.config/quarterdeck/env</code>.</p>`,
     {kicker: "Settings in force", label: "Settings in force"});
-  return stats + over + `<div class="split"><div class="stack">${byDay}${table("By role", "Role", sp.by_duty)}${table("By model", "Model", sp.by_model)}</div><div class="stack" data-calm="hide">${settings}${fixTable}</div></div>`;
+  return stats + over + `<div class="split"><div class="stack">${byDay}${sinks}${table("By role", "Role", sp.by_duty)}${seats}${table("By model", "Model", sp.by_model)}</div><div class="stack" data-calm="hide">${settings}${fixTable}</div></div>`;
 }
 /* ---- pull requests ---- */
 let prs = null, prsFor = null, prsBusy = false, onlyOurs = false;

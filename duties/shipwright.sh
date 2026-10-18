@@ -110,6 +110,17 @@ BASE_CHECKS="$(run_checks "$PROJECT" "$WT")"
 wt_mark "$WT"          # what git ignores now (the node_modules link, build output): the gate examines every ignored file added after this
 CHECK_LIST="$(jq -rs 'if length == 0 then "" else map("  " + .cmd + "   (currently exit " + (.rc|tostring) + ")") | join("\n") end' <<<"$BASE_CHECKS")"
 
+# Issue 121, QUARTERDECK_BUILD_FOCUS=on: the files the plan names, up front, and a rule to stop once the checks pass. Turns, not wording,
+# are what a build costs; a builder that knows where to start and when it is done takes fewer of them.
+FOCUS=""
+if [ "${QUARTERDECK_BUILD_FOCUS:-off}" = on ]; then
+  where_files="$(grep -oE '^\*\*Where\.\*\* `[^`]+`' <<<"$PLAN_TEXT" | sed -E 's/^\*\*Where\.\*\* `//; s/`$//' | sort -u | sed 's/^/    /')"
+  FOCUS="${where_files:+- Start from the files the ruling names, and read others only when these show you must:
+$where_files
+}- Stop as soon as the change is made and the issue's acceptance checks and the
+  checks below pass. Do not keep exploring, polishing, or re-running what passed."
+fi
+
 prompt="$(preamble "$PROJECT")
 
 Fix this one issue. You are in a throwaway worktree on branch $BRANCH; edit
@@ -137,7 +148,8 @@ How to work:
   neighbouring code, or fix unrelated things you notice — say so in your summary
   instead.
 - Do not add a dependency.
-$([ -n "$CHECK_LIST" ] && echo "- Before you finish, run every one of these and read what they say:
+${FOCUS:+$FOCUS
+}$([ -n "$CHECK_LIST" ] && echo "- Before you finish, run every one of these and read what they say:
 $CHECK_LIST
   That is their state on an untouched tree, so any failure already there is not
   yours. The harness runs all of them again after you stop and refuses the
@@ -157,6 +169,14 @@ result=$(claude_run "$WT" "$prompt" \
   "WebFetch,WebSearch,Bash(git push*),Bash(git commit*),Bash(git checkout*),Bash(git reset*),Bash(gh *),Bash(rm -rf*),Bash(curl*),Bash(ssh*),Bash(npm publish*),Bash(npm install*)")
 rc=$?
 [ $rc = 2 ] && { say "quarterdeck: usage limit reached — worktree discarded"; exit 0; }
+# The turn cap (QUARTERDECK_MAX_TURNS_SHIPWRIGHT): nothing is checked or committed; what the model had done stays in the worktree for a person.
+if [ $rc = 4 ]; then
+  say "quarterdeck: NEEDS_HUMAN: ran out of turns — nothing committed; partial work kept in $WT"
+  trap - EXIT
+  notify "quarterdeck/$PROJECT #$ISSUE" "ran out of turns"
+  record_run "$PROJECT" shipwright NEEDS_HUMAN "#$ISSUE ran out of turns (cap ${QUARTERDECK_MAX_TURNS_SHIPWRIGHT:-${QUARTERDECK_MAX_TURNS:-}}); partial work kept in $WT, nothing committed"
+  exit 0
+fi
 [ $rc = 0 ] && [ -n "$result" ] || { record_run "$PROJECT" shipwright ERROR "#$ISSUE run failed"; die "run failed"; }
 
 verdict=$(grep -Eo '^RESULT: (FIXED|NEEDS_HUMAN|NO_CHANGE).*' <<<"$result" | tail -1)

@@ -37,7 +37,6 @@ import threading
 import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
-from http.cookies import SimpleCookie
 from http.server import HTTPServer, ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs, quote
@@ -4164,6 +4163,15 @@ def transcribe(wav, vocab=()):
     return " ".join(text.split())[:500]
 
 
+def _same_token(given, want):
+    """Constant-time compare of a header with a token, as bytes (round 8, L12): compare_digest raises TypeError on a non-ASCII str, which dropped the
+    connection instead of answering 401. Headers arrive decoded as latin-1, so that is how they go back to bytes."""
+    try:
+        return secrets.compare_digest(str(given).encode("latin-1"), str(want).encode("latin-1"))
+    except (UnicodeEncodeError, TypeError):
+        return False
+
+
 def _clip(x, n):
     return x[:n] if isinstance(x, str) else ""
 
@@ -4518,15 +4526,23 @@ class Handler(BaseHTTPRequestHandler):
         """The owner's own command-line tools: the token in state/dashboard.token (0600), sent with no Origin header. A browser
         always sends an Origin on a write, so a web page cannot pass as this."""
         t = self.headers.get("X-Quarterdeck-Token", "")
-        return bool(t) and not self.headers.get("Origin") and secrets.compare_digest(t, TOKEN)
+        return bool(t) and not self.headers.get("Origin") and _same_token(t, TOKEN)
+
+    def _sid(self):
+        """The qd_session value of this request's cookie, read by hand (round 8, L11): SimpleCookie drops every cookie after one it finds malformed,
+        and another program on 127.0.0.1 can set such a cookie (cookies are per host, not per port), which hid the session and kept a paired tab
+        at 401. Of several qd_session values, the one that names a live session."""
+        vals = []
+        for part in (self.headers.get("Cookie") or "").split(";"):
+            k, eq, v = part.strip().partition("=")
+            if eq and k == "qd_session" and v:
+                vals.append(v.strip().strip('"'))
+        return next((v for v in vals if session_get(v) is not None), vals[0] if vals else None)
 
     def _session(self):
         """The paired browser session this request's cookie names, or None."""
-        try:
-            m = SimpleCookie(self.headers.get("Cookie") or "").get("qd_session")
-        except Exception:
-            return None
-        return session_get(m.value) if m else None
+        sid = self._sid()
+        return session_get(sid) if sid else None
 
     def _read_ok(self):
         """A read of anything but the page shell, the assets and /api/health needs a paired browser (cookie) or the owner's CLI token."""
@@ -4542,7 +4558,7 @@ class Handler(BaseHTTPRequestHandler):
     def _tab(self):
         """The paired session, if this request carries its cookie AND the token only that tab holds (sessionStorage), else None."""
         s = self._session()
-        return s if s is not None and secrets.compare_digest(self.headers.get("X-Quarterdeck-Token", ""), s["token"]) else None
+        return s if s is not None and _same_token(self.headers.get("X-Quarterdeck-Token", ""), s["token"]) else None
 
     def _authorised(self):
         """A write needs more than a cookie: the cookie's session token in a header (which another site cannot add without a
@@ -4606,10 +4622,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(401, json.dumps({"error": "unpaired"}))
             if s.get("exp", 0) - time.time() > SESSION_TTL / 2:
                 return self._send(200, json.dumps({"ok": True}))
-            m = SimpleCookie(self.headers.get("Cookie") or "").get("qd_session")
-            session_renew(m.value)                                        # in use and past half its day: another day
+            sid = self._sid()
+            session_renew(sid)                                            # in use and past half its day: another day
             return self._send(200, json.dumps({"ok": True}),
-                              cookie=f"qd_session={m.value}; HttpOnly; SameSite=Strict; Path=/; Max-Age={SESSION_TTL}")
+                              cookie=f"qd_session={sid}; HttpOnly; SameSite=Strict; Path=/; Max-Age={SESSION_TTL}")
 
         if u.path.startswith("/api/") and not self._read_ok():
             return self._send(401, json.dumps({"error": "unpaired: open Quarterdeck from the link that `qtdeck dashboard` prints"}))
@@ -4876,9 +4892,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(401 if unpaired else 403, json.dumps({"error": "unpaired" if unpaired else "forbidden"}))
 
         if u.path == "/api/logout":                 # the page's way of ending its own session
-            m = SimpleCookie(self.headers.get("Cookie") or "").get("qd_session")
-            if m:
-                session_end(m.value)
+            sid = self._sid()
+            if sid:
+                session_end(sid)
             return self._send(200, json.dumps({"ok": True}), cookie="qd_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0")
 
         if u.path == "/api/demo":

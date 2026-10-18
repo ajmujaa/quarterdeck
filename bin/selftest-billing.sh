@@ -43,7 +43,7 @@ ck "qtdeck keys set anthropic refuses the key as an argument, stores nothing and
    '[ "$arc" != 0 ] && ! grep -qF "$KEY" <<<"$out" && ! grep -rqF "$KEY" "$T/sec" 2>/dev/null'
 out=$(printf '%s\n' "$KEY" | bash "$T/bin/qtdeck" keys set anthropic 2>&1); src=$?
 ck "qtdeck keys set anthropic reads the key from standard input into the owner-only credential file, and says only that it is stored" \
-   '[ "$src" = 0 ] && grep -q "stored" <<<"$out" && ! grep -qF "$KEY" <<<"$out" && grep -qxF "anthropic_api_key=$KEY" "$T/sec/integrations.env" && [ "$(stat -c %a "$T/sec/integrations.env" 2>/dev/null || stat -f %Lp "$T/sec/integrations.env")" = 600 ]'
+   '[ "$src" = 0 ] && grep -q "stored" <<<"$out" && ! grep -qF "$KEY" <<<"$out" && grep -qxF "anthropic_api_key=\"$KEY\"" "$T/sec/integrations.env" && [ "$(stat -c %a "$T/sec/integrations.env" 2>/dev/null || stat -f %Lp "$T/sec/integrations.env")" = 600 ]'
 out=$(python3 "$T/bin/billing.py" key 2>&1 < /dev/null | cat)
 ck "billing.py key hands the value to a pipe (the harness) and nothing else" '[ "$out" = "$KEY" ]'
 

@@ -4,6 +4,8 @@ A defensive review of `cloud/base` at `336d7fb` (Snapshot: rename to Quarterdeck
 
 **Counts:** high 0, medium 9, low 19.
 
+**After the fixes (ticket #122):** 8 mediums and 19 lows fixed or completed, M7 stated but not closed; each finding has a Disposition line. Every check in `bin/selftest-round8.sh` passed and was moved into the selftest it belongs to, so that script now holds none.
+
 The tests that are plain and self-contained are committed as `bin/selftest-round8.sh`. Each one reports `xfail` until its fix lands and does not fail the script, then reports `ok (xpass)` so it can move into the selftest it belongs to. The other tests need the fixtures of an existing selftest, so they are written out below with the place they go.
 
 This was also the first run of the Linux bubblewrap backend (gap G5) against a real `bwrap` (0.9.0, installed for the review). See "The test suite on this machine".
@@ -24,6 +26,7 @@ This was also the first run of the Linux bubblewrap backend (gap G5) against a r
   xf "M1 a ruled item whose Where is src/a.js does not unlock conftest.py through a newline and a heading in its 'why' field ($m1)" '[ "$m1" = locked ]'
   ```
 - **Suggested fix:** Two parts. (1) The writers flatten every model field to one line before rendering (`gsub("[\r\n  ]+"; " ")` in the jq of `panel.sh` and `joiner.sh`, the same in `bin/fix`'s `section`), and refuse a `where` that is not a single plain path. (2) Stop re-parsing prose for authority: the writer also saves the list of `where` values from the structured ruling next to the document (`<doc>.where`, 0600, outside the worktree), and `model_diff_gate` passes that file to `protect.py check --plan-paths`. The markdown is then only for people.
+- **Disposition:** fixed in 461a74d (part 1: every model field is made one line by `qd_flat_json` in panel.sh, joiner.sh and bin/fix; protect.py splits a plan on `\n` only, so U+2028, NEL, \v and the like no longer start a line; a Where that is not one strict backticked path already unlocked nothing). Check in `bin/selftest-panel.sh` (newline, U+2028, \v). Part 2 (a separate `<doc>.where` file passed to `--plan-paths`) is deferred: with every field on one line the markdown carries no forgeable line, and the second channel is a larger change to model_diff_gate.
 
 ### M2. Linux: a PATH entry inside a code folder binds the whole checkout above it into the check sandbox
 
@@ -39,6 +42,7 @@ This was also the first run of the Linux bubblewrap backend (gap G5) against a r
   xf "M2 bwrap argv: a PATH entry inside a code folder (~/Projects/other/bin) binds only that folder, never the whole checkout above it" '! grep -qxF "$LH/home/Projects/other" <<<"$m2"'
   ```
 - **Suggested fix:** In the PATH loop, compute `_qd_source_trees` once; for an entry inside one, bind only the entry itself (never its parent), and never bind an entry or parent that is a source tree or holds one. Same rule, same words as the seatbelt profile, plus a shared test that runs both builders on the same PATH.
+- **Disposition:** fixed in 4e14739. Check in `bin/selftest-checks.sh` (argument level; the stand-in bwrap, not a real kernel).
 
 ### M3. The protected list misses the lockfiles and task manifests of several ecosystems
 
@@ -52,6 +56,7 @@ This was also the first run of the Linux bubblewrap backend (gap G5) against a r
   print(" ".join(f for f in must if not p.matches(f, p.DEFAULT)))      # the check passes when this prints nothing
   ```
 - **Suggested fix:** Add them to `DEFAULT`, the lockfiles to `PLAN_NEVER`, and digest `deno.json(c)` `"tasks"` and `composer.json` `"scripts"` in `inputs_digest` the way package.json scripts are.
+- **Disposition:** fixed in b479f0c (all nine names in DEFAULT, the six lockfiles in PLAN_NEVER, composer scripts and deno.json(c) in the digest). Check in `bin/selftest-checks.sh`.
 
 ### M4. Editor tasks, dev containers, agent instruction files and other CI systems are not protected
 
@@ -66,6 +71,7 @@ This was also the first run of the Linux bubblewrap backend (gap G5) against a r
   print(" ".join(f for f in must if not p.matches(f, p.DEFAULT)))
   ```
 - **Suggested fix:** Add `.vscode/**`, `.idea/**`, `.devcontainer/**`, `.cursor/**`, `.cursorrules`, `CLAUDE.md`, `AGENTS.md`, `bitbucket-pipelines.yml`, `.buildkite/**`, `.drone.yml`, `appveyor.yml`, `cloudbuild.yaml`, `.gitpod.yml` to `DEFAULT`, and the CI and agent entries to `PLAN_NEVER`. A project that wants a model to edit its editor settings says so in `protected_allow`.
+- **Disposition:** fixed in b479f0c (also CLAUDE.local.md, GEMINI.md, .windsurfrules, .clinerules and the .yaml/.yml spellings; the CI and agent entries, `.devcontainer/**`, `.vscode/tasks.json` and `.gitpod.yml` in PLAN_NEVER). `bin/attach.py` no longer refuses to write the owner's confirmed AGENTS.md because the name is now protected (that rule is about a model's change), and its forbidden-path limit grew with the prefix list. Check in `bin/selftest-checks.sh`.
 
 ### M5. The infra report's cloud-command check misses a command after a separator, a launcher or an assignment
 
@@ -80,6 +86,7 @@ This was also the first run of the Linux bubblewrap backend (gap G5) against a r
   print(" | ".join(s for s in must if not c.find(s)))
   ```
 - **Suggested fix:** Also accept a start after `[;&|(]`, and allow an optional run of launchers and assignments before the tool (`[A-Za-z_][A-Za-z0-9_]*=\S*`, `sudo`, `env`, `npx`, `bunx`, `pnpm dlx|exec`, `yarn dlx`, `time`, `nohup`, `exec`, `command`), after both `_START` and `_TELL`. Run the existing L3 prose list in `bin/selftest-infra.sh` to confirm no new false positives.
+- **Disposition:** fixed in 282281f; the audit 7 prose list still passes. Check in `bin/selftest-infra.sh`.
 
 ### M6. A credential that starts or ends with a quote is changed when it is saved, and lost in a keychain-to-file move
 
@@ -103,6 +110,7 @@ This was also the first run of the Linux bubblewrap backend (gap G5) against a r
   check("keychain: a confirmed move to the file keeps a value that ends in a quote exactly", _c6 == 200 and _cm.load_env().get("SLACK_USER_TOKEN") == _q, _cm.load_env().get("SLACK_USER_TOKEN"))
   ```
 - **Suggested fix:** Write values in a form the reader undoes exactly (always double-quote and escape `\` and `"`, and strip only one matching pair on read), and in `move_store` to the file read every key back through `read_env_file` and roll back on a mismatch, as the keychain direction already does.
+- **Disposition:** fixed in fed1dcf (values written double-quoted with `\` and `"` escaped, one matching pair taken off on read; a move to the file reads every value back before the keychain copies go). Checks in `bin/selftest.py`, both the file store and the keychain-to-file move.
 
 ### M7. Linux: an install or a served app can reach the host's abstract unix sockets
 
@@ -120,6 +128,7 @@ This was also the first run of the Linux bubblewrap backend (gap G5) against a r
 
   A real-kernel version, run only where `bwrap` works: bind an abstract socket in the test, run `project_exec install` and `serve` with a command that connects to it, and assert the connection is refused.
 - **Suggested fix:** Pass a seccomp program (`--seccomp FD`) that refuses `connect` and `bind` on `AF_UNIX` sockets whose address starts with a NUL byte, or give install its own network namespace with user-mode networking (`pasta`/`slirp4netns`). At the least, state the gap in SECURITY.md and the `qd_sandbox_status` line.
+- **Disposition:** stated, not closed, in 1b717c8: lib.sh's claim is corrected and doctor's Linux line, SECURITY.md and THREAT-MODEL.md (G5) name the abstract unix sockets an install, and an app on the `QUARTERDECK_APP_NET=share` opt-in, can reach. Deferred: the seccomp filter (or a separate network namespace with user-mode networking) needs a real Linux kernel to write and prove, which the author does not have. Check in `bin/selftest-checks.sh` (the statement is present).
 
 ### M8. Quartermaster: a file name that git C-quotes passes the forbidden-path BLOCK
 
@@ -135,6 +144,7 @@ This was also the first run of the Linux bubblewrap backend (gap G5) against a r
   ck "a forbidden path whose file name git C-quotes (a tab) is still BLOCK, and no model is asked" 'grep -q "BLOCK" <<<"$OUT" && grep -q "forbidden path lib/crypto/" <<<"$OUT" && [ ! -s "$T/claude-calls" ]'
   ```
 - **Suggested fix:** `diff ... --name-only -z "$BASEREF...$HEADREF" | tr '\0' '\n'`, keeping the exit status (`exit "${PIPESTATUS[0]}"` in the substitution). Tried in a scratch copy: the test passes and the whole quartermaster selftest still passes.
+- **Disposition:** fixed in 68f615e. Check in `bin/selftest-quartermaster.sh`.
 
 ### M9. `home migrate --apply` into a data folder that is already active switches it off, then reports nothing was switched
 
@@ -152,6 +162,7 @@ This was also the first run of the Linux bubblewrap backend (gap G5) against a r
         _ok6a and (_new6 / ".quarterdeck-home").is_file(), _l6)
   ```
 - **Suggested fix:** Remember whether the marker existed; never remove an existing one (or restore it on every failure path). Verify only the files this run copied. Run `live_processes` on the destination too.
+- **Disposition:** fixed in cf1b0e6 (an existing marker is never removed, only the files this run copied are verified, live processes in the destination count too). Checks in `bin/selftest.py`.
 
 ## Low
 
@@ -168,6 +179,7 @@ This was also the first run of the Linux bubblewrap backend (gap G5) against a r
   xf "L1 ... never silently left readable" 'grep -qF "my\\\"proj" <<<"$l1" || ! grep -qx "rc=0" <<<"$l1"'
   ```
 - **Suggested fix:** Escape `\` and `"` for SBPL strings (`\\`, `\"`) in every rule, or make `_qd_sb_profile` return non-zero for such a path so `px_prepare` refuses to run anything.
+- **Disposition:** fixed in b6b7f09 by refusing the whole profile (px_prepare then runs nothing) rather than escaping. Check in `bin/selftest-checks.sh`.
 
 ### L2. A plan can unlock `vercel.json` and `netlify.toml`
 
@@ -176,6 +188,7 @@ This was also the first run of the Linux bubblewrap backend (gap G5) against a r
 - **Rule broken:** `PLAN_NEVER`'s reasoning ("CI runs with the repository's secrets once a branch is pushed").
 - **Failing test** (committed, check L2): `allowed_by("vercel.json", [], "## 1. x\n\n**Where.** `vercel.json`\n")` must be False, and the same for `netlify.toml`.
 - **Suggested fix:** Add `vercel.json`, `netlify.toml` (and, with M4, `render.yaml`, `amplify.yml`, `wrangler.toml`) to `PLAN_NEVER`.
+- **Disposition:** fixed in caa5d6d (with render.yaml, amplify.yml and wrangler.toml, which are now also in DEFAULT). Check in `bin/selftest-checks.sh`.
 
 ### L3. `write_private` follows a link planted at `<name>.tmp`
 
@@ -191,6 +204,7 @@ This was also the first run of the Linux bubblewrap backend (gap G5) against a r
   print("link:" + ("ok" if "xapp-fixture-value" not in out.read_text() and not p.is_symlink() else "followed"))
   ```
 - **Suggested fix:** `tempfile.mkstemp(dir=path.parent, prefix="." + path.name + ".")` (random name, `O_EXCL`, 0600), `fchmod`, `fsync`, `os.replace`, unlink on error. `bin/attention/collect.py:18` has its own `write_private` and needs the same.
+- **Disposition:** fixed in ac36fea. `bin/attention/collect.py` already used `tempfile.mkstemp`, so it needed no change. Check in `bin/selftest.py`.
 
 ### L4. Base64 wrapped over lines is not decoded by the outgoing scan
 
@@ -205,6 +219,7 @@ This was also the first run of the Linux bubblewrap backend (gap G5) against a r
   print("wrap:" + ("ok" if o.scan_text(wrapped) else "missed"))
   ```
 - **Suggested fix:** Also decode the base64 runs of `re.sub(r"\s+", "", seen)` (whitespace removed, nothing else) and scan the decodings.
+- **Disposition:** fixed in 8ce5d48. Check in `bin/selftest.py`.
 
 ### L5. The scan for this machine's own secret values skips NFKC
 
@@ -218,6 +233,7 @@ This was also the first run of the Linux bubblewrap backend (gap G5) against a r
   print("nfkc:" + ("ok" if o.known_value_hit("value " + fw, [v]) else "missed"))
   ```
 - **Suggested fix:** `flat = _alnum(normalise(text))`.
+- **Disposition:** fixed in 8ce5d48. Check in `bin/selftest.py`.
 
 ### L6. Quadratic time in the "labelled secret value" pattern, and no timeout around the scan
 
@@ -226,6 +242,7 @@ This was also the first run of the Linux bubblewrap backend (gap G5) against a r
 - **Rule broken:** the scan's own promise of "a hit refuses with rc 3", which assumes the scan ends.
 - **Failing test** (committed, check L6): `scan_text("token=" * 10000)` must finish in under 2 seconds.
 - **Suggested fix:** Bound the lookaheads and the run (`(?=[A-Za-z0-9/+_=-]{0,200}?\d)`, `{24,512}`), or match the run and test digit and letter in Python; wrap every outscan call in `guard <secs>` and treat a timeout as a hit.
+- **Disposition:** fixed in 8ce5d48 (lookaheads and the run bounded to 512). The `guard` timeout around every outscan call is deferred: with the bound the scan is linear. Check in `bin/selftest.py`.
 
 ### L7. `gh_post` does not scan a body file named after combined short flags
 
@@ -239,6 +256,7 @@ This was also the first run of the Linux bubblewrap backend (gap G5) against a r
   gp pr create -R x/tp --title t --head h "-dF$T/bodyfile"; { [ "$GPRC" = 3 ] && [ ! -e "$T/gh-calls" ]; } || l7="$l7 [-dFPATH]"
   ```
 - **Suggested fix:** Refuse any combined short-flag group (`-[A-Za-z]{2,}*`) that contains `F` or `T`, or treat its next word (or its tail) as a file to scan.
+- **Disposition:** fixed in 804f238. Check in `bin/selftest-security.sh`.
 
 ### L8. `safe_git commit` misses a message file in the stuck, combined or abbreviated spellings
 
@@ -259,6 +277,7 @@ This was also the first run of the Linux bubblewrap backend (gap G5) against a r
   ck "safe_git commit scans a message file in every spelling git takes${bad:+ (NOT REFUSED:$bad)}" '[ -z "$bad" ]'
   ```
 - **Suggested fix:** Refuse every message-file form in `safe_git commit` (no duty uses one); otherwise refuse any word matching `-[A-Za-z]*[Ft]*` or `--f*` / `--te*` that is not one of the forms already scanned.
+- **Disposition:** fixed in 804f238 (every spelling is scanned, not refused, so `-m` text and a clean file still work). Check in `bin/selftest-security.sh`.
 
 ### L9. Credential saves that arrive together can lose one
 
@@ -277,6 +296,7 @@ This was also the first run of the Linux bubblewrap backend (gap G5) against a r
   check("file store: saves that arrive together all land", all(_got.get(k) == v for k, v in _vals.items()), _round)
   ```
 - **Suggested fix:** One `fcntl.flock` on a lock file in the config folder around `_write` and the whole of `move_store`, and a unique temp name (L3).
+- **Disposition:** fixed in ac36fea (a thread lock and an flock around every save and the whole of move_store). Check in `bin/selftest.py` (probabilistic, 20 rounds).
 
 ### L10. The infra duty names `.dev.vars`, `credentials.json` and `secrets.yaml` as never opened, but leaves them readable
 
@@ -294,6 +314,7 @@ This was also the first run of the Linux bubblewrap backend (gap G5) against a r
   ck "every file held back as secret-looking is also denied to Read" 'grep -q "Read(\*\*/.dev.vars" <<<"$deny" && grep -q "Read(\*\*/credentials" <<<"$deny" && grep -q "Read(\*\*/secrets" <<<"$deny"'
   ```
 - **Suggested fix:** Build the infra deny rules from `scan.py`'s list (or add `Read(/<wt>/<path>)` for each file the duty held back), and add those names to `_QD_SECRET_NAMES`.
+- **Disposition:** fixed in 7539341 for the infra duty. Adding the names to the global `_QD_SECRET_NAMES` is deferred: it changes every model call's deny list and the provider golden record, which the owner regenerates deliberately. Check in `bin/selftest-infra.sh`.
 
 ### L11. Another loopback app's cookie can hide the session cookie
 
@@ -318,6 +339,7 @@ This was also the first run of the Linux bubblewrap backend (gap G5) against a r
 
   It gives `[200, 401, 401]` today.
 - **Suggested fix:** Parse the header by hand (split on `;`, partition on `=`), and of several `qd_session` values take the one that names a live session; use it in all three places.
+- **Disposition:** fixed in 919e73f. Check in `bin/selftest.py` (also a stale second qd_session).
 
 ### L12. A non-ASCII token header drops the connection with a traceback
 
@@ -331,6 +353,7 @@ This was also the first run of the Linux bubblewrap backend (gap G5) against a r
   check("R8 a non-ASCII X-Quarterdeck-Token is answered 401, never a dropped connection", _r8t == [401, 401], _r8t)
   ```
 - **Suggested fix:** Compare bytes: `compare_digest(t.encode("latin-1"), TOKEN.encode())`, and the same for the session token.
+- **Disposition:** fixed in 919e73f. Check in `bin/selftest.py`.
 
 ### L13. A make include file is neither protected nor in the verify-inputs digest
 
@@ -339,6 +362,7 @@ This was also the first run of the Linux bubblewrap backend (gap G5) against a r
 - **Rule broken:** `model_diff_gate`'s "ANY change to a package.json scripts block or a Makefile" is refused.
 - **Failing test** (committed, check L13): change `rules.mk` under an unchanged Makefile; the path must be protected or the digest must change.
 - **Suggested fix:** Add `*.mk` and `*.mak` to `DEFAULT` and digest them with the Makefiles.
+- **Disposition:** fixed in caa5d6d. Check in `bin/selftest-checks.sh`.
 
 ### L14. The verify-inputs digest covers only package.json "scripts", not the keys that point the tools at files
 
@@ -355,6 +379,7 @@ This was also the first run of the Linux bubblewrap backend (gap G5) against a r
   assert p.inputs_digest(d) != a, "a changed jest key in package.json is invisible to the gate"
   ```
 - **Suggested fix:** Digest the whole of package.json except a short list of keys a plan may legitimately change (`version`, `description`, `dependencies`, `devDependencies`, `peerDependencies`, `optionalDependencies`, `files`, `exports`, `main`, `types`).
+- **Disposition:** fixed in caa5d6d (all of package.json but its metadata and dependency keys is digested). Check in `bin/selftest-checks.sh`.
 
 ### L15. `home migrate` follows symlinks in the destination, and at the top of the source
 
@@ -374,6 +399,7 @@ This was also the first run of the Linux bubblewrap backend (gap G5) against a r
   check("migrate: a program-folder item that is itself a link is not followed", not (_new9 / "logs" / "id_key").exists())
   ```
 - **Suggested fix:** Skip a `MOVE_DIRS`/`MOVE_FILES` source that `is_symlink()`; `lstat` every destination path at every level and skip or refuse a link; write new files with `os.open(t, O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW, 0o600)` and copy the bytes.
+- **Disposition:** fixed in 2d7e84b. Checks in `bin/selftest.py`.
 
 ### L16. Linux: git does not work inside a check, which pushes owners towards switching the sandbox off
 
@@ -389,6 +415,7 @@ This was also the first run of the Linux bubblewrap backend (gap G5) against a r
      'nxt --ro-bind-try "$a_git" | grep -qxF "$LH/main/.git/objects" && ! nxt --ro-bind-try "$a_git" | grep -qxF "$LH/main/.git/index"'
   ```
 - **Suggested fix:** Bind read-only the parts the macOS profile lets in (`objects`, `refs`, `packed-refs`, `HEAD`, `config`, `worktrees/<name>`), never `index`, `logs` or `refs/stash`; bind the scratch folder before the run folder; and name a git failure in a check as the sandbox's, as `project_exec` does on a Mac.
+- **Disposition:** fixed in 9da67cd (objects, refs, packed-refs, HEAD, config and worktrees/<name> read-only, the stash covered; scratch bound before the run folder). Naming a git failure in a check as the sandbox's is deferred. Argument-level check in `bin/selftest-checks.sh`; not run on a real kernel.
 
 ### L17. Test suite: `modeof` and the stand-in model read file modes wrongly on Linux
 
@@ -397,6 +424,7 @@ This was also the first run of the Linux bubblewrap backend (gap G5) against a r
 - **Rule broken:** CONTRIBUTING, the suite runs on macOS and Linux.
 - **Failing test:** the five checks named above, on any Linux machine.
 - **Suggested fix:** `modeof() { stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"; }` (GNU form first: BSD `stat -c` fails without printing), and the same order in the two other places.
+- **Disposition:** mostly already fixed before this round's work (`modeof` and `selftest-lib.sh` already try GNU `stat -c` first); the one remaining BSD-first read (commit identity, `bin/selftest-security.sh`) fixed in cd7d450. The stand-in `open` stub's `stat -f` runs on macOS only.
 
 ### L18. Test suite: the browser probe launches Chromium without the sandbox the driver requires
 
@@ -405,6 +433,7 @@ This was also the first run of the Linux bubblewrap backend (gap G5) against a r
 - **Rule broken:** a missing capability is a skip with its reason, as everywhere else in the suite.
 - **Failing test:** `bin/selftest-pilot.sh` and `bin/selftest-lookout.sh` on any machine where `chromium.launch({chromiumSandbox: true})` fails.
 - **Suggested fix:** Probe with `{chromiumSandbox: true}` and the driver's own `executablePath`.
+- **Disposition:** fixed in 5160b23. A text check in `bin/selftest.py` keeps the probe and the driver in step; not verified on a machine where the renderer sandbox cannot start.
 
 ### L19. Test suite: `bin/selftest.py` writes `config/projects.json` into the program folder
 
@@ -419,6 +448,7 @@ This was also the first run of the Linux bubblewrap backend (gap G5) against a r
 
   with `_had_projects_json = (ROOT / "config" / "projects.json").exists()` taken at the start.
 - **Suggested fix:** Give that check a throwaway `QUARTERDECK_HOME`, and have `lib.sh` create the empty registry only when the data folder is not the program folder.
+- **Disposition:** fixed in fd4e873 and b301bf3 (the data-folder check and the `qtdeck home` checks give lib.sh a registry path of their own). On this branch `config/projects.json` is a tracked file, so the end-of-run check passes trivially here; in the public tree it is real, and `publish.py --test` passes it. The lib.sh rule that makes the empty registry is unchanged, because a fresh install without a data folder relies on it.
 
 ## Observations (not counted)
 

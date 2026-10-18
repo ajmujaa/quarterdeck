@@ -64,10 +64,10 @@ def init(path):
         os.chmod(path / d, 0o700)
     os.chmod(path, 0o700)
     registry = path / "config" / "projects.json"
-    if not registry.exists():
+    if not registry.exists() and not registry.is_symlink():          # round 8 (L15): never written through a link, even a dangling one
         registry.write_text("{}\n")           # no projects yet: an empty registry, ready for `add`
     marker = path / MARKER
-    if not marker.exists():
+    if not marker.exists() and not marker.is_symlink():
         marker.write_text("This folder is a Quarterdeck home: your projects, state and logs live here, apart from the program.\n")
     return path
 
@@ -96,7 +96,7 @@ def plan(src, dst):
     src, dst, rows = Path(src), Path(dst), []
     for d in MOVE_DIRS:
         p = src / d
-        if p.is_dir():
+        if p.is_dir() and not p.is_symlink():          # round 8 (L15): a program-folder item that is itself a link is not followed
             n, size = _count(p)
             rows.append((d + "/", "folder", n, size, "target already has files, they are kept and only missing ones are added" if (dst / d).is_dir() and any((dst / d).iterdir()) else ""))
     for f in MOVE_FILES:
@@ -127,19 +127,37 @@ def live_processes(src):
     return why[:6]
 
 
-def _copy_tree(a, b):
+def _new_file(src, t):
+    """Copies src to a NEW file t, owner-only, never through a link (round 8, L15): O_EXCL and O_NOFOLLOW, so a link (even a dangling one) planted at t
+    makes this fail instead of writing outside the data folder."""
     import shutil
-    for root, dirs, files in os.walk(a):
+    fd = os.open(t, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    with os.fdopen(fd, "wb") as o, open(src, "rb") as i:
+        shutil.copyfileobj(i, o)
+    shutil.copystat(src, t, follow_symlinks=False)
+    os.chmod(t, 0o600)
+
+
+def _copy_tree(a, b):
+    """Copies what is missing in b; returns the (source, copy) pairs it copied, which is what the verify step checks. Round 8 (L15): a folder in the
+    destination that is a link is not entered (nothing under it is written), a destination file that is a link is skipped, and new files are
+    made with _new_file."""
+    copied = []
+    for root, dirs, files in os.walk(a):               # followlinks=False: a source folder that is a link is never walked
         rel = Path(root).relative_to(a)
+        if (b / rel).is_symlink() or (rel == Path(".") and b.is_symlink()):
+            dirs[:] = []
+            continue
         (b / rel).mkdir(parents=True, exist_ok=True)
-        os.chmod(b / rel, 0o700)                       # private whatever the old modes were
+        os.chmod(b / rel, 0o700, follow_symlinks=False)  # private whatever the old modes were
         for f in files:
             t = b / rel / f
-            if os.path.islink(Path(root) / f):
+            if os.path.islink(Path(root) / f) or t.is_symlink():
                 continue                               # a link could point at a secret anywhere on the disk: never followed, never copied
             if not t.exists():
-                shutil.copy2(Path(root) / f, t)
-                os.chmod(t, 0o600)
+                _new_file(Path(root) / f, t)
+                copied.append((Path(root) / f, t))
+    return copied
 
 
 def _digest(path):
@@ -164,45 +182,46 @@ def migrate(src, dst, apply=False, force=False):
         out.append(f"    {item:<26} {n:>6} file(s) {size / 1024:>9.0f} KB  {note}")
     if not rows:
         return True, out + ["  nothing to move"]
-    live = live_processes(src)
+    live = live_processes(src) + live_processes(dst)          # round 8 (M9): a live data folder is not copied into either
     if live and not force:
         return False, out + ["  not safe to copy now: " + "; ".join(live), "  stop it, or add --force if you accept a copy of live files"]
     if not apply:
         return True, out + ["", "  dry run: nothing was copied. Add --apply to copy, check, and switch over (the originals stay where they are)."]
-    init(dst)
+    if dst.is_symlink() or any((dst / d).is_symlink() for d in SUBDIRS):
+        return False, out + ["  the data folder, or one of its folders, is a link: nothing is copied into it (copy into a real folder)"]
     marker = dst / MARKER
-    if marker.exists():
-        marker.unlink()                               # switched off while copying: an interrupted copy changes nothing
+    was_active = marker.is_file()                     # round 8 (M9): an active data folder stays active whatever happens below
+    init(dst)
+    if not was_active and marker.exists():
+        marker.unlink()                               # a fresh folder is switched off while copying: an interrupted copy changes nothing
+    copied = []
     try:
         for d in MOVE_DIRS:
-            if (src / d).is_dir():
-                _copy_tree(src / d, dst / d)
+            if (src / d).is_dir() and not (src / d).is_symlink():
+                copied += _copy_tree(src / d, dst / d)
         for f in MOVE_FILES:
             if (src / f).is_file() and not (src / f).is_symlink():
                 t = dst / f
+                if t.is_symlink() or Path(str(t) + ".from-program").is_symlink() or t.parent.is_symlink():
+                    continue                                    # round 8 (L15): never written through a link
                 t.parent.mkdir(parents=True, exist_ok=True)
                 if t.exists() and t.name == "projects.json" and t.read_text().strip() == "{}":
                     t.unlink()                                  # the empty registry `init` makes is a placeholder, not something of yours
                 if t.exists() and _digest(t) != _digest(src / f):
-                    shutil.copy2(src / f, str(t) + ".from-program")
+                    if not Path(str(t) + ".from-program").exists():
+                        _new_file(src / f, Path(str(t) + ".from-program"))
                 elif not t.exists():
-                    shutil.copy2(src / f, t)
+                    _new_file(src / f, t)
                 for q in (t, Path(str(t) + ".from-program")):
                     if q.exists():
                         os.chmod(q, 0o600)
     except OSError as e:
-        return False, out + [f"  copy failed ({e}); nothing was switched and the originals are untouched"]
+        return False, out + [f"  copy failed ({e}); nothing was switched and the originals are untouched"
+                             + (" (this folder was already the active one and stays so)" if was_active else "")]
     bad = []
     for item, kind, n, size, note in rows:
         if kind == "folder":
-            for root, _d, files in os.walk(src / item.rstrip("/")):
-                for f in files:
-                    a = Path(root) / f
-                    if a.is_symlink():
-                        continue
-                    b = dst / a.relative_to(src)
-                    if not b.exists() or b.stat().st_size != a.stat().st_size:
-                        bad.append(str(a.relative_to(src)))
+            continue                                  # the folders: only the files this run copied are checked, just below
         else:
             b = dst / item
             a = src / item
@@ -210,8 +229,14 @@ def migrate(src, dst, apply=False, force=False):
                 bad.append(item)
             elif b.exists() and _digest(a) != _digest(b) and not Path(str(b) + ".from-program").exists():
                 bad.append(item)
+    for a, b in copied:                               # round 8 (M9): a file kept from an earlier run may have grown since, as the plan says it is kept
+        if not b.is_file() or b.is_symlink() or b.stat().st_size != a.stat().st_size:
+            bad.append(str(a.relative_to(src)))
     if bad:
-        return False, out + [f"  the copy did not verify ({len(bad)} file(s), for example {bad[0]}); nothing was switched"]
+        return False, out + [f"  the copy did not verify ({len(bad)} file(s), for example {bad[0]}); nothing was switched"
+                             + (" (this folder was already the active one and stays so)" if was_active else "")]
+    if marker.is_symlink() or (dst / "MIGRATED-FROM").is_symlink():
+        return False, out + ["  the marker or MIGRATED-FROM in the data folder is a link: nothing was switched"]
     marker.write_text("This folder is a Quarterdeck home: your projects, state and logs live here, apart from the program.\n")
     (dst / "MIGRATED-FROM").write_text(f"{src}\ncopied {len(rows)} item(s); the originals were left in place and can be deleted once you are happy.\n")
     return True, out + ["", "  copied and verified. The marker is in place, so the next start uses this folder.", f"  to go back: qtdeck home rollback   (the originals in {src} were not touched)"]

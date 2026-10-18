@@ -200,6 +200,24 @@ echo "api = $SK" > "$CR/leaky.txt"; git -C "$CR" add leaky.txt
 ( source "$T/bin/lib.sh"; safe_git -C "$CR" commit -q -m "chore: add a file" >/dev/null 2>&1; echo $? > "$T/cm-rc4" )
 ck "R-LOW and a commit whose staged lines add a credential is refused whatever its message says (nothing is committed)" '[ "$(cat "$T/cm-rc4")" = 3 ] && ! git -C "$CR" log --format=%s | grep -q "add a file"'
 git -C "$CR" rm -q --cached leaky.txt; rm -f "$CR/leaky.txt"
+# round 8 (L7): gh takes F inside a group of short flags too; (L8) git takes a message file in stuck, grouped and abbreviated spellings
+bad=""
+gp pr create -R x/tp --title t --head h -dF "$T/bodyfile2"; { [ "$GPRC" = 3 ] && [ ! -e "$T/gh-calls" ]; } || bad="$bad [-dF PATH]"
+gp pr create -R x/tp --title t --head h "-dF$T/bodyfile2"; { [ "$GPRC" = 3 ] && [ ! -e "$T/gh-calls" ]; } || bad="$bad [-dFPATH]"
+printf 'a clean body\n' > "$T/okbody2"; gp pr create -R x/tp --title t --head h -dF "$T/okbody2"; { [ "$GPRC" = 0 ] && grep -q "pr create" "$T/gh-calls"; } || bad="$bad [clean -dF refused]"
+ck "L7 gh_post scans a body file named after combined short flags (-dF PATH, -dFPATH), and a clean one goes through${bad:+ — WRONG:$bad}" '[ -z "$bad" ]'
+CR8="$T/commitrepo8"; git init -q -b main "$CR8"; git -C "$CR8" config user.name t; git -C "$CR8" config user.email t@example.invalid; echo a > "$CR8/a"; git -C "$CR8" add a
+printf 'fix: handles %s\n' "$SK" > "$T/msgfile"; printf 'fix: a clean message\n' > "$T/okmsg"; bad=""
+for form in "-F$T/msgfile" "-qF:$T/msgfile" "-qF$T/msgfile" "--fil=$T/msgfile" "--fil:$T/msgfile" "-t$T/msgfile" "--te=$T/msgfile"; do
+  case "$form" in -qF:*) args=(-qF "${form#-qF:}") ;; --fil:*) args=(--fil "${form#--fil:}") ;; *) args=("$form") ;; esac
+  ( source "$T/bin/lib.sh"; safe_git -C "$CR8" commit -q "${args[@]}" >/dev/null 2>&1; echo $? > "$T/cmrc" )
+  { [ "$(cat "$T/cmrc")" = 3 ] && [ -z "$(git -C "$CR8" log --oneline 2>/dev/null)" ]; } || bad="$bad [${form%%/*}]"
+done
+( source "$T/bin/lib.sh"; safe_git -C "$CR8" commit -q -mtest-with-t >/dev/null 2>&1; echo $? > "$T/cmrc" )
+[ "$(cat "$T/cmrc")" = 0 ] || bad="$bad [-mtext refused]"
+( source "$T/bin/lib.sh"; safe_git -C "$CR8" commit -q --allow-empty -qF "$T/okmsg" >/dev/null 2>&1; echo $? > "$T/cmrc" )
+[ "$(cat "$T/cmrc")" = 0 ] || bad="$bad [clean -qF refused]"
+ck "L8 safe_git commit scans a message file in every spelling git takes (-FPATH, -qF PATH, -qFPATH, --fil=, --fil PATH, -tPATH, --te=); -mtext and a clean file commit${bad:+ — WRONG:$bad}" '[ -z "$bad" ]'
 printf 'Fixes the crash.\n\nThe code does token =getTokenFromEnvironmentVariable() and then password = options.password || DEFAULT_VALUE.\nSee https://example.com/docs and sk-learn.\n' > "$T/ok-body"
 gp pr comment 5 -R x/tp --body "$(cat "$T/ok-body")"; r1=$GPRC; g1=$(grep -c "pr comment" "$T/gh-calls" 2>/dev/null)
 gp pr comment 5 -R x/tp --body-file "$T/ok-body"; r2=$GPRC
@@ -485,7 +503,7 @@ ck "commit identity: by default a commit is credited to the account's GitHub no-
 ck "commit identity: it is applied with -c (nothing is written into the repository's own configuration)" '[ "$(git -C "$IDR" config user.email)" = "private@example.org" ] && [ "$(cid p1 | grep -c -- "-c user.name=Ada Lovelace")" = 1 ]'
 ck "commit identity: git_identity repo keeps the checkout's own identity (no options added)" '[ -z "$(cid p2 | tr -d " ")" ]'
 ck "commit identity: a name and email in the registry win" '[[ "$(cid p3)" == *"user.email=ada@example.com"* ]]'
-ck "commit identity: it is cached once, owner-only" '[ -s "$IDH/state/gh-identity" ] && [ "$(stat -f%Lp "$IDH/state/gh-identity" 2>/dev/null || stat -c%a "$IDH/state/gh-identity")" = 600 ]'
+ck "commit identity: it is cached once, owner-only" '[ -s "$IDH/state/gh-identity" ] && [ "$(stat -c %a "$IDH/state/gh-identity" 2>/dev/null || stat -f %Lp "$IDH/state/gh-identity")" = 600 ]'
 
 # ---- S2 to S5: what the sandbox profile keeps out, with the real sandbox-exec, real commands and INVENTED decoys (a throwaway HOME, never the real one) ----------
 # Each check was run against the profile as it was before round 3 and failed there (resolver reachable, clipboard, other processes, secrets outside the worktree).

@@ -9,8 +9,11 @@ A service is one JSON file in bin/integrations/services/ (or in your data folder
   links[] ({label, url}, https only, a provider's own pages), and per credential looks (what the value looks like)
 Adding a service is adding a file. status() says where each one stands: off, needs set-up, ready, ok or failing, and when it last refreshed.
 """
+import contextlib
+import fcntl
 import json
 import re
+import threading
 from pathlib import Path
 
 from integrations import common, keychain
@@ -84,7 +87,7 @@ def env_keys():
             line = line.strip()
             if line and not line.startswith("#") and "=" in line:
                 k, v = line.split("=", 1)
-                if v.strip().strip("\"'"):
+                if common.unquote(v.strip()):
                     keys.add(k.strip())
     except OSError:
         pass
@@ -136,6 +139,32 @@ def known_keys(services=None):
     return {c["key"] for s in (load_services() if services is None else services) for c in s["credentials"]}
 
 
+_LOCK = threading.RLock()
+_HELD = threading.local()
+
+
+@contextlib.contextmanager
+def _store_lock():
+    """One writer at a time (round 8, L9: the dashboard is threaded, and four saves arriving together lost one): a thread lock for this process and
+    an flock on a file in the config folder for every process, taken once per thread (move_store writes through _write while it holds it)."""
+    with _LOCK:
+        if getattr(_HELD, "n", 0):
+            _HELD.n += 1
+            try:
+                yield
+            finally:
+                _HELD.n -= 1
+            return
+        common.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        with open(common.CONFIG_DIR / ".credentials.lock", "a") as lk:
+            fcntl.flock(lk, fcntl.LOCK_EX)
+            _HELD.n = 1
+            try:
+                yield
+            finally:
+                _HELD.n = 0
+
+
 def set_credential(key, value, services=None):
     """Store one credential in the private file (owner only), replacing any earlier value for that key. An empty value removes it.
     Only keys a manifest names are accepted. Returns whether the key is now present. Never returns or logs the value."""
@@ -146,7 +175,8 @@ def set_credential(key, value, services=None):
         raise ValueError("a credential is one line of at most 4000 characters")
     if value and common.store_kind() == "keychain" and not keychain.fits(key, value):
         raise ValueError(f"the keychain takes at most about {keychain.MAX_CHARS:,} characters per credential. Move credentials back to the file to keep a longer one")
-    _write(common.store_kind(), key, value)
+    with _store_lock():
+        _write(common.store_kind(), key, value)
     return bool(value)
 
 
@@ -166,11 +196,16 @@ def _write(kind, key, value):
     lines = p.read_text().splitlines() if p.is_file() else []
     keep = [l for l in lines if l.split("=", 1)[0].strip() != key]
     if value:
-        keep.append(f"{key}={value}")
+        keep.append(f"{key}={common.quote(value)}")      # round 8 (M6): read back exactly, a quote at either end included
     common.write_private(p, "\n".join(keep) + ("\n" if keep else ""))
 
 
 def move_store(to, services=None):
+    with _store_lock():
+        return _move_store(to, services)
+
+
+def _move_store(to, services=None):
     """Move every credential a service asks for to the other store, then make it the active one. The caller has the owner's confirm.
     Copies first (the keychain reads each back); the old copies go only after the new store holds them all; a failure leaves the old store as it was."""
     if to not in ("file", "keychain"):
@@ -195,6 +230,10 @@ def move_store(to, services=None):
         for k, v in src.items():
             done.append(k)                      # before the write: a write that fails half way must be undone too
             _write(to, k, v)
+        if to == "file":                        # round 8 (M6): read every value back before the keychain copies go, as keychain.put does
+            back = common.read_env_file()
+            if any(back.get(k) != v for k, v in src.items()):
+                raise ValueError("a credential did not read back from the file exactly, so nothing was moved")
     except Exception:
         for k in done:
             try:

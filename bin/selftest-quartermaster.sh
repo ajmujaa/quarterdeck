@@ -112,6 +112,11 @@ printf '## 1.2.4\n- Fixes a typo in the README.\n- Internal refactor.\n' > "$T/n
 st_pr 6 dep-forbidden lib/crypto/key.ts $'x\n' package.json "$(manifest 1.2.4)" package-lock.json "$(lock 1.2.4)"
 fresh; st_reply default "$MERGE_REPLY"; st_duty quartermaster --pr 6
 ck "a bump that touches a forbidden path is BLOCK, and no model was asked" 'grep -q "BLOCK" <<<"$OUT" && grep -q "forbidden path lib/crypto/" <<<"$OUT" && [ ! -s "$T/claude-calls" ] && [ ! -f "$T/installed.flag" ]'
+# round 8 (M8): a file name git C-quotes (a tab in it) was missed by the prefix match without -z
+git -C "$T/work" checkout -q main
+st_pr 40 dep-fp-tab "lib/crypto/a"$'\t'"b.ts" $'x\n' package.json "$(manifest 1.2.4)" package-lock.json "$(lock 1.2.4)"
+fresh; st_reply default "$MERGE_REPLY"; st_duty quartermaster --pr 40
+ck "M8 a forbidden path whose file name git C-quotes (a tab) is still BLOCK, and no model is asked" 'grep -q "BLOCK" <<<"$OUT" && grep -q "forbidden path lib/crypto/" <<<"$OUT" && [ ! -s "$T/claude-calls" ]'
 st_registry '["quartermaster"]' '{"verify":"grep -q OK check.txt","pinned":["left-pad"],"quartermaster":{"install":"true"}}'
 fresh; st_reply default "$MERGE_REPLY"; st_duty quartermaster --pr 1 --apply
 ck "a pinned package is BLOCK, no model is asked, and --apply labels and comments once" '[ "$(last_verdict)" = BLOCK ] && grep -q "pinned" <<<"$(last_detail)" && [ ! -s "$T/claude-calls" ] && grep -q "add-label quartermaster:block" "$T/gh-calls" && [ "$(grep -c "^gh pr comment" "$T/gh-calls")" = 1 ]'

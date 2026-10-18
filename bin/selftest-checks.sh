@@ -184,6 +184,44 @@ print(" ".join([h for h in hit if not p.matches(h, p.DEFAULT)] + ["NOT-A-HIT:" +
 PY
 )
 ck "R3 protect.py names conftest.py, pytest.ini, .babelrc, .mocharc*, jest.setup.*, .eslintrc*, babel and karma configs, at any depth and in any case${cov:+ (not matched: $cov)}" '[ -z "$cov" ]'
+# round 8 (M3, M4): other ecosystems' lockfiles and task manifests; editor tasks, dev containers, agent instruction files, other CI systems
+r8p=$(python3 - "$REAL/bin" "$T/r8dig" <<'PY'
+import json, os, sys; sys.path.insert(0, sys.argv[1]); import protect as p
+m3 = ["uv.lock", "Gemfile.lock", "composer.json", "composer.lock", "deno.json", "deno.jsonc", "deno.lock", "pdm.lock", "mix.lock"]
+m4 = [".vscode/tasks.json", ".vscode/settings.json", ".devcontainer/devcontainer.json", ".idea/runConfigurations/x.xml", "CLAUDE.md", "AGENTS.md",
+      ".cursor/rules/x.mdc", "bitbucket-pipelines.yml", ".buildkite/pipeline.yml", ".drone.yml", "appveyor.yml", "cloudbuild.yaml", "sub/CLAUDE.md"]
+bad = ["NOT PROTECTED:" + f for f in m3 + m4 if not p.matches(f, p.DEFAULT)]
+never = ["uv.lock", "Gemfile.lock", "composer.lock", "deno.lock", "pdm.lock", "mix.lock", "bitbucket-pipelines.yml", ".buildkite/pipeline.yml", ".drone.yml",
+         "appveyor.yml", "cloudbuild.yaml", "CLAUDE.md", "AGENTS.md", ".cursor/rules/x.mdc", ".devcontainer/devcontainer.json", ".vscode/tasks.json"]
+bad += ["PLAN UNLOCKS:" + f for f in never if p.allowed_by(f, [], "## 1. x\n\n**Where.** `%s`\n" % f)]
+bad += ["NOT-A-HIT:" + m for m in ["src/claude.md.ts", "docs/agent-notes.md", "src/composer.ts"] if p.matches(m, p.DEFAULT)]
+d = sys.argv[2]; os.makedirs(d)
+for name, a, b in (("composer.json", {"scripts": {"test": "phpunit"}}, {"scripts": {"test": "phpunit; x"}}), ("deno.json", {"tasks": {"t": "deno test"}}, {"tasks": {"t": "x"}})):
+    f = os.path.join(d, name); json.dump(a, open(f, "w")); h = p.inputs_digest(d); json.dump(b, open(f, "w"))
+    if p.inputs_digest(d) == h: bad.append("DIGEST BLIND:" + name)
+    os.remove(f)
+print(" ".join(bad))
+PY
+)
+r8l=$(python3 - "$REAL/bin" "$T/r8low" <<'PY'
+import json, os, sys; sys.path.insert(0, sys.argv[1]); import protect as p
+bad = ["PLAN UNLOCKS:" + f for f in ["vercel.json", "netlify.toml", "render.yaml", "amplify.yml", "wrangler.toml"]
+       if p.allowed_by(f, [], "## 1. x\n\n**Where.** `%s`\n" % f)]                                              # L2
+d = sys.argv[2]; os.makedirs(d)
+open(os.path.join(d, "Makefile"), "w").write("include rules.mk\ntest:\n\ttrue\n"); open(os.path.join(d, "rules.mk"), "w").write("X=1\n")
+a = p.inputs_digest(d); open(os.path.join(d, "rules.mk"), "w").write("X=2\n")
+if not p.matches("rules.mk", p.DEFAULT) or p.inputs_digest(d) == a: bad.append("L13 rules.mk")                     # L13
+f = os.path.join(d, "package.json"); json.dump({"scripts": {"test": "jest"}}, open(f, "w")); a = p.inputs_digest(d)
+for k, v in (("jest", {"globalSetup": "./src/setup-hook.js"}), ("packageManager", "pnpm@9.0.0"), ("babel", {"plugins": ["./x"]})):
+    json.dump({"scripts": {"test": "jest"}, k: v}, open(f, "w"))
+    if p.inputs_digest(d) == a: bad.append("L14 digest blind to package.json " + k)                           # L14
+json.dump({"scripts": {"test": "jest"}, "version": "2.0.0", "dependencies": {"x": "1"}}, open(f, "w"))
+if p.inputs_digest(d) != a: bad.append("L14 a version or dependency change moved the digest")
+print(" ".join(bad))
+PY
+)
+ck "L2/L13/L14 protect.py: deploy-platform config is beyond any plan; a make include file is protected and digested; package.json's tool-pointing keys (jest, babel, packageManager ...) are digested, its version and dependencies are not${r8l:+ ($r8l)}" '[ -z "$r8l" ]'
+ck "M3/M4 protect.py: uv, PDM, Bundler, Composer, Deno and Mix files, editor tasks, dev containers, agent instruction files and other CI pipelines are protected, the lockfiles, CI, agent files and run-on-open files beyond any plan, and composer scripts and deno tasks are in the verify-inputs digest${r8p:+ ($r8p)}" '[ -z "$r8p" ]'
 
 # ---- R4: a model that repoints the worktree's .git file (to a repository of its own with a signing program) ------------------------------
 # What the REAL Claude CLI let a model do to that file was tried by hand (see docs/public/SECURITY.md); this is the harness side, against a stand-in model that
@@ -374,6 +412,10 @@ ck "L4 with QUARTERDECK_CHECK_SANDBOX=off it runs unsandboxed (sandbox=none) and
 ck "L5 doctor's status line: refuses when bwrap is missing, shows the opt-out when set" 'lx qd_sandbox_status | grep -q "^no bubblewrap" && (export QUARTERDECK_CHECK_SANDBOX=off; lx qd_sandbox_status | grep -q "^no QUARTERDECK_CHECK_SANDBOX=off")'
 mv "$LH/fakebin/bwrap.off" "$LH/fakebin/bwrap"
 ck "L5 and shows ok with bwrap present" 'lx qd_sandbox_status | grep -q "^ok bubblewrap"'
+# round 8 (M7): --share-net keeps the host's abstract unix sockets reachable (install, serve on the opt-in). Not closed yet (no seccomp filter), so it
+# is stated where the owner looks: doctor's line, SECURITY.md and THREAT-MODEL.md.
+ck "M7 doctor's line, SECURITY.md and THREAT-MODEL.md name the abstract unix sockets an install (and an opted-in app) can reach on Linux" \
+   'lx qd_sandbox_status | grep -q "abstract unix sockets" && (QUARTERDECK_APP_NET=share lx qd_sandbox_status) | grep -q "abstract unix sockets" && grep -q "abstract unix sockets" "$REAL/docs/public/SECURITY.md" && grep -q "abstract unix sockets" "$REAL/docs/public/THREAT-MODEL.md"'
 # serve: the app a browser run starts. bwrap's network namespace is all or nothing, so a browser outside it cannot reach an app inside it: refused on
 # Linux unless the owner opted in with QUARTERDECK_APP_NET=share, and then the check sandbox plus the host network, nothing else.
 a_srv=$(QUARTERDECK_APP_NET=share lx _qd_bwrap_argv serve "$LH/wt" "$LH/data/workspace/exec.1")
@@ -388,6 +430,13 @@ ck "L6 a check is never given the network by the opt-in" '! (QUARTERDECK_APP_NET
 ck "L6 doctor shows the opt-in when it is on, and not when it is off" '(QUARTERDECK_APP_NET=share lx qd_sandbox_status) | grep -q "^ok bubblewrap.*QUARTERDECK_APP_NET=share" && ! (unset QUARTERDECK_APP_NET; lx qd_sandbox_status) | grep -q QUARTERDECK_APP_NET'
 mac_sb() { ( export HOME="$LH/home" QUARTERDECK_HOME="$LH/data"; source "$T/bin/lib.sh"; QUARTERDECK_HOME="$LH/data"; _qd_sb_profile "$1" "$LH/wt" "$LH/s" ) 2>&1; }
 ck "L6 on a Mac the serve profile is the check profile byte for byte (seatbelt already lets a browser reach the app on loopback)" '[ "$(mac_sb serve | cksum)" = "$(mac_sb check | cksum)" ] && [ -n "$(mac_sb check)" ]'
+# round 8 (L1): a deny rule for a path holding " or \ was left out of the profile, so a checkout with such a name stayed readable to a check
+MQ="$T/mq"; mkdir -p "$MQ/home/code/my\"proj" "$MQ/data/workspace" "$MQ/wt" "$MQ/s"
+jq -n --arg p "$MQ/home/code/my\"proj" '{x:{path:$p}}' > "$MQ/projects.json"
+l1=$( ( export HOME="$MQ/home" QUARTERDECK_HOME="$MQ/data"; source "$T/bin/lib.sh"; QUARTERDECK_HOME="$MQ/data"; PROJECTS_FILE="$MQ/projects.json"
+        _qd_sb_profile check "$MQ/wt" "$MQ/s" >/dev/null; echo "rc=$?"; PROJECTS_FILE=/nonexistent; _qd_sb_profile check "$MQ/wt" "$MQ/s" >/dev/null; echo "rc=$?"
+        _qd_sb_profile check "$MQ/w\\t" "$MQ/s" >/dev/null; echo "rc=$?" ) 2>/dev/null | tr '\n' ' ')
+ck "L1 seatbelt profile: a registered checkout (or a worktree) whose path holds a quote or a backslash refuses the whole profile, never leaves it readable ($l1)" '[ "$l1" = "rc=1 rc=0 rc=1 " ]'
 
 # ---- round 5: what a hostile checkout or a check can do to the sandbox and to the commit ---------------------------------------------------------
 # M: a toolchain folder on PATH (~/.cargo/bin, ~/.local/bin) bound read-only also bound the folder above it, which holds the credentials file.
@@ -408,6 +457,23 @@ for e in "$LH/home/" "$LH/home//bin" "$LH/home/./bin" "$LH/tools" "$LH/tools/bin
   done < <(nxt --ro-bind-try "$a_h3" | grep -vxF -- --ro-bind-try | grep -vxF -- --)
 done
 ck "H3 bwrap argv: no PATH spelling or link binds the home folder (or a credential folder) into the sandbox${bad:+ (bound:$bad)}" '[ -z "$bad" ]'
+# round 8 (L16): git in a check needs the main checkout's objects and refs (the Mac profile lets them in); never its index, logs or stash
+mkdir -p "$LH/main/.git/worktrees/wt16" "$LH/main/.git/objects" "$LH/main/.git/refs" "$LH/wt16"; : > "$LH/main/.git/refs/stash"
+printf 'gitdir: %s\n' "$LH/main/.git/worktrees/wt16" > "$LH/wt16/.git"
+a_git=$(lx _qd_bwrap_argv check "$LH/wt16" "$LH/s16")
+g16=$(nxt --ro-bind-try "$a_git")
+ck "L16 bwrap argv: the main checkout's objects, refs and this worktree's gitdir are bound read-only (not its index or logs, the stash covered), and the scratch folder is bound before the worktree" \
+   'grep -qxF "$LH/main/.git/objects" <<<"$g16" && grep -qxF "$LH/main/.git/worktrees/wt16" <<<"$g16" && ! grep -qxF "$LH/main/.git/index" <<<"$g16" && ! grep -qxF "$LH/main/.git/logs" <<<"$g16" && ! grep -qxF "$LH/main/.git" <<<"$g16" && ! grep -qxF "$LH/main" <<<"$g16" &&
+    nxt --ro-bind "$a_git" | grep -qxF /dev/null && [ "$(grep -nxF -- "$LH/s16" <<<"$a_git" | head -1 | cut -d: -f1)" -lt "$(grep -nxF -- "$LH/wt16" <<<"$a_git" | head -1 | cut -d: -f1)" ]'
+printf 'gitdir: %s\n' "$LH/home" > "$LH/wt16/.git"
+ck "L16 a .git file that names anything but a linked worktree's gitdir binds nothing of it" '! lx _qd_bwrap_argv check "$LH/wt16" "$LH/s16" | grep -qxF "$LH/home/objects"'
+# round 8 (M2): a PATH entry inside a code folder bound the folder above it, which is the whole checkout of another project (or all of ~/code).
+mkdir -p "$LH/home/Projects/other/bin" "$LH/home/Projects/other/tools/bin" "$LH/home/code/bin"
+a_m2=$( ( export HOME="$LH/home" QUARTERDECK_HOME="$LH/data" PATH="$LH/home/Projects/other/bin:$LH/home/Projects/other/tools/bin:$LH/home/code/bin:$LH/home/Projects:/usr/bin:/bin"
+          source "$T/bin/lib.sh"; QUARTERDECK_HOME="$LH/data"; QUARTERDECK_DIR="$LH/prog"; _qd_bwrap_argv check "$LH/wt" "$LH/s" ) 2>/dev/null)
+m2b=$(nxt --ro-bind-try "$a_m2" | grep -vxF -- --ro-bind-try)
+ck "M2 bwrap argv: a PATH entry inside a code folder binds only that folder, never the checkout or the code folder above it, nor a code folder itself" \
+   'grep -qxF "$LH/home/Projects/other/bin" <<<"$m2b" && grep -qxF "$LH/home/code/bin" <<<"$m2b" && ! grep -qxF "$LH/home/Projects/other" <<<"$m2b" && ! grep -qxF "$LH/home/Projects/other/tools" <<<"$m2b" && ! grep -qxF "$LH/home/code" <<<"$m2b" && ! grep -qxF "$LH/home/Projects" <<<"$m2b"'
 # H: a node_modules link committed in the repository (not the one the harness borrowed) was let back into the sandbox, whatever it pointed at.
 R5R="$T/r5repo"; mkdir -p "$LH/wt-r5"; ln -sfn "$LH/home" "$LH/wt-r5/node_modules"   # as a checkout that carries the link would leave it
 r5lx() { px_prepare check "$LH/wt-r5" || echo "PX-FAILED $?"; printf '%s\n' ${PX_PRE[@]+"${PX_PRE[@]}"}; }

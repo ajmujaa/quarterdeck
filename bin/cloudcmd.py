@@ -49,8 +49,11 @@ _VERBS = {
 # between the tool and its verb: any number of options, each with or without a value (`-chdir=prod`, `--profile prod`, `-no-color`)
 _OPTS = r"(?:\s+-[^\s]+(?:\s+[^\s-][^\s]*)?)*"
 # what makes it an instruction: the start of a line, a field or a code span (after a shell prompt or a list marker), or a word that says to run it
-_START = r"(?:^|\n)[ \t]*(?:(?:[$>#%]|[-*+]|\d+[.)])[ \t]*)?"
+# (round 8, M5) a shell separator or a subshell starts a command too (`cd prod && terraform destroy`, `yes | ...`, `(cd x; ...)`)
+_START = r"(?:(?:^|\n)[ \t]*(?:(?:[$>#%]|[-*+]|\d+[.)])[ \t]*)?|[;&|(][ \t]*)"
 _TELL = r"\b(?:run|rerun|re-run|execute|exec|type|enter|invoke|try|do|then|first|next|now|please|just|via)[ \t]+"
+# (round 8, M5) after either, any run of launchers and assignments before the tool: `sudo`, `env`, `npx cdk`, `TF_VAR_x=1 terraform`
+_LAUNCH = r"(?:(?:[a-z_][a-z0-9_]*=[^\s]*|(?:sudo|env|npx|bunx|pnpm[ \t]+(?:dlx|exec)|yarn[ \t]+dlx|time|nohup|exec|command)(?:[ \t]+-[^\s]+)*)[ \t]+)*"
 _OPT_VERB = "|--?[a-z]"            # a verb list ending in this: the tool followed straight by an option (`vercel --prod`) counts too
 
 
@@ -59,7 +62,7 @@ def _verbs(v):
     return f"(?:(?:{words})(?![a-z0-9_])" + (_OPT_VERB if v.endswith(_OPT_VERB) else "") + ")"
 
 
-CLOUD_CMD = re.compile(r"(?:" + _START + "|" + _TELL + r")(?P<cmd>(?:[^\s]*/)?(?:" + "|".join(
+CLOUD_CMD = re.compile(r"(?:" + _START + "|" + _TELL + r")" + _LAUNCH + r"(?P<cmd>(?:[^\s]*/)?(?:" + "|".join(
     f"(?:{t})(?:{_OPTS})\\s+{_verbs(v)}" for t, v in _VERBS.items()) + "))")
 
 _BREAK = "\n\r\v\f\x1c\x1d\x1e\x85  "

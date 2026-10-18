@@ -34,20 +34,20 @@
 
 <h2>How it stays safe</h2>
 <ul>
-<li><strong>The model thinks, the harness acts.</strong> A model call gets read-only search and read tools limited to its working folder, and no shell, no <code>git</code> and no <code>gh</code>. The harness alone commits, pushes and posts, and only with an explicit apply.</li>
+<li><strong>The model thinks, the harness acts.</strong> A review call gets read-only search and read tools limited to its working folder, and no shell, no <code>git</code> and no <code>gh</code>. A builder call can also edit files inside a throwaway working copy and run a few named commands (<code>npm run</code>, <code>node</code>, <code>python3</code>, <code>pytest</code>). The harness alone commits, pushes and posts, and only with an explicit apply.</li>
 <li><strong>The dashboard is local.</strong> It binds to <code>127.0.0.1</code> only, pairs through a one-time link that works once and for five minutes, and checks a session token and a same-origin test on every change.</li>
 <li><strong>Private places are closed to models.</strong> Your data folder's private files, <code>~/.ssh</code>, <code>~/.aws</code>, <code>~/.config</code> and other credential places are on a deny list.</li>
 <li><strong>Outgoing text is scanned for credentials</strong> and refused on a hit. This is a safety net for accidents, not a barrier against someone determined.</li>
-<li><strong>Project commands run in a sandbox.</strong> Your project's test and build commands run with a minimal environment and a scratch home folder. On macOS they run inside <code>sandbox-exec</code>, with writes only in the worktree and the network confined to this machine.</li>
+<li><strong>Project commands run in a sandbox.</strong> Your project's test and build commands run with a minimal environment and a scratch home folder. On macOS they run inside <code>sandbox-exec</code>, with writes only in the worktree and the network limited to this machine. An install step is the exception and has network access. On Linux they use bubblewrap, which has so far run only in the project's own CI.</li>
 <li><strong>Model-made changes to sensitive files are refused</strong> before any project command runs: CI files, dependency manifests, test-runner configs, <code>.env</code> files and similar.</li>
 <li><strong>Text from a pull request, an issue or a web page is data, never instructions.</strong></li>
-<li><strong>Credentials you enter for connections</strong> are kept in a private file on your computer (mode 0600), or on macOS optionally in the Keychain.</li>
+<li><strong>Credentials you enter for connections</strong> are kept in a private file on your computer (mode 0600), or on macOS optionally in the Keychain, which protects less than it may seem (see the security notes on GitHub).</li>
 </ul>
 
 <h2>What is tested</h2>
 <ul>
 <li>A self-test suite, run with <code>python3 bin/selftest.py</code>, also run in CI on macOS and Ubuntu.</li>
-<li>Prompt injection: 50 hostile texts in 16 styles, tested offline, and over a thousand real runs on two models. A few dozen texts are not a proof, and results vary by model and by run.</li>
+<li>Prompt injection: 50 hostile texts in 16 styles, tested offline, and 701 real runs on two models in which none obeyed (plus 400 control runs with the protection removed on purpose, in which 2 obeyed). A few dozen texts are not a proof, and results vary by model and by run.</li>
 <li>Third-party files in the dashboard are pinned by checksum and checked on every self-test.</li>
 </ul>
 

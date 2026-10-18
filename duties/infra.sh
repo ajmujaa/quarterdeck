@@ -224,6 +224,10 @@ VERDICT: CLEAN
 VERDICT: REVIEWED <count>"
 
 DENY="$QUARTERDECK_DENY_TOOLS,Bash,Read(**/*.tfstate*),Read(**/*.tfvars*),Read(**/.env*),Read(**/*.pem)"
+# round 8 (L10): every name bin/scan.py's SECRET_NAME holds back is also closed to Read, not only named in the prompt
+for n in '.dev.vars*' credentials credentials.json 'secret.json' 'secrets.json' 'secret.yaml' 'secrets.yaml' 'secret.yml' 'secrets.yml' 'secret.toml' 'secrets.toml' '*.keystore' '*.p12' '*.pfx' 'id_rsa*' 'id_ed25519*' 'id_ecdsa*'; do
+  DENY="$DENY,Read(**/$n)"
+done
 result=$(claude_run "$WT" "$prompt" "Read,Grep,Glob" "$DENY"); rc=$?
 [ $rc = 2 ] && { say "quarterdeck: usage limit reached — nothing written"; exit 0; }
 [ $rc = 3 ] && { record_run "$PROJECT" infra ERROR "$KEY stopped at the per-call cap"; die "infra: the model call hit its per-call cap — nothing written"; }

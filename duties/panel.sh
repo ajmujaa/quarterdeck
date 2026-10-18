@@ -544,6 +544,9 @@ case "$MODE" in findings|plan) dk=change ;; *) dk=decision ;; esac
 RULING="$(jq -c --arg dk "$dk" 'map(
     .kind = (if (.kind | IN("change","decision","invariant","deferral")) then .kind else $dk end)
   | .tier = (if (.tier | IN("mechanical","routine","intricate","hard")) then .tier else "routine" end))' <<<"$RULING")"
+# Every field one line before anything renders or stores it: a line break in a field would start a line of its own in the document, and a
+# heading and a Where line written there would read as a second item that unlocks its path (round 8, M1).
+RULING="$(qd_flat_json <<<"$RULING")" && [ -n "$RULING" ] || die "the ruling could not be made one line per field — the argument is kept in $TX"
 KEPT="$(jq 'length' <<<"$RULING")"
 
 # ---- the document ------------------------------------------------------------

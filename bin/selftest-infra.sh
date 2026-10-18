@@ -60,6 +60,10 @@ ck "  the stack notes of the fitting pack were added" 'grep -q "Stack notes: AWS
 ck "  the secret-looking file is named and never given: its contents are nowhere in the prompt" 'grep -q "terraform.tfvars" "$T/claude-calls" && ! grep -q "hunter2-secret" "$T/claude-calls"'
 ck "  the model is told the contract is all the harness reads, so nothing is left in prose" 'grep -q "anything" "$T/claude-calls" && grep -q "outside them is thrown away" "$T/claude-calls"'
 ck "  the seat is the rigger's" 'grep -q "You are the rigger" "$T/claude-calls"'
+# round 8 (L10): every name the harness holds back as secret-looking (bin/scan.py SECRET_NAME) is also denied to Read
+deny=$(jq -r .deny "$T/claude-calls" | head -1)
+ck "L10 every file held back as secret-looking is also denied to Read (.dev.vars, credentials, secrets.*, keystores)" \
+   'grep -qF "Read(**/.dev.vars*)" <<<"$deny" && grep -qF "Read(**/credentials.json)" <<<"$deny" && grep -qF "Read(**/secrets.yaml)" <<<"$deny" && grep -qF "Read(**/*.keystore)" <<<"$deny"'
 ck "  the model may only read: Read, Grep, Glob, and the deny list shuts the shell and secret files" '[ "$(jq -r .tools "$T/claude-calls" | head -1)" = "Read,Grep,Glob" ] && jq -e ".deny | contains(\"Bash\") and contains(\"Write\") and contains(\"tfstate\") and contains(\"tfvars\")" "$T/claude-calls" >/dev/null'
 ck "  report only writes nothing: no document, no pull request write, the project checkout is as it was, no worktree left" '[ -z "$(docs)" ] && no_gh_writes && [ "$(git -C "$T/work" status --porcelain | wc -l | tr -d " ")" = "$before" ] && [ "$(git -C "$T/work" worktree list | wc -l | tr -d " ")" = 1 ]'
 ck "  no cloud tool was called and no cloud credential reached the model" '[ ! -e "$T/cloud-calls" ] && ! grep -qE "AKIAFIXTUREKEY|fixture-secret-value|vercel-fixture-token|sbp_fixture|fixture-pw|cf-fixture-token|fly-fixture-token|az-fixture-secret|arm-fixture-secret|^AWS_|^VERCEL_|^SUPABASE_|^TF_VAR|^CLOUDFLARE_|^FLY_|^GOOGLE_|^AZURE_|^ARM_|^CLOUDSDK_" "$T/claude-env"'
@@ -144,6 +148,16 @@ PY
 )
 ck "L3 a command the Markdown report would render (emphasis, link, tag, comment), one named by its path, and kubectl/helm/firebase/netlify/heroku/gh/doctl/eksctl/docker are found ($(sed -n 's/^MISS: //p' <<<"$l3"))" 'grep -qx "MISS: " <<<"$l3"'
 ck "L3 an ordinary review sentence that names a tool (terraform import block, cdk diff, Ask Sam - he, Supabase db migrations, Vercel env variables, aws s3 in CI) is not refused ($(sed -n 's/^FP: //p' <<<"$l3"))" 'grep -qx "FP: " <<<"$l3"'
+# round 8 (M5): a command after a shell separator or a subshell, or after a launcher or an assignment, is a command too
+m5=$(python3 - "$REAL/bin" <<'PY'
+import sys; sys.path.insert(0, sys.argv[1]); import cloudcmd as c
+must = ["cd infra; terraform apply -auto-approve", "cd prod && terraform destroy -auto-approve", "(cd prod && terraform destroy)", "yes | terraform destroy",
+        "sudo terraform destroy", "npx cdk deploy", "env terraform destroy -auto-approve", "TF_VAR_x=1 terraform destroy", "run sudo -E terraform apply",
+        "Then run `AWS_PROFILE=prod aws s3 rm s3://b --recursive`."]
+print(" | ".join(s for s in must if not c.find(s)))
+PY
+)
+ck "M5 a cloud command after ; && | ( or after sudo/env/npx or VAR=value is found${m5:+ (MISSED: $m5)}" '[ -z "$m5" ]'
 reply "[$(jq -nc '{resource:"r",change:"<img src=x onerror=alert(1)>",risk:"low",why:"w",blast_radius:"b",rollback:"revert the commit",needs_human:false}')]" "REVIEWED 1"; rm -f "$T"/workspace/*infra*.md
 st_duty infra --pr 2 --apply
 ck "L3 a model field is written into the report escaped: no raw HTML" '[ "$(last_verdict)" = REVIEWED ] && ! grep -q "<img" "$T/workspace/tp-infra-pr2.md" && grep -q "&lt;img" "$T/workspace/tp-infra-pr2.md"'

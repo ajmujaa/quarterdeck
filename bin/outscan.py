@@ -25,7 +25,7 @@ EXTRA = [
     ("a JSON web token", r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"),
     ("a password in a URL", r"\b[a-z][a-z0-9+.-]{1,12}://[^\s/:@]{1,64}:[^\s/@]{3,}@[^\s/]+"),
     ("an AWS secret access key", r"(?i)aws_?secret_?access_?key[\"']?\s*[:=]\s*[\"']?[A-Za-z0-9/+=]{30,}"),
-    ("a labelled secret value", r"(?i)\b(?:api[_-]?key|secret|token|passw(?:or)?d|private[_-]?key|client[_-]?secret)[\"']?\s*[:=]\s*[\"']?(?=[A-Za-z0-9/+_=-]*\d)(?=[A-Za-z0-9/+_=-]*[A-Za-z])[A-Za-z0-9/+_=-]{24,}"),   # needs a digit and a letter: code like token = getTokenFromEnvironment() is not a secret
+    ("a labelled secret value", r"(?i)\b(?:api[_-]?key|secret|token|passw(?:or)?d|private[_-]?key|client[_-]?secret)[\"']?\s*[:=]\s*[\"']?(?=[A-Za-z0-9/+_=-]{0,512}?\d)(?=[A-Za-z0-9/+_=-]{0,512}?[A-Za-z])[A-Za-z0-9/+_=-]{24,512}"),   # needs a digit and a letter: code like token = getTokenFromEnvironment() is not a secret; bounded (round 8, L6: unbounded, a long run of labels took minutes)
     ("an npm token", r"\bnpm_[A-Za-z0-9]{30,}"),
     ("a Twilio or SendGrid key", r"\b(?:SK[0-9a-f]{32}|SG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,})"),
 ]
@@ -60,7 +60,9 @@ def scan_text(text):
     (normalise), then with every quote, plus, comma, bar and space taken out (a key split over lines or string pieces), and its base64 runs decoded."""
     seen = normalise(text)
     squashed = re.sub(r"[\s\"'`+,;|\\]+", "", seen)
-    views = [(text, PATTERNS), (seen, PATTERNS), (squashed, _guard.SECRETS)] + [(d, PATTERNS) for d in _decoded(seen)]
+    # round 8 (L4): base64 wrapped over lines (76 columns, as encoders write it) is also decoded with only the white space taken out
+    views = [(text, PATTERNS), (seen, PATTERNS), (squashed, _guard.SECRETS)] + [(d, PATTERNS) for d in _decoded(seen)] \
+        + [(d, PATTERNS) for d in _decoded(re.sub(r"\s+", "", seen))]
     out = []
     for body, pats in views:
         for label, pat in pats:
@@ -113,7 +115,7 @@ def known_value_hit(text, values=None):
     """True when the text carries one of the machine's own secrets in any shape that survives stripping everything but letters and digits and ignoring case:
     as it is, reversed, hex-encoded, base64 or base32-encoded. Only a transformation that changes the letters themselves (rot13, a cipher) gets past,
     and that needs the model to have been shown the value at all."""
-    flat = _alnum(text)
+    flat = _alnum(normalise(text))                   # round 8 (L5): fullwidth letters are folded, not dropped
     for v in (known_values() if values is None else values):
         for form in (v, v[::-1], v.encode().hex(), base64.b64encode(v.encode()).decode(), base64.urlsafe_b64encode(v.encode()).decode(), base64.b32encode(v.encode()).decode()):
             f = _alnum(form)

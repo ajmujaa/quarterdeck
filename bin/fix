@@ -112,7 +112,8 @@ all=$(jq -c --arg k "$DEFKIND" 'map(.kind = (.kind // $k) | .tier = (.tier // "r
 for n in $(jq -r '.[] | select(.kind != "change") | .n' <<<"$all"); do
   say "  item $n is labelled $(jq -r --argjson n "$n" '.[] | select(.n == $n) | .kind' <<<"$all"), not a change — left out"
 done
-build=$(jq -c 'map(select(.kind == "change"))' <<<"$all")
+# every field one line (a ruling stored before round 8 may hold line breaks): see qd_flat_json (round 8, M1)
+build=$(jq -c 'map(select(.kind == "change"))' <<<"$all" | qd_flat_json) && [ -n "$build" ] || die "fix: the ruling's items could not be read"
 if [ "$(jq length <<<"$build")" = 0 ]; then
   KIND=$(jq -r '.[0].kind' <<<"$all")
   say ""

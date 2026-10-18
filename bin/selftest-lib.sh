@@ -147,10 +147,11 @@ last_detail()  { jq -r '.[-1].detail // ""' "$T/state/runs.json" 2>/dev/null || 
 gh_writes()    { grep -cE '^gh (pr (create|edit|comment|merge|review)|issue (create|edit|comment)|api)' "$T/gh-calls" 2>/dev/null || true; }
 no_gh_writes() { [ ! -f "$T/gh-calls" ] || [ "$(gh_writes)" = 0 ]; }
 
-# Browser checks need playwright and a browser; say plainly when this machine has neither, and run nothing then.
+# Browser checks need playwright and a browser; say plainly when this machine has neither, and run nothing then. The probe launches the way
+# bin/browse.mjs does (its executable, the renderer sandbox on: round 8, L18), so a machine where that cannot start is a skip, not 50 failures.
 st_have_browser() {
   [ -z "${NODE_PATH:-}" ] && [ -d /opt/node-tools/node_modules ] && export NODE_PATH=/opt/node-tools/node_modules
   command -v node >/dev/null 2>&1 && node -e 'require("playwright")' 2>/dev/null \
-    && node -e 'require("playwright").chromium.launch({executablePath:process.env.QUARTERDECK_CHROMIUM||undefined}).then(b=>b.close()).then(()=>process.exit(0),()=>process.exit(1))' 2>/dev/null
+    && node -e 'require("playwright").chromium.launch({executablePath:process.env.QUARTERDECK_CHROMIUM||undefined,chromiumSandbox:true}).then(b=>b.close()).then(()=>process.exit(0),()=>process.exit(1))' 2>/dev/null
 }
 st_skip() { printf '  skip  %s\n' "$1"; }

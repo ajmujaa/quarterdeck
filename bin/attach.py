@@ -83,7 +83,7 @@ def propose(prof, name=None):
 CONTROL = re.compile(r"[\x00-\x1f\x7f\x85\u2028\u2029]")
 PATH_OK = re.compile(r"[A-Za-z0-9_.@+][A-Za-z0-9_.@+ /-]{0,198}")      # a relative path or prefix; no glob, quote, $ or ; in it
 VERIFY_OK = re.compile(r"[A-Za-z0-9_./:=@+ -]{1,200}")                 # one plain command line: no ; & | $ ` < > ( ) quotes or line breaks
-MAX_FORBIDDEN = 100
+MAX_FORBIDDEN = len(_protect.prefixes()) + 100      # the harness's own prefixes, which an edit may not drop, plus room for the owner's
 
 
 def known_duties():
@@ -165,11 +165,10 @@ def agents_md(prop):
 
 
 def write_agents_md(prop, root):
-    """Add AGENTS.md to the project. Only after the owner confirmed; never replaces a file or link already there; refuses a path the protected-path rules guard.
-    Returns "written" or "exists"."""
+    """Add AGENTS.md to the project. Only after the owner confirmed; never replaces a file or link already there. Returns "written" or "exists".
+    AGENTS.md is a protected path since round 8 (M4): that rule is about a MODEL changing it in a worktree. This is the owner's own confirmed write of
+    a fixed text into their checkout, which no model or issue can trigger or steer, so it is not refused for that reason."""
     root = Path(root)
-    if _protect.matches("AGENTS.md", _protect.DEFAULT):
-        raise ValueError("AGENTS.md is a protected path and is not written")
     target = root / "AGENTS.md"
     if target.exists() or target.is_symlink():
         return "exists"

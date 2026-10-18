@@ -225,10 +225,26 @@ _qd_git_out() { # _qd_git_out <git args...>
     return 3
   fi
   if [ "$sub" = commit ]; then                      # a message read from a file is text that leaves too
-    local f="" prevf=""
+    local f="" prevf="" gw lead pre want="" msg=""
     for a in "$@"; do
-      case "$prevf" in -F|--file|-t|--template) f=$a ;; esac
-      case "$a" in --file=*|--template=*) f=${a#*=} ;; esac
+      [ -n "$want" ] && { f=$a; want=""; }
+      if [ -n "$msg" ]; then msg=""; prevf=$a; continue; fi     # the text after -m is the message itself (scanned above), not a flag
+      # round 8 (L8): every spelling git takes: -F X, -FX, a group of short flags holding F or t (-qF X, -qFX), --file X, --file=X and the
+      # abbreviated long options (--fil=X, --fi X, --te=X); and the same for -t / --template
+      case "$a" in
+        --fi|--fil|--file|--te|--tem|--temp|--templ|--templa|--templat|--template) want=1 ;;
+        --fi=*|--fil=*|--file=*|--te=*|--tem=*|--temp=*|--templ=*|--templa=*|--templat=*|--template=*) f=${a#*=} ;;
+        --message|-m) msg=1 ;;
+        --*) ;;
+        -[A-Za-z]*)
+          gw=${a#-}; lead=${gw%%[!A-Za-z]*}; pre=${lead%%[Ft]*}
+          case "$pre" in
+            *m*) [ "${gw#"${pre%%m*}"m}" = "" ] && msg=1 ;;    # an m before any F or t: the rest (or the next word) is the message (-mtext, -qm text)
+            *) if [ "$pre" != "$lead" ]; then                  # F or t in the group: the rest of the word, or the next word, is the file
+                 gw=${gw#"$pre"?}; if [ -z "$gw" ]; then want=1; else f=$gw; fi
+               fi ;;
+          esac ;;
+      esac
       prevf=$a
       if [ -n "$f" ] && { [ "$f" = - ] || ! python3 "$QUARTERDECK_DIR/bin/outscan.py" "$f" >/dev/null 2>&1; }; then
         log "REFUSED git commit: the message file looks like it holds a credential, or could not be read. Nothing was done."
@@ -303,10 +319,25 @@ commit_identity() {
 # gh_post <seconds> <gh args...>   (returns 3 and posts nothing when the text holds a secret)
 gh_post() {
   local secs=$1; shift
-  local a prev="" bad="" all=""
+  local a prev="" bad="" all="" g lead pre want=""
   for a in "$@"; do
     case "$prev" in
-      --body-file|-F|--input|-T|--template) { [ "$a" != - ] && python3 "$QUARTERDECK_DIR/bin/outscan.py" "$a" >/dev/null 2>&1; } || bad="the body file" ;;
+      --body-file|-F|--input|-T|--template) want=1 ;;
+    esac
+    if [ -n "$want" ]; then
+      { [ "$a" != - ] && python3 "$QUARTERDECK_DIR/bin/outscan.py" "$a" >/dev/null 2>&1; } || bad="the body file"
+      want=""
+    fi
+    # round 8 (L7): gh also takes F or T inside a group of short flags (-dF PATH, -dFPATH): the word after it, or the rest of the group, is the file
+    case "$a" in
+      --*) ;;
+      -[A-Za-z]*)
+        g=${a#-}; lead=${g%%[!A-Za-z]*}; pre=${lead%%[FT]*}
+        if [ -n "$pre" ] && [ "$pre" != "$lead" ]; then
+          g=${g#"$pre"?}
+          if [ -z "$g" ]; then want=1
+          else python3 "$QUARTERDECK_DIR/bin/outscan.py" "$g" >/dev/null 2>&1 || bad="the body file"; fi
+        fi ;;
     esac
     case "$a" in
       --input=*|--template=*) python3 "$QUARTERDECK_DIR/bin/outscan.py" "${a#*=}" >/dev/null 2>&1 || bad="the body file" ;;
@@ -1039,6 +1070,13 @@ record_run() { # record_run <project> <duty> <verdict> [detail] [url]
   with_file_lock "$RUNS_LEDGER" _append_run_row
 }
 
+# qd_flat_json — JSON on stdin, the same JSON on stdout with every string made one line: each run of control characters (\n, \r, \v, \f, the
+# separators \x1c-\x1e), NEL, U+2028 and U+2029 becomes one space, and leading white space goes. The renderers of a plan or ruling document
+# (panel, joiner, fix) pass every model-written field through this first: a line break inside one field would otherwise start a line of
+# its own in the document, and bin/protect.py reads a heading or a **Where.** line from the start of a line (round 8, M1). Fails closed:
+# input that is not JSON prints nothing and returns non-zero.
+qd_flat_json() { jq -c 'walk(if type == "string" then gsub("[\\p{Cc}\u0085  ]+"; " ") | sub("^\\s+"; "") else . end)'; }
+
 # ---- shared prompt preamble -------------------------------------------------
 # Every duty starts from this, so the contract discipline and the project's
 # guardrails are stated once rather than re-derived (and quietly diluted) in
@@ -1213,7 +1251,8 @@ pr_diff_text() { # pr_diff_text <owner/repo> <number> — a pull request's diff 
 # command is NOT run (no silent fallback); QUARTERDECK_CHECK_SANDBOX=off is the owner's explicit way to accept that.
 _qd_sb_deny_read() { # _qd_sb_deny_read <path-or-glob> — one seatbelt rule
   local p=$1 op=${2:-file-read*}
-  case "$p" in *'"'*|*'\'*) return 0 ;; esac
+  # a path SBPL cannot hold as written: no rule, and the whole profile is refused (round 8, L1: it used to be left out, so the place stayed readable)
+  case "$p" in *'"'*|*'\'*) _QD_SB_BAD=1; return 0 ;; esac
   case "$p" in
     *"/**") printf '(deny %s (subpath "%s"))\n' "$op" "${p%/**}" ;;
     *"*"*)  printf '(deny %s (regex #"^%s$"))\n' "$op" "$(printf '%s' "$p" | sed -e 's/[][(){}.+?^$|\\]/\\&/g' -e 's/\*/.*/g')" ;;
@@ -1242,6 +1281,7 @@ _qd_sb_allow_read() { # _qd_sb_allow_read <folder> — lets a folder back in aft
 _qd_sb_profile() { # _qd_sb_profile <check|install|serve> <worktree> <scratch> [run-folder] — the run folder (default: the worktree) is where the command runs and may write
   local mode=$1 wt=$2 scratch=$3 run=${4:-$2} p w q h nm d prev=""
   local -a pe
+  _QD_SB_BAD=""                                   # set where a rule could not be written: the profile then returns 1 and nothing is run (round 8, L1)
   printf '(version 1)\n(allow default)\n'
   if [ "$mode" != install ]; then
     # Three narrow rules, NOT one (allow network* (local ip ..) (remote ip ..) (local unix-socket) ..): a local-ip filter next to a unix-socket
@@ -1266,7 +1306,7 @@ _qd_sb_profile() { # _qd_sb_profile <check|install|serve> <worktree> <scratch> [
   h=$(_qd_physical "$HOME")
   for d in "$HOME" "$h"; do
     [ "$d" = "${prev:-}" ] && continue; prev=$d
-    case "$d" in *'"'*|*'\'*) continue ;; esac
+    case "$d" in *'"'*|*'\'*) _QD_SB_BAD=1; continue ;; esac
     nm=$(printf '%s' "$d" | sed -e 's/[][(){}.+?^$|\\]/\\&/g')
     printf '(deny file-read* (regex #"^%s/(.*/)?\\.env(\\..*)?$") (regex #"^%s/(.*/)?[^/]*\\.(pem|key|p12|pfx)$") (regex #"^%s/(.*/)?(id_rsa|id_ed25519|id_ecdsa)[^/]*$"))\n' "$nm" "$nm" "$nm"
     printf '(allow file-read* (regex #"^%s/(.*/)?\\.env\\.(example|sample|template|dist)$"))\n' "$nm"
@@ -1319,9 +1359,11 @@ _qd_sb_profile() { # _qd_sb_profile <check|install|serve> <worktree> <scratch> [
   printf '(deny file-read* file-write* (regex #"^/private/tmp/claude-") (regex #"^/private/var/folders/[^/]+/[^/]+/T/claude-"))\n(allow file-read* file-write* (subpath "%s") (subpath "%s"))\n' "$run" "$scratch"
   # Audit 7 (M1): when the command runs in a throwaway clone, the worktree itself (which is gated and committed) is not writable at all, even where
   # it sits under a folder that is (/private/tmp, /private/var/folders): a child that outlived the check could otherwise edit it before the first gate.
-  [ "$run" != "$wt" ] && case "$wt" in *'"'*|*'\'*) ;; *) printf '(deny file-write* (subpath "%s"))\n' "$wt" ;; esac
+  [ "$run" != "$wt" ] && case "$wt" in *'"'*|*'\'*) _QD_SB_BAD=1 ;; *) printf '(deny file-write* (subpath "%s"))\n' "$wt" ;; esac
   # The worktree's .git file (round-5 A2), as the model's own sandbox already has it: rewritten, it would point git somewhere else.
-  case "$run" in *'"'*|*'\'*) ;; *) printf '(deny file-write* (subpath "%s/.git"))\n' "$run" ;; esac
+  case "$run" in *'"'*|*'\'*) _QD_SB_BAD=1 ;; *) printf '(deny file-write* (subpath "%s/.git"))\n' "$run" ;; esac
+  case "$scratch" in *'"'*|*'\'*) _QD_SB_BAD=1 ;; esac
+  [ -z "$_QD_SB_BAD" ]
 }
 
 # ---- Linux: the same promises with bubblewrap (issue #84, gap G5). NOT RUN ON REAL LINUX: written on a Mac, tested only as an argument list and
@@ -1332,7 +1374,9 @@ _qd_sb_profile() { # _qd_sb_profile <check|install|serve> <worktree> <scratch> [
 # check: network unshared (bwrap raises loopback inside the new namespace; nothing else is there). install: the host network, ~/.npmrc and the
 # package managers' settings read-only, their caches writable. Also: own pid namespace and /proc (no other processes), own IPC, --new-session
 # (no TIOCSTI), no capabilities, --die-with-parent. Differences from the Mac profile, stated in SECURITY.md: /etc is readable (resolv.conf, ssl,
-# passwd); a unix socket of the host is not reachable only because nothing outside the list is mounted.
+# passwd); a unix socket of the host is not reachable only because nothing outside the list is mounted, and that holds for sockets in the file
+# system only. Abstract unix sockets belong to the network namespace: install and serve (--share-net) can reach the host's, a check cannot (round 8, M7;
+# closing it needs a seccomp filter on connect/bind of AF_UNIX abstract addresses, not written yet; stated in SECURITY.md and doctor's line).
 # serve: the check sandbox with the host network shared, for the app a browser run starts (see qd_app_net_refused).
 # _qd_bwrap_argv <check|install|serve> <worktree> <scratch> [node_modules-target] [run-folder] — prints the bwrap words, one per line, ending with "--". Pure: no probing.
 # The run folder (default: the worktree) is the one bound writable and run in; a clone inside the scratch folder leaves the worktree unmounted.
@@ -1358,11 +1402,22 @@ _qd_bwrap_argv() {
   # Round 6 (H3): every test runs on the entry as the kernel will resolve it. A string compare missed $HOME/, $HOME//bin, $HOME/./bin and a link to
   # the home folder, and bound the whole of it over the tmpfs. Each line is "<entry, lexically normalised>\t<the same with every link resolved>"
   # (the folder above it follows, worked out the same way); the normalised entry is bound, the resolved one is what is judged.
-  local hs ks
+  # Round 8 (M2), the same rule as the seatbelt profile (round 6, L2): in a source tree (a code folder or a registered checkout) only the PATH
+  # folder itself is bound, never the folder above it (~/Projects/X/bin's parent is the whole checkout of X), and never a folder that is a
+  # source tree or holds one, in either spelling.
+  local hs ks kind s
+  local -a st
   hs=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$HOME")
-  while IFS=$'\t' read -r p c; do
+  while IFS= read -r s; do st+=("$s"); done < <(_qd_source_trees)
+  while IFS=$'\t' read -r kind p c; do
     case "$p" in /*) ;; *) continue ;; esac
     bad=""
+    for s in ${st[@]+"${st[@]}"}; do
+      s=${s%/}; [ -n "$s" ] || continue
+      case "$s/" in "$p"/*|"$c"/*) bad=1 ;; esac
+      [ "$kind" = P ] && case "$p/" in "$s"/*) bad=1 ;; esac
+      [ "$kind" = P ] && case "$c/" in "$s"/*) bad=1 ;; esac
+    done
     for k in "$p" "$c"; do case "$k" in /|/usr|/usr/*|/bin|/sbin|/lib|/lib32|/lib64|/opt|/opt/*|/etc|/etc/*) bad=1 ;; esac; done
     # never the home folder or anything above it, in either spelling
     for k in "$HOME" "$hs"; do case "$k/" in "$p"/*|"$c"/*) bad=1 ;; esac; done
@@ -1381,10 +1436,22 @@ for e in sys.argv[1].split(":"):
     if not e.startswith("/") or "\n" in e or "\t" in e:
         continue
     n = "/" + os.path.normpath(e).lstrip("/")
-    for p in (n, os.path.dirname(n)):
-        print(p + "\t" + os.path.realpath(p))' "${PATH:-}")
-  # the worktree's .git file read-only over the writable worktree (round 6, L7), as on the Mac
-  a_+=(--bind "$wt" "$wt" --ro-bind-try "$wt/.git" "$wt/.git" --bind "$scratch" "$scratch" --chdir "$wt" --)
+    for k, p in (("E", n), ("P", os.path.dirname(n))):
+        print(k + "\t" + p + "\t" + os.path.realpath(p))' "${PATH:-}")
+  # Round 8 (L16): what git in the worktree needs of the main checkout's .git, read-only, as the Mac profile lets in (round 6, L1): the objects,
+  # refs, packed-refs, HEAD, config and this worktree's own worktrees/<name>; never the index, the logs, or the stash (bound over with /dev/null).
+  # Only a linked worktree's gitdir (…/.git/worktrees/<name>) counts, and what the harness recorded (<wt>.gitpin) wins over the file in the folder.
+  local gd="" gq=""
+  if [ -f "${2%/}.gitpin" ]; then gd=$(head -1 "${2%/}.gitpin"); else gd=$(sed -n 's/^gitdir: //p' "$2/.git" 2>/dev/null | head -1); fi
+  case "$gd" in /*/.git/worktrees/?*) gq=${gd%/worktrees/*} ;; *) gd="" ;; esac
+  case "$gd" in *$'\n'*|*/../*|*/..) gd=""; gq="" ;; esac
+  if [ -n "$gq" ]; then
+    for p in "$gq/objects" "$gq/refs" "$gq/packed-refs" "$gq/HEAD" "$gq/config" "$gd"; do a_+=(--ro-bind-try "$p" "$p"); done
+    [ -e "$gq/refs/stash" ] && a_+=(--ro-bind /dev/null "$gq/refs/stash")
+  fi
+  # the scratch folder first, then the run folder (a clone inside the scratch folder), then the worktree's .git file read-only over it (round 6, L7):
+  # the other order let the later scratch bind cover the read-only .git bind
+  a_+=(--bind "$scratch" "$scratch" --bind "$wt" "$wt" --ro-bind-try "$wt/.git" "$wt/.git" --chdir "$wt" --)
   printf '%s\n' "${a_[@]}"
 }
 # _qd_bwrap_usable — returns 0 when bubblewrap is on PATH and can really make the namespaces here (a container or a distro that turns user
@@ -1407,8 +1474,8 @@ qd_sandbox_status() {
     Darwin) if [ -x /usr/bin/sandbox-exec ] && /usr/bin/sandbox-exec -p '(version 1)(allow default)' /usr/bin/true >/dev/null 2>&1; then echo "ok seatbelt (sandbox-exec)"; else echo "no sandbox-exec cannot be applied: project commands are not run"; fi ;;
     Linux)  if [ "${QUARTERDECK_CHECK_SANDBOX:-on}" != on ]; then echo "no QUARTERDECK_CHECK_SANDBOX=off: project commands run with NO file sandbox (your explicit choice)"
             elif _qd_bwrap_usable; then
-              if [ "${QUARTERDECK_APP_NET:-}" = share ]; then echo "ok bubblewrap (never run on real Linux by the author); QUARTERDECK_APP_NET=share: an app started for a browser run (pilot, lookout) has the host network"
-              else echo "ok bubblewrap (never run on real Linux by the author)"; fi
+              if [ "${QUARTERDECK_APP_NET:-}" = share ]; then echo "ok bubblewrap (never run on real Linux by the author); QUARTERDECK_APP_NET=share: an app started for a browser run (pilot, lookout) has the host network, its abstract unix sockets included"
+              else echo "ok bubblewrap (never run on real Linux by the author; an install shares the host network, its abstract unix sockets included)"; fi
             else echo "no bubblewrap missing or unusable: project commands are not run. Install bwrap (apt install bubblewrap), or set QUARTERDECK_CHECK_SANDBOX=off to accept running them unsandboxed"; fi ;;
     *)      echo "ok no sandbox on this system (environment only)" ;;
   esac
@@ -1535,7 +1602,7 @@ wt_ignored_new() { # wt_ignored_new <worktree>
 }
 # model_diff_gate <project> <worktree> <inputs-before> [plan-file] — the changed paths on stdin (the worktree's new ignored files are examined too). Refuses, BEFORE any check runs, a change to a
 # protected path (bin/protect.py: CI workflows, package.json, lockfiles, .npmrc, tool configs, Makefile, scripts, Dockerfiles ...) unless the
-# project's "protected_allow" or the plan names it, and ANY change to a package.json scripts block or a Makefile. Prints why, returns 1.
+# project's "protected_allow" or the plan names it, and ANY change to what the verify command is made of (protect.py inputs: package.json beyond its dependency and metadata keys, composer scripts, deno.json, a Makefile or a make include file). Prints why, returns 1.
 model_diff_gate() {
   local proj=$1 wt=$2 before=$3 plan=${4:-} hits rc after a list
   local -a args=()
@@ -1553,7 +1620,7 @@ model_diff_gate() {
   fi
   after=$(verify_inputs "$wt")
   if [ "$after" != "$before" ] || [ "$after" = unreadable ]; then
-    echo "it changed what the verify command is made of (a package.json scripts block or a Makefile), which would let a model choose what the harness runs next"
+    echo "it changed what the verify command is made of (package.json beyond its dependency and metadata keys, composer scripts, deno.json, a Makefile or a make include file), which would let a model choose what the harness runs next"
     return 1
   fi
   # what passed, as git would store it now: post_checks_gate stages the list and compares the staged blobs with this (kept outside the worktree,

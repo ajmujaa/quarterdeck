@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+_had_projects_json = (ROOT / "config" / "projects.json").exists()       # round 8 (L19): the run must not leave one behind
 import os as _os0, tempfile as _tf0
 sys.path.insert(0, str(ROOT / "bin")); import home as _h0
 _REAL_HOME = _h0.resolve()          # where the maintainer's own private denylist lives (read only), before the tests switch to a temporary data folder
@@ -1950,6 +1951,23 @@ def _call(method, path, body=None):
     finally:
         c.close()
 
+# round 8 (L11, L12): another loopback app's malformed cookie must not hide the session; a non-ASCII token header is a 401, not a dropped connection
+def _ck_status(path, cookie, extra=None):
+    c = _hc.HTTPConnection("127.0.0.1", _srv.server_address[1], timeout=10)
+    try:
+        c.request("GET", path, headers={"Cookie": cookie, "X-Quarterdeck-Token": "selftest-session-token", "Sec-Fetch-Site": "same-origin", **(extra or {})})
+        return c.getresponse().status
+    except (ConnectionError, _hc.HTTPException) as e:
+        return type(e).__name__
+    finally:
+        c.close()
+d._SESSIONS["map"][d._sha("selftest-sid")]["exp"] = time.time() + d.SESSION_TTL      # fresh, so /api/session does not renew it (a renewal writes state/)
+_r8c = [_ck_status("/api/session", c) for c in ("qd_session=selftest-sid", 'prefs={"theme":"dark"}; qd_session=selftest-sid', "flash=Saved ok; qd_session=selftest-sid",
+                                                 "qd_session=stale-other; qd_session=selftest-sid")]
+check("L11 a paired tab stays paired when the browser also sends another loopback app's cookie (malformed, or a stale qd_session of its own)", _r8c == [200, 200, 200, 200], _r8c)
+_r8t = [_ck_status("/api/session", "qd_session=selftest-sid", {"X-Quarterdeck-Token": "t\xe9"}), _ck_status("/api/state", "", {"X-Quarterdeck-Token": "t\xe9"})]
+check("L12 a non-ASCII X-Quarterdeck-Token is answered 401, never a dropped connection", _r8t == [401, 401], _r8t)
+
 _trips = []
 _PROTECTED = [str(ROOT / x) for x in ("state", "logs", "config", "workspace")] + [str(Path.home() / x) for x in (".claude", "claude-memory-backup", "Applications")]
 def _guard_path(p):
@@ -2458,7 +2476,9 @@ check("data folder: QUARTERDECK_HOME wins, then QUARTERDECK_DIR (a throwaway Qua
       and _hm.resolve({"QUARTERDECK_DIR": "/b"}, _uh, _code) == pathlib.Path("/b"))
 (_uh / ".quarterdeck" / ".quarterdeck-home").unlink()
 def _shell_home(env):
-    r = _sp.run(["bash", "-c", f'. "{pathlib.Path(d.__file__).parent}/lib.sh" >/dev/null 2>&1; echo "$QUARTERDECK_HOME"'], capture_output=True, text=True, env={**_ev0, "HOME": str(_uh), **env})
+    # round 8 (L19): a registry path of its own, so lib.sh never makes an empty one in the folder it resolves (here the real program folder)
+    r = _sp.run(["bash", "-c", f'. "{pathlib.Path(d.__file__).parent}/lib.sh" >/dev/null 2>&1; echo "$QUARTERDECK_HOME"'], capture_output=True, text=True,
+                env={**_ev0, "HOME": str(_uh), "PROJECTS_FILE": str(_ft / "no-registry.json"), **env})
     return r.stdout.strip()
 _pr = str(pathlib.Path(d.__file__).parent.parent)
 (_uh / ".quarterdeck" / ".quarterdeck-home").write_text("x")
@@ -2560,18 +2580,44 @@ _old5 = _mk_old(_ft / "oldprog5"); _new5 = _ft / "newhomedir5"; _hm.init(_new5);
 _ok5, _l5 = _hm.migrate(_old5, _new5, apply=True)
 check("migrate: a file that already exists in the data folder is never overwritten; the program's copy is kept beside it",
       _ok5 and (_new5 / "config" / "projects.json").read_text() == '{"mine": {}}' and (_new5 / "config" / "projects.json.from-program").read_text() == '{"p": {}}', _l5)
+# round 8 (M9): a second run into a data folder that is already active, and has been used since, left it switched off
+_old6 = _mk_old(_ft / "oldprog6"); _new6 = _ft / "newhomedir6"
+_ok6a, _ = _hm.migrate(_old6, _new6, apply=True)
+(_new6 / "state" / "runs.json").write_text('[{"verdict": "X"}, {"verdict": "Y"}]')   # the active home has been used since
+_ok6, _l6 = _hm.migrate(_old6, _new6, apply=True)
+check("M9 migrate: a second run leaves an already active data folder active (its marker is not removed) and keeps what grew there",
+      _ok6a and (_new6 / ".quarterdeck-home").is_file() and (_new6 / "state" / "runs.json").read_text().count("verdict") == 2, _l6)
+_real_copy6 = _hm._copy_tree; _hm._copy_tree = _boom
+_ok6b, _l6b = _hm.migrate(_old6, _new6, apply=True)
+_hm._copy_tree = _real_copy6
+check("M9 migrate: a copy that fails into an already active data folder leaves it active", not _ok6b and (_new6 / ".quarterdeck-home").is_file(), _l6b)
+# round 8 (L15): links in the data folder, and a program-folder item that is itself a link, are never followed
+_old7 = _mk_old(_ft / "oldprog7"); _new7 = _ft / "newhomedir7"; _hm.init(_new7); _out7 = _ft / "outside7"; _out7.mkdir()
+(_new7 / "state" / "runs.json").symlink_to(_out7 / "planted.json")
+(_new7 / "logs").rmdir(); (_new7 / "logs").symlink_to(_out7)
+_m7 = _out7.stat().st_mode & 0o777; _ok7, _l7 = _hm.migrate(_old7, _new7, apply=True)
+check("L15 migrate: a data folder whose own folder is a link is refused: nothing is written outside it and its target's mode is not changed",
+      not _ok7 and not any(_out7.iterdir()) and (_out7.stat().st_mode & 0o777) == _m7, _l7)
+(_new7 / "logs").unlink(); (_new7 / "logs").mkdir()
+_ok7b, _ = _hm.migrate(_old7, _new7, apply=True)
+check("L15 migrate: and a dangling link left where a file would be copied is skipped, never written through", not (_out7 / "planted.json").exists())
+_sec9 = _ft / "secret9"; _sec9.mkdir(); (_sec9 / "id_key").write_text("k")
+_old9 = _mk_old(_ft / "oldprog9"); shutil.rmtree(_old9 / "logs"); (_old9 / "logs").symlink_to(_sec9); _new9 = _ft / "newhomedir9"
+_hm.migrate(_old9, _new9, apply=True)
+check("L15 migrate: a program-folder item that is itself a link is not followed", not (_new9 / "logs" / "id_key").exists())
 _okr, _lr = _hm.rollback(_new)
 check("migrate: rollback turns the marker off without deleting anything, and a second rollback says it is not active",
       _okr and not (_new / ".quarterdeck-home").exists() and (_new / ".quarterdeck-home.off").is_file() and (_new / "state" / "runs.json").is_file() and not _hm.rollback(_new)[0])
 check("migrate: with the marker in ~/.quarterdeck the next start uses it, and without it the program folder again",
       (lambda uh: (_hm.init(uh / ".quarterdeck"), _hm.resolve({}, uh, _code) == uh / ".quarterdeck", _hm.rollback(uh / ".quarterdeck"), _hm.resolve({}, uh, _code) == _code)[1:] )(_ft / "uh2")[0] is True
       and _hm.resolve({}, _ft / "uh2", _code) == _code)
-# the same commands through the real command line (a Python-only test missed that the wrapper dispatched on the wrong word)
+# the same commands through the real command line (a Python-only test missed that the wrapper dispatched on the wrong word). PROJECTS_FILE of
+# their own (round 8, L19): with no data folder these resolve to the program folder, and lib.sh would leave an empty registry there.
 _cli = str(pathlib.Path(d.__file__).parent / "qtdeck")
 _cli_home = _ft / "cli-home"
-_c1 = _sp.run(["bash", _cli, "home", "init", str(_cli_home)], capture_output=True, text=True, env={**_ev0, "HOME": str(_ft / "uh3")})
-_c2 = _sp.run(["bash", _cli, "home", "migrate"], capture_output=True, text=True, env={**_ev0, "HOME": str(_ft / "uh3")})
-_c3 = _sp.run(["bash", _cli, "home"], capture_output=True, text=True, env={**_ev0, "HOME": str(_ft / "uh3")})
+_c1 = _sp.run(["bash", _cli, "home", "init", str(_cli_home)], capture_output=True, text=True, env={**_ev0, "HOME": str(_ft / "uh3"), "PROJECTS_FILE": str(_ft / "no-registry.json")})
+_c2 = _sp.run(["bash", _cli, "home", "migrate"], capture_output=True, text=True, env={**_ev0, "HOME": str(_ft / "uh3"), "PROJECTS_FILE": str(_ft / "no-registry.json")})
+_c3 = _sp.run(["bash", _cli, "home"], capture_output=True, text=True, env={**_ev0, "HOME": str(_ft / "uh3"), "PROJECTS_FILE": str(_ft / "no-registry.json")})
 check("qtdeck home: init makes the folder, migrate with no flag is a dry run that copies nothing, and plain home shows both folders, all through the command line",
       _c1.returncode == 0 and (_cli_home / ".quarterdeck-home").is_file() and _c2.returncode in (0, 1) and ("dry run" in _c2.stdout or "not safe to copy" in _c2.stdout) and not (_ft / "uh3" / ".quarterdeck").exists()
       and "the program" in _c3.stdout and "your data" in _c3.stdout, (_c1.stderr, _c2.stdout[-300:]))
@@ -3030,6 +3076,34 @@ rc = run(sys.argv[1:]); json.dump(items, open(db, "w")); sys.exit(rc)
         check("keychain: moving back puts the value in the 0600 file, takes it out of the keychain, and a move to where it already is is refused",
               _c2 == 200 and _cm.store_kind() == "file" and _cm.load_env().get("SLACK_USER_TOKEN") == _kcs and _c3 == 400
               and oct(_cm.env_path().stat().st_mode & 0o777) == "0o600" and _kc.get("SLACK_USER_TOKEN") is None)
+        # round 8 (M6): a value with a quote at either end is saved and read back exactly, in the file and through a keychain-to-file move
+        _mf.set_credential("NEWSVC_TOKEN", "'abc'", _svc); _mf.set_credential("SLACK_USER_TOKEN", 'pa55\\word"', _svc)
+        check("file store: a value that starts or ends with a quote (or holds a backslash) is read back exactly as it was saved",
+              _cm.load_env().get("NEWSVC_TOKEN") == "'abc'" and _cm.load_env().get("SLACK_USER_TOKEN") == 'pa55\\word"', _cm.load_env())
+        _mf.set_credential("NEWSVC_TOKEN", "", _svc)
+        _mf.move_store("keychain", _svc); _q = 'pa55word"'
+        _mf.set_credential("SLACK_USER_TOKEN", _q, _svc)
+        _c6, _ = d.connections_api({"action": "store", "to": "file", "confirm": True})
+        check("keychain: a confirmed move to the file keeps a value that ends in a quote exactly", _c6 == 200 and _cm.load_env().get("SLACK_USER_TOKEN") == _q, _cm.load_env().get("SLACK_USER_TOKEN"))
+        _mf.set_credential("SLACK_USER_TOKEN", _kcs, _svc)
+        # round 8 (L3): a link planted at <name>.tmp is never written through; (L9) saves that arrive together all land
+        _out8 = _cd / "elsewhere8"; _out8.write_text(""); _ep = _cm.env_path(); (_ep.parent / (_ep.name + ".tmp")).symlink_to(_out8)
+        _mf.set_credential("NEWSVC_TOKEN", "fixture-l3-value-1234", _svc)
+        check("L3 file store: a save never writes through a link planted beside the file, and the file itself stays a plain file",
+              "fixture-l3-value-1234" not in _out8.read_text() and not _ep.is_symlink() and _cm.read_env_file().get("NEWSVC_TOKEN") == "fixture-l3-value-1234")
+        (_ep.parent / (_ep.name + ".tmp")).unlink()
+        import threading as _th8
+        for _round in range(20):
+            _vals = {k: f"v{_round}-{k}-12345" for k in ("SLACK_USER_TOKEN", "X_BEARER_TOKEN", "META_PAGE_TOKEN", "NEWSVC_TOKEN")}
+            _ts = [_th8.Thread(target=_mf.set_credential, args=(k, v, _svc)) for k, v in _vals.items()]
+            [t.start() for t in _ts]; [t.join() for t in _ts]
+            _got = _cm.read_env_file()
+            if any(_got.get(k) != v for k, v in _vals.items()):
+                break
+        check("L9 file store: saves that arrive together all land", all(_got.get(k) == v for k, v in _vals.items()), _round)
+        check("L3 file store: no temp file is left beside the credential file", not [x for x in _ep.parent.iterdir() if x.name.startswith("." + _ep.name)])
+        _mf.set_credential("X_BEARER_TOKEN", "", _svc); _mf.set_credential("META_PAGE_TOKEN", "", _svc); _mf.set_credential("NEWSVC_TOKEN", "", _svc)
+        _mf.set_credential("SLACK_USER_TOKEN", _kcs, _svc)
         # a failed copy leaves the old store untouched
         _real_put = _kc.put
         def _boom(k, v): raise _kc.KeychainError("the keychain did not keep the value")
@@ -3077,7 +3151,7 @@ with _tf.TemporaryDirectory() as _bd:
         check("billing: storing the key needs the owner's confirm, and the answer is a presence flag and nothing else",
               _r0[0] == 400 and _r1 == (200, {"present": True}) and _r2[0] == 400 and _bk[:30] not in _json.dumps(_r2), (_r0, _r1, _r2))
         check("billing: the key went into the owner-only credential file under its fixed name",
-              (_bd / "sec" / "integrations.env").read_text().strip() == f"anthropic_api_key={_bk}" and oct((_bd / "sec" / "integrations.env").stat().st_mode & 0o777) == "0o600")
+              (_bd / "sec" / "integrations.env").read_text().strip() == f"anthropic_api_key=\"{_bk}\"" and oct((_bd / "sec" / "integrations.env").stat().st_mode & 0o777) == "0o600")
         _r3 = d.settings_api({"action": "billing", "duty": "shipwright", "mode": "api", "confirm": True})
         _r4 = d.settings_api({"action": "billing", "duty": "../../x", "mode": "api", "confirm": True})
         _r5 = d.settings_api({"action": "cap", "scope": "daily", "usd": 12.5, "confirm": True})
@@ -3884,6 +3958,14 @@ _kmiss = [k for k, v in _shapes.items() if not _os.known_value_hit(v, _kv)]
 check("F3 a secret value the machine holds is found as it is, reversed, hex, base64, in capitals with dashes or split by punctuation" + (f" — MISSED: {_kmiss}" if _kmiss else ""), not _kmiss)
 check("F3 and ordinary text, a git hash and a short word are not taken for it", not any(_os.known_value_hit(t, _kv) for t in ["use sonnet for this", "commit 0123456789abcdef0123456789abcdef01234567", "x" * 40]))
 check("F3 a long random-looking run is reported as a warning; a hash, an identifier and prose are not", bool(_os.entropy_runs("t " + "Q7xK2mP9vL4nR8bT3wZ6yH1jF5")) and not _os.entropy_runs("sha 0123456789abcdef0123456789abcdef01234567 and getTokenFromEnvironmentVariable and plain words only"))
+# round 8 (L4, L5, L6)
+_wrapped = _b64.encodebytes(("x" * 50 + " ghp_" + "A" * 36 + " trailing words here").encode()).decode()
+check("L4 outscan decodes a base64 run wrapped over lines (a key straddling the 76-column wrap is found)", bool(_os.scan_text(_wrapped)))
+_fwv = "qdfakevalue12345678"
+check("L5 outscan finds this machine's own secret value written in fullwidth letters (NFKC first)", _os.known_value_hit("value " + "".join(chr(ord(c) + 0xFEE0) for c in _fwv), [_fwv]))
+import time as _tm8
+_t8 = _tm8.time(); _os.scan_text("token=" * 10000); _t8 = _tm8.time() - _t8
+check("L6 outscan scans 60 KB of repeated 'token=' in under 2 seconds (the labelled-value lookaheads are bounded), and still finds a labelled value", _t8 < 2 and bool(_os.scan_text("api_key = " + "a1" * 20)), round(_t8, 2))
 check("F5 a credential-shaped run in text someone else wrote is replaced, the rest of the quote stays", _os.redact("Bump " + _G + " now") == "Bump [redacted] now" and _os.redact("Bump left-pad") == "Bump left-pad")
 
 # ---- the remaining raw git callers refuse a folder whose own git settings make git run programs -----------------------------------------------------
@@ -4171,6 +4253,10 @@ check("spend: the page shows top sinks, output and cache reads, and the seat tab
 _lib = (ROOT / "bin" / "lib.sh").read_text()
 check("spend: record_spend books new input, cache writes and reads apart, the seat and a stop at the turn cap",
       all(s in _lib for s in ("cache_read: (.usage.cache_read_input_tokens", "{seat: $seat}", "error_max_turns) stop=turns", '.stop == "turns" then "turns"')))
+
+check("L18 the browser probe of the shell selftests launches with the renderer sandbox on, as bin/browse.mjs does",
+      "chromiumSandbox:true" in (ROOT / "bin" / "selftest-lib.sh").read_text() and "chromiumSandbox: true" in (ROOT / "bin" / "browse.mjs").read_text())
+check("L19 the self-tests leave no config/projects.json in the program folder", _had_projects_json or not (ROOT / "config" / "projects.json").exists())
 
 print()
 if FAILS:

@@ -70,15 +70,25 @@ def now_iso():
 
 
 def write_private(path, text):
-    """Atomic write, owner-only: temp file in the same folder, then rename."""
+    """Atomic write, owner-only: a new temp file in the same folder (a random name made with O_EXCL, so a link planted there is never followed:
+    round 8, L3), then rename. The temp file is removed on any error."""
+    import tempfile
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        f.write(text)
-    os.chmod(tmp, 0o600)
-    tmp.replace(path)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix="." + path.name + ".")
+    try:
+        with os.fdopen(fd, "w") as f:
+            os.fchmod(f.fileno(), 0o600)
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def write_snapshot(name, items, unread=None):
@@ -155,8 +165,23 @@ def read_env_file():
         if not line or line.startswith("#") or "=" not in line:
             continue
         k, v = line.split("=", 1)
-        out[k.strip()] = v.strip().strip("\"'")
+        out[k.strip()] = unquote(v.strip())
     return out
+
+
+def quote(v):
+    """How a value is written to the file (round 8, M6): always in double quotes, with \\ and " escaped, so unquote gives back exactly what was saved."""
+    return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def unquote(v):
+    """One matching pair of quotes is taken off (never more, and never one quote alone: 'abc' saved is 'abc' read). Inside double quotes \\\\ and
+    \\" are undone; a hand-written file with neither reads as before."""
+    if len(v) >= 2 and v[0] == v[-1] == '"':
+        return re.sub(r'\\(["\\])', r"\1", v[1:-1])
+    if len(v) >= 2 and v[0] == v[-1] == "'":
+        return v[1:-1]
+    return v
 
 
 def need(env, key):

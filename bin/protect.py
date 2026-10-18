@@ -8,8 +8,8 @@
     bin/protect.py folders --plan FILE [--root WORKTREE]
                                                 the Terraform folders the plan's Where fields name, one per line; with --root, only those that
                                                 pass the folder rules (inside the worktree, no link, present), else every folder-form Where
-    bin/protect.py inputs WORKTREE              a digest of what the verify/test/build commands are made of: every package.json
-                                                "scripts" block and every Makefile; print it before the model runs and after
+    bin/protect.py inputs WORKTREE              a digest of what the verify/test/build commands are made of: package.json (all but PKG_FREE),
+                                                composer scripts, deno.json(c), Makefiles and *.mk; print it before the model runs and after
 
 Why: the harness runs the project's verify, test and build commands after a model has edited the worktree. A model (steered by a hostile
 issue or pull request) that can change package.json scripts, a lockfile, a test-runner config or a CI workflow turns that run into code
@@ -50,6 +50,15 @@ DEFAULT = [
     ".pnpmfile.*", "pnpm-workspace.yaml", "bunfig.toml",
     # ticket #101: Terraform state, the provider and module cache at any depth, the CLI config and its credentials, and the provider lock file
     "*.tfstate", "*.tfstate.backup", "**/.terraform/**", ".terraformrc", "terraform.rc", "credentials.tfrc.json", ".terraform.lock.hcl",
+    # round 8 (M3): the lockfiles and task manifests of uv, PDM, Bundler, Composer, Deno and Mix
+    "uv.lock", "pdm.lock", "Gemfile.lock", "composer.json", "composer.lock", "deno.json", "deno.jsonc", "deno.lock", "mix.lock",
+    # round 8 (M4): editor tasks and settings and dev containers (they run commands when a person opens the branch), the instruction files that steer
+    # the next agent, and the pipelines of other CI systems. A project that wants a model to edit one says so in protected_allow.
+    ".vscode/**", ".idea/**", ".devcontainer/**", ".gitpod.yml", ".cursor/**", ".cursorrules", ".windsurfrules", ".clinerules", "CLAUDE.md",
+    "CLAUDE.local.md", "AGENTS.md", "GEMINI.md", "bitbucket-pipelines.yml", ".buildkite/**", ".drone.yml", ".drone.yaml", "appveyor.yml",
+    ".appveyor.yml", "appveyor.yaml", "cloudbuild.yaml", "cloudbuild.yml",
+    # round 8 (L2, L13): more deploy-platform config, and make include files (what `make verify` runs as much as the Makefile)
+    "render.yaml", "amplify.yml", "wrangler.toml", "*.mk", "*.mak",
 ]
 
 # What a plan can never unlock, only the project's protected_allow (round 6, H2). A plan's Where line is written by a model, from an issue anyone can
@@ -64,6 +73,14 @@ PLAN_NEVER = [
     # ticket #101: state holds live values and secrets, the cache holds provider code that runs, the CLI config and credentials reach a registry
     # or a backend, and the lock file chooses which provider code CI downloads. A person changes these.
     "*.tfstate", "*.tfstate.backup", ".terraform/**", "**/.terraform/**", ".terraformrc", "terraform.rc", "credentials.tfrc.json", ".terraform.lock.hcl",
+    # round 8 (M3, M4): the other ecosystems' lockfiles; the other CI systems; the files that steer the next agent; and what runs when a person
+    # opens the branch (a dev container's commands, an editor's tasks, a cloud workspace's tasks)
+    "uv.lock", "pdm.lock", "Gemfile.lock", "composer.lock", "deno.lock", "mix.lock",
+    "bitbucket-pipelines.yml", ".buildkite/**", ".drone.yml", ".drone.yaml", "appveyor.yml", ".appveyor.yml", "appveyor.yaml", "cloudbuild.yaml",
+    "cloudbuild.yml", "CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", "GEMINI.md", ".cursor/**", ".cursorrules", ".windsurfrules", ".clinerules",
+    ".devcontainer/**", ".vscode/tasks.json", ".gitpod.yml",
+    # round 8 (L2): a deploy platform runs the build command these name on push, with the project's deploy secrets, as CI does
+    "vercel.json", "netlify.toml", "render.yaml", "amplify.yml", "wrangler.toml",
 ]
 
 # What a folder Where unlocks, and nothing else: Terraform source and variable files (a variable file only without a secret-looking value).
@@ -125,9 +142,11 @@ WHERE_PATH = re.compile(r"\s*\*\*Where\.\*\*\s*`(?:\./)?([A-Za-z0-9._@+/-]+?)(?:
 def plan_paths(plan_text):
     """The paths a plan names in its structured field: the `**Where.** `path`` line of a ruling item (bin/panel, bin/fix and the joiner write exactly
     one per item, the value in backticks). Only a field that is ONE path and nothing else counts: prose (even a sentence that says not to touch a file),
-    a list, a bare unquoted value, or an item with a second Where line (text a model put in another field) unlocks nothing. A `:12` suffix is dropped."""
+    a list, a bare unquoted value, or an item with a second Where line (text a model put in another field) unlocks nothing. A `:12` suffix is dropped.
+    Lines are split on \\n only (round 8, M1): splitlines() also breaks at \\v, \\f, \\x1c-\\x1e, NEL, U+2028 and U+2029, which a model can put inside
+    one field to start a heading or a Where line that no renderer meant as one. The writers make every field one line (qd_flat_json) as well."""
     out, items, cur = set(), [], []
-    for line in plan_text.splitlines():
+    for line in plan_text.split("\n"):
         if line.startswith("#"):
             items.append(cur); cur = []
         elif WHERE.match(line):
@@ -143,7 +162,7 @@ def plan_paths(plan_text):
 def plan_folders(plan_text):
     """The folder-form Where values of a plan (`infra/net/`, a trailing slash), as written, by the same strict rule as plan_paths."""
     out = []
-    for line in plan_text.splitlines():
+    for line in plan_text.split("\n"):
         m = WHERE_PATH.match(line)
         if m and m.group(1).endswith("/") and norm(m.group(1)) in plan_paths(plan_text):
             out.append(m.group(1))
@@ -264,22 +283,39 @@ def link_violations(paths, root, allow=(), extra=()):
     return out
 
 
+# The package.json keys a plan that unlocks package.json may change without the verify-inputs digest changing (round 8, L14). Every other key is
+# digested: "scripts", and the keys that point the test, lint and build tools at files ("jest", "babel", "eslintConfig", "prettier", "mocha",
+# "ava", "nyc" ...) or choose the package-manager program corepack runs ("packageManager").
+PKG_FREE = {"name", "version", "description", "keywords", "author", "contributors", "license", "homepage", "repository", "bugs", "funding",
+            "private", "dependencies", "devDependencies", "peerDependencies", "optionalDependencies", "peerDependenciesMeta", "files",
+            "exports", "main", "module", "types", "typings"}
+
+
 def inputs_digest(worktree):
-    """sha256 over every package.json "scripts" block and every Makefile under the worktree (node_modules and .git left out)."""
+    """sha256 over what the verify/test/build commands are made of, under the worktree (node_modules and .git left out): every package.json but the
+    keys in PKG_FREE, composer.json's "scripts", every deno.json(c), every Makefile and every make include file (*.mk, *.mak). A file that does not
+    parse is digested whole."""
     root = Path(worktree)
     parts = []
     for p in sorted(root.rglob("*")):
         rel = p.relative_to(root).as_posix()
         if "node_modules/" in rel + "/" or rel.startswith(".git/") or not p.is_file() or p.is_symlink():
             continue
-        if p.name == "package.json":
+        name, text = p.name.lower(), None
+        if name in ("package.json", "composer.json"):          # composer (round 8, M3): "scripts" run by name, as package.json's do
+            text = p.read_text(errors="replace")
             try:
-                scripts = json.loads(p.read_text(errors="replace")).get("scripts", {})
-            except (ValueError, AttributeError):
-                scripts = "unparseable"
-            parts.append((rel, json.dumps(scripts, sort_keys=True)))
-        elif p.name in ("Makefile", "makefile", "GNUmakefile"):
-            parts.append((rel, p.read_text(errors="replace")))
+                d = json.loads(text)
+                if not isinstance(d, dict):
+                    raise ValueError
+                d = {k: v for k, v in d.items() if k not in PKG_FREE} if name == "package.json" else d.get("scripts", {})
+                text = json.dumps(d, sort_keys=True)
+            except ValueError:
+                pass
+        elif name in ("deno.json", "deno.jsonc", "makefile", "gnumakefile") or name.endswith((".mk", ".mak")):
+            text = p.read_text(errors="replace")             # deno (round 8, M3): "tasks" run by name; JSONC has comments, so the whole file
+        if text is not None:
+            parts.append((rel, text))
     return hashlib.sha256(json.dumps(parts).encode()).hexdigest()
 
 

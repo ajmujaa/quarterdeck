@@ -79,6 +79,7 @@ if [ -z "$findings" ] || [ -z "$verdict" ]; then
   die "contract did not parse — nothing written (see logs/runs/$QUARTERDECK_RUN_ID.json)"
 fi
 
+[ -n "$findings" ] && findings=$(qd_flat_json <<<"$findings")   # every field one line: see qd_flat_json (round 8, M1)
 n=$(jq 'length' <<<"$findings")
 if [ "$n" = 0 ]; then
   say "quarterdeck: joiner found nothing in $PROJECT"

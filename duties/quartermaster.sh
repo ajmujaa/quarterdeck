@@ -117,7 +117,8 @@ if [ -z "$sha" ] || [ "$HEADREF" != "$sha" ]; then
 fi
 BASEREF="origin/$BASE"; safe_git -C "$SOURCE_REPO_DIR" rev-parse -q --verify "$BASEREF" >/dev/null || BASEREF="$BASE"
 # The changed files come from the fetched tree itself (against the merge base), never from GitHub's listing; --no-renames lists both ends.
-changed=$(safe_git -C "$SOURCE_REPO_DIR" -c core.quotepath=false diff --no-ext-diff --no-textconv --no-renames --name-only "$BASEREF...$HEADREF") || die "cannot read the files $REPO#$PR changes"
+# -z (round 8, M8): without it git wraps a name holding a tab, a quote or a backslash in quotes, and the forbidden-path prefix match missed it.
+changed=$(set -o pipefail; safe_git -C "$SOURCE_REPO_DIR" -c core.quotepath=false diff --no-ext-diff --no-textconv --no-renames --name-only -z "$BASEREF...$HEADREF" | tr '\0' '\n') || die "cannot read the files $REPO#$PR changes"
 printf '%s\n' "$changed" > "$TMP/files"
 facts=$(python3 "$QM" bumps --repo "$SOURCE_REPO_DIR" --base "$BASEREF" --head "$HEADREF" --files "$TMP/files") || die "quartermaster: could not read the manifests"
 jq -e '.bumps' <<<"$facts" >/dev/null 2>&1 || die "quartermaster: the manifests did not parse"

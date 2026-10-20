@@ -21,7 +21,7 @@ First run: RED, 19 min 27 s. Every failing suite, with the first error line, and
 | providers | `FAIL and so does a registry that cannot be read` | same `chmod 000` assumption | test fixed |
 | project commands (`selftest-checks.sh`) | `FAIL R6 control: a pull request from a branch of the repository itself does run its build, start and verify commands` | on Linux an app start is refused unless `QUARTERDECK_APP_NET=share` (SECURITY.md says so); the control did not set it | test fixed |
 
-After the fixes every suite passes on a quiet machine. Skipped, by design: the macOS-only checks (sandbox-exec profiles R1, R5, S2 to S5,
+After the fixes every suite passes on a quiet machine (full run on `cloud/test-pass` before merging main: GREEN in 19 min 55 s; after merging main and the README fix, `selftest.py` was re-run and passes, and the full run was repeated on `cloud/connections`, which contains the same fixes). Skipped, by design: the macOS-only checks (sandbox-exec profiles R1, R5, S2 to S5,
 the macOS pairing-link opener), 4 pilot checks and 2 lookout checks that need a real app, and some injection and mock-up cases.
 
 ## 2. Bugs found
@@ -42,6 +42,11 @@ A `--quick` mode (logic, security, first use) would make the "run check before y
 
 2.4 **Low, test environment only: the pilot driver cannot start Chromium here unless the container allows it.** Earlier, on an older snapshot, the pilot
 selftest failed with `no browser could be started`; on `main` today it passes (34 ok, 4 skipped). Not reproduced, so nothing to fix.
+
+2.5 **Medium, fixed: `main` at c94dc63 (the README restyle) was RED again.** The new short README no longer contained the words `qtdeck check`, and
+`selftest.py` asserts them (`FAIL qtdeck check is wired into the command line, its help and the README`), so `python3 bin/check.py` failed in the logic suite after
+the restyle. Fix: one sentence in the README quick start (`bin/qtdeck check` runs every test). `selftest.py` passes with it. This branch merges `main` at c94dc63 first (clean merge).
+Also on that commit: the Helm "think with Claude" default is now off, which closes the config-versus-docs mismatch raised in the earlier review.
 
 ## 3. README as a stranger, fresh clone, temporary HOME
 - `git clone`, `bin/qtdeck setup` (1.4 s): says which tools are present, prints `gh auth login`, and makes `~/.quarterdeck` ("made now"). Matches README.

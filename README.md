@@ -40,7 +40,7 @@ bin/qtdeck dashboard      # switch Demo on to look around with invented data
 - **Calm.** One next action on Home. Calm mode shows one column of larger text.
 - **Yours.** No keystrokes, screen, apps, clipboard or location, ever. A test scans the code for the APIs that would do it.
 - **Your plan or your key.** Use your Claude plan, or an API key with spending caps.
-- **Say what you want, with or without GitHub.** `qtdeck ticket new my-app "a page with a counter"` has the planner draft one to five tickets (title, body, acceptance checks) and keeps the draft; `--apply` files them as GitHub issues. A project with no GitHub repo keeps them as local tickets on your computer, and `qtdeck cycle my-app --ticket 1` builds one on a local branch for you to review, with nothing pushed. `qtdeck repo my-app` lists the ways to get a repo: use yours, make one (`qtdeck repo create`, only after you type yes), sign up first, or stay local.
+- **Say what you want, with or without GitHub.** `qtdeck ticket new my-app "a page with a counter"` has the planner draft one to five tickets (title, body, acceptance checks) and keeps the draft; `--apply` files them as GitHub issues. A project with no GitHub repo keeps them as local tickets on your computer, and `qtdeck cycle my-app --ticket 1` builds one on a local branch for you to review, with nothing pushed. `qtdeck repo my-app` lists the ways to get a repo: use yours, make one (`qtdeck repo create`, only after you type yes), sign up first, or stay local. The dashboard's Missions page has the same: a New ticket box that shows the draft before anything is filed, the ticket list with a Start a mission button, and, for a project with no repo, the four options as short rows.
 
 ## What is in it
 

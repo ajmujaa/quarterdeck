@@ -42,6 +42,7 @@ LABELS = {
     "selftest-cycle.sh": "the cycle: stage order, caps, resume", "selftest-diet.sh": "fewer tokens: turn caps, reuse, rounds",
     "selftest-round8.sh": "round 8 review: expected failures until fixed", "selftest-billing.sh": "billing: the API key only where it is chosen",
     "selftest-firstrun.sh": "first use: data folder, help, doctor, attach, setup",
+    "selftest-connections.sh": "connections: instructions, several accounts per service",
 }
 
 

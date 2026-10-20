@@ -14,7 +14,7 @@ This module has no imports from the rest of the package so every part can use it
 import re
 
 DEFAULT = "default"
-LABEL = re.compile(r"^[a-z0-9][a-z0-9-]{0,23}$")
+LABEL = re.compile(r"^[a-z0-9][a-z0-9-]{0,23}\Z")
 BAD_LABEL = "an account label is lowercase letters, digits and dashes, at most 24"
 
 

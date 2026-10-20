@@ -54,7 +54,7 @@ MAX_LINE = 4000                          # `security -i` reads about 4,094 bytes
 MAX_CHARS = 1950                         # what that leaves for a value, said in plain words
 
 
-SAFE_NAME = re.compile(r"^[A-Za-z0-9_.@-]{1,100}$")      # KEY or KEY@label: one word, so the account name can never end the line or add a command
+SAFE_NAME = re.compile(r"^[A-Za-z0-9_.@-]{1,100}\Z")      # KEY or KEY@label: one word, so the account name can never end the line or add a command
 
 
 def _line(key, value):

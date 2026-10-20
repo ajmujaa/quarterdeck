@@ -724,7 +724,7 @@ class World:
             out.append(entry)
             if name == "gmail":      # two invented Gmail accounts, so the feature can be seen; each says which account it is (the work one comes first)
                 personal = [{"title": ti, "sub": sub, "at": self.ago(minutes=m), "new": False, "url": None} for ti, sub, m in (
-                    ("Your order has shipped", "orders@shop.example", 260), ("Dinner on Saturday?", "Alex", 880), ("Library books are due", "library@town.example", 2100))]
+                    ("Your order has shipped", "orders@shop.example", 90), ("Dinner on Saturday?", "Alex", 240), ("Library books are due", "library@town.example", 600))]      # none has waited a day: the scripted tour's one "waiting" suggestion is the work account's
                 entry.update({"label": "Gmail (work)", "account": "work", "key": "gmail@work"})
                 out.append({"name": name, "label": "Gmail (personal)", "connected": True, "updated": self.ago(minutes=9), "unread": len(personal), "items": personal,
                             "account": "personal", "key": "gmail@personal"})

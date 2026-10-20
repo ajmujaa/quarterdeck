@@ -92,7 +92,7 @@ bin/qtdeck attach ~/Projects/my-app            # shows what it found and propose
 bin/qtdeck attach ~/Projects/my-app --apply    # registers it
 ```
 
-The summary names the languages, the duties it proposes and the command that proves a change works (pytest, npm test, go test and others are found). When none is found, set it with `--verify "<command>"`. `--verbose` shows the whole scan and every path the crew may not change. A folder with no GitHub remote gets one with `bin/qtdeck repo my-app <owner/name>`.
+The summary names the languages, the duties it proposes and the command that proves a change works (pytest, npm test, go test and others are found). When none is found, set it with `--verify "<command>"`. `--verbose` shows the whole scan and every path the crew may not change. A folder with no GitHub remote gets one with `bin/qtdeck repo my-app <owner/name>`; `bin/qtdeck repo my-app` lists the other ways, and local tickets work meanwhile (see the next section).
 
 Attach also names the stack from the files alone, for example "React 18 with Vite, tests by Vitest, lint by ESLint, package manager npm" (Node, Python, Go and Rust projects are read the same way). It proposes a build and a lint command next to the verify command, using the project's own package manager, and gives a reason for each. Every duty has a one-line reason for being on or off. The duties that fit the stack show as "also fit this stack (off)" on the command line and as a separate group in the dashboard; nothing in that group is on until you tick it (`--verbose` and the dashboard give the reason for each). Change the commands with `--build` and `--lint`, or in the dashboard. The build command is the one the Shipwright's checks already run; lint and type check are kept for your review and the crew's notes, and nothing runs them by itself.
 
@@ -106,6 +106,27 @@ bin/qtdeck run my-app surveyor --pr 12 --apply   # posts the review
 ```
 
 `bin/qtdeck crew` lists the crew, `bin/qtdeck duties` the jobs, and `bin/qtdeck check` runs every test.
+
+## Say what you want built
+
+You do not need an issue to start. Tell the planner in plain words:
+
+```bash
+bin/qtdeck ticket new my-app "a page with a counter and a reset button"          # drafts one to five tickets and keeps the draft; files nothing
+bin/qtdeck ticket list my-app                                                   # the local tickets and the drafts, one line each
+bin/qtdeck ticket file my-app d1 --apply                                        # file the draft you like (or: ticket new ... --apply to draft and file in one go)
+```
+
+Each ticket has a title, a body and acceptance checks a person could try. The planner reads the project with read-only tools and sees the request as data, never as instructions. It never gets `gh` or a credential: Quarterdeck itself files, and only with `--apply`. Every ticket is scanned for credentials before it is posted, a title already on the tracker is skipped, and `@mentions` lose their `@` so a ticket never pings anyone.
+
+**A project with no GitHub repo** can still do this. `bin/qtdeck repo my-app` says so in one sentence and lists four ways forward, in this order:
+
+1. You already have a repo: `bin/qtdeck repo my-app <owner/name>`.
+2. You have a GitHub account: `bin/qtdeck repo create my-app --private` runs `gh repo create` only after you type `yes`, and only if `gh auth status` says you are signed in (if not, it tells you to run `gh auth login` and creates nothing). Pushing your main branch once, so pull requests have a base, is a second `yes` (or `--push`). `--public` also needs `--i-mean-public`.
+3. You have no GitHub account: a person has to sign up at github.com with an email address, choose a username and verify the email. Quarterdeck never creates an account and never touches a password. Then continue with 2.
+4. Not now: tickets stay on your computer, in `state/tickets/<project>.json` in your data folder. A local ticket never becomes a GitHub issue unless you connect a repo and file it yourself.
+
+**A local ticket through the crew.** `bin/qtdeck cycle my-app --ticket 1 --apply` (the project needs `"cycle": true`, like any cycle) runs the purser, the dev panel and the shipwright on it, with the same checks, caps and refusals as for an issue, and then stops. The shipwright commits once on a local branch `ticket/1-<name>` in your checkout. Nothing is pushed, no pull request is opened and `gh` is never called, so the stages that need a pull request (the assayer, the five reviewers, the caulker) are listed as skipped, with the reason. The cycle ends with the command to read the change (`git diff <base>...ticket/1-<name>`) and the one to throw it away (`git branch -D ...`). Without `--apply` it only reports. When you later connect a repo, an issue goes through the whole cycle as before.
 
 ## The crew and what each does
 

@@ -151,6 +151,8 @@ CREW = [("dockmaster", "design,dev,spec", "chair", "weighs the argument and rule
         ("signaller", "design", "user voice", "speaks for the person using it"),
         ("steward", "spec,dev", "operations", "cares what happens at 3 a.m.")]
 
+NO_REPO = {"saltpan-blog"}        # the one invented project that was never put on GitHub: its tickets are kept on this computer
+
 ISSUES = {  # number: (title, state)
     "wayfarer-mobile": {11: ("Trip list flickers on first load", "CLOSED"), 12: ("Map pins overlap on small phones", "CLOSED"),
                         13: ("Add pull to refresh to the trip list", "CLOSED"), 14: ("Offline cache for the trip list", "OPEN"),
@@ -395,7 +397,7 @@ class World:
         for pname, p in sorted(PROJECTS.items()):
             for duty in p["duties"]:
                 lv = last.get((pname, duty)) or {}
-                base = {"project": pname, "repo": f"{ORG}/{pname}", "duty": duty, "role": role.get(duty, ""),
+                base = {"project": pname, "repo": "" if pname in NO_REPO else f"{ORG}/{pname}", "duty": duty, "role": role.get(duty, ""),
                         "implemented": True, "last_verdict": lv.get("verdict"), "last_detail": lv.get("detail"),
                         "last_at": lv.get("at"), "runs_24h": counts.get((pname, duty), 0)}
                 live = [j for j in running if j["project"] == pname and j["duty"] == duty]
@@ -460,7 +462,21 @@ class World:
               "detail": "a person reads the pull request and merges it"}]
         b = [st("purser", "Purser", "purser", "done", "READY", "#31: 3 requirement(s)", 0.29, 1500),
              st("panel", "Dev panel", "panel", "done", "RULED", "dev: 2 of 3 on issue #31", 1.38, 1496)]
+        c = [st("purser", "Purser", "purser", "done", "READY", "ticket 2: 3 requirement(s)", 0.27, 300),
+             st("panel", "Dev panel", "panel", "done", "RULED", "dev: 3 of 3 on ticket 2", 1.21, 296),
+             st("shipwright", "Shipwright", "shipwright", "done", "BRANCH", "ticket 2: local branch ticket/2-add-a-recipe-card", 0.74, 288),
+             st("assayer", "Assayer", "assayer", "skipped", "SKIPPED", "a local ticket has no pull request to test", 0, 288),
+             st("r1:surveyor", "Surveyor (round 1)", "surveyor", "skipped", "SKIPPED", "a local ticket has no pull request to review", 0, 288),
+             st("caulk1", "Caulker (cycle 1)", "caulker", "skipped", "SKIPPED", "nothing to seal: there are no findings on a local branch", 0, 288),
+             {"id": "human", "title": "Human review", "duty": "human", "state": "waiting", "verdict": "WAITING", "url": "", "cost": 0, "runs": [],
+              "detail": "a person reads the local branch and decides"}]
+        tid = f"cyc-saltpan-blog-t2-{int(self.t0) - 17400}"
         return {**self.cycles_started,
+            tid: {"kind": "cycle", "id": tid, "project": "saltpan-blog", "issue": None, "ticket": 2, "title": "Add a recipe card to the template", "apply": True, "status": "awaiting-review",
+                  "started": self.ago(minutes=305), "finished": self.ago(minutes=287), "seconds": 1080,
+                  "branch": "ticket/2-add-a-recipe-card", "review": "git -C ~/Projects/saltpan-blog diff main...ticket/2-add-a-recipe-card",
+                  "final": "The build is on the local branch ticket/2-add-a-recipe-card, as one commit. Nothing was pushed and no pull request exists.",
+                  "pr": None, "prnum": None, "stages": c, "cost": round(sum(x["cost"] for x in c), 4), "notes": []},
             f"cyc-wayfarer-web-29-{int(self.t0) - 5400}": {
                 "kind": "cycle", "id": f"cyc-wayfarer-web-29-{int(self.t0) - 5400}", "project": "wayfarer-web", "issue": 29, "title": "Remember the last-used currency",
                 "apply": True, "status": "awaiting-review", "started": self.ago(minutes=92), "finished": self.ago(minutes=41), "seconds": 3060,
@@ -476,23 +492,92 @@ class World:
     def cycle_projects(self):
         return {"wayfarer-web"}
 
-    def cycle_start(self, project, issue, confirm):
-        """The Start a full cycle button, in Demo mode: an invented record appears in the list and nothing runs."""
+    def cycle_start(self, project, issue, confirm, ticket=None):
+        """The Start a full cycle button, in Demo mode: an invented record appears in the list and nothing runs. An issue, or a LOCAL ticket (exactly one)."""
         if project not in self.cycle_projects():
             return 400, {"error": f"'{project}' has not opted in to full cycles: add \"cycle\": true to its registry entry"}
-        if type(issue) is not int or not 0 < issue < 10 ** 7:
+        if ticket is not None and issue is not None:
+            return 400, {"error": "start a cycle from an issue or from a ticket, not both"}
+        if ticket is not None:
+            if type(ticket) is not int or not 0 < ticket < 10 ** 9:
+                return 400, {"error": "bad ticket"}
+            t = next((x for x in self.ticket_list(project) if x["id"] == ticket), None)
+            if not t or t["source"] != "local" or t["status"] != "open":
+                return 400, {"error": f"ticket {ticket} is not an open local ticket of {project}"}
+        elif type(issue) is not int or not 0 < issue < 10 ** 7:
             return 400, {"error": "bad issue"}
         if confirm is not True:
-            return 400, {"error": "a cycle spends money and writes a branch and a pull request: confirm it"}
-        if any(r["project"] == project and r["issue"] == issue and r["status"] == "running" for r in self.cycle_records().values()):
-            return 409, {"error": f"a cycle for #{issue} on {project} is already running"}
-        cid = f"cyc-{project}-{issue}-{int(self.t0 + self.elapsed())}"
+            return 400, {"error": "a cycle spends money and writes a branch" + ("" if ticket is not None else " and a pull request") + ": confirm it"}
+        if any(r["project"] == project and r.get("issue") == issue and r.get("ticket") == ticket and r["status"] == "running" for r in self.cycle_records().values()):
+            return 409, {"error": f"a cycle for {'ticket #%d' % ticket if ticket is not None else '#%d' % issue} on {project} is already running"}
+        key = f"t{ticket}" if ticket is not None else str(issue)
+        cid = f"cyc-{project}-{key}-{int(self.t0 + self.elapsed())}"
         now = iso(datetime.fromtimestamp(self.t0 + self.elapsed(), timezone.utc))
-        self.cycles_started[cid] = {"kind": "cycle", "id": cid, "project": project, "issue": issue, "title": ISSUES[project].get(issue, ("an issue",))[0], "apply": True,
+        title = t["title"] if ticket is not None else ISSUES[project].get(issue, ("an issue",))[0]
+        self.cycles_started[cid] = {"kind": "cycle", "id": cid, "project": project, "issue": issue, "title": title, "apply": True,
+                                    **({"ticket": ticket, "branch": None, "review": ""} if ticket is not None else {}),
                                     "status": "running", "started": now, "finished": None, "seconds": None, "final": "", "pr": None, "prnum": None,
                                     "stages": [{"id": "purser", "title": "Purser", "duty": "purser", "state": "running", "verdict": "", "detail": "", "url": "", "cost": 0,
                                                 "runs": [], "started": now}], "cost": 0, "notes": []}
-        return 200, {"started": f"cycle {project} --issue {issue}", "id": cid}
+        return 200, {"started": f"cycle {project} " + (f"--ticket {ticket}" if ticket is not None else f"--issue {issue}"), "id": cid}
+
+    # ---- tickets: invented, in memory, like everything else here (the real ones are bin/tickets.py and state/tickets) ----
+    def ticket_list(self, project):
+        def tk(n, title, body, acc, status="open", source="local", issue=None, branch=None, cycle=None, mins=600):
+            return {"id": n, "title": title, "body": body, "acceptance": acc, "requirements": "", "status": status, "source": source, "issue": issue,
+                    "url": f"https://github.com/{ORG}/{project}/issues/{issue}" if issue else None, "branch": branch, "cycle": cycle,
+                    "created": self.ago(minutes=mins), "updated": self.ago(minutes=mins // 2),
+                    "review": f"git -C ~/Projects/{project} diff main...{branch}" if status == "review" and branch else ""}
+        if project == "saltpan-blog":
+            rows = [tk(1, "Show the cooking time at the top of a recipe", "Readers want to know how long a recipe takes before they read it.",
+                       ["Open any recipe: the cooking time shows under the title", "A recipe with no time set shows no empty label"], mins=900),
+                    tk(2, "Add a recipe card to the template", "A printable card with the ingredients and the steps, at the end of each recipe.",
+                       ["Open a recipe and scroll to the end: a card lists the ingredients", "Print the page: only the card is printed"], status="review",
+                       branch="ticket/2-add-a-recipe-card", cycle=f"cyc-saltpan-blog-t2-{int(self.t0) - 17400}", mins=1200)]
+        elif project == "wayfarer-web":
+            rows = [tk(1, "Date picker ignores the user's locale", "The date picker always shows month first.", ["Set the browser to German: the picker shows day first"],
+                       source="github", issue=30, mins=1500),
+                    tk(2, "Remember the last-used currency", "Keep the chosen currency for the next visit.", ["Pick euro, reload the page: euro is still picked"], mins=300)]
+        else:
+            rows = []
+        for r in rows:
+            if any(c.get("project") == project and c.get("ticket") == r["id"] and c["status"] == "running" for c in self.cycles_started.values()):
+                r["status"] = "building"
+        return rows
+
+    def ticket_drafts(self, project):
+        if project == "saltpan-blog":
+            return [{"id": "d1", "request": "Make the newsletter signup friendlier", "at": self.ago(minutes=40), "tickets": [
+                {"title": "Thank the reader after the newsletter signup", "body": "After a signup the form shows a short thank-you message instead of staying blank.",
+                 "acceptance": ["Submit a valid email: the form is replaced by a thank-you line", "Submit an invalid email: the form stays and says what is wrong"]},
+                {"title": "Say how often the newsletter comes", "body": "A line under the signup field says the newsletter comes once a week, on Thursday.",
+                 "acceptance": ["Open the signup: the line is visible without scrolling on a phone"]}]}]
+        if project == "wayfarer-web":
+            return [{"id": "d1", "request": "Make the itinerary easier to print", "at": self.ago(minutes=25), "tickets": [
+                {"title": "Print the itinerary on one page per day", "body": "Each day starts on a new page when the itinerary is printed.",
+                 "acceptance": ["Print a three day trip: it takes three pages", "A one day trip prints on one page"]}]}]
+        return []
+
+    def tickets_view(self, project):
+        if project not in PROJECTS:
+            return 400, {"error": "unknown project"}
+        repo = "" if project in NO_REPO else f"{ORG}/{project}"
+        p = project
+        opts = [
+            {"key": "a", "title": "I already have a GitHub repo", "command": f"qtdeck repo {p} <owner/name>", "steps": [],
+             "note": "connects this project to a repository you already made"},
+            {"key": "b", "title": "I have a GitHub account", "command": f"qtdeck repo create {p} --private", "steps": [],
+             "note": "asks you to type yes, then makes a private repository and connects it; it needs gh signed in, and if it is not it tells you to run: gh auth login"},
+            {"key": "c", "title": "I have no GitHub account", "command": "",
+             "steps": ["Go to https://github.com and choose Sign up.", "Use your email address.", "Choose a username.", "Verify your email when GitHub asks.",
+                       "Sign in on this computer with: gh auth login", f"Come back here and continue with (b): qtdeck repo create {p} --private"],
+             "note": "A person has to do this: Quarterdeck never creates an account and never touches a password."},
+            {"key": "d", "title": "Not now", "command": f"qtdeck ticket new {p} \"<what you want>\"", "steps": [],
+             "note": "keeps tickets on this computer and builds them on local branches you review; nothing goes to GitHub"}]
+        return 200, {"project": p, "repo": repo, "has_repo": bool(repo),
+                     "sentence": "" if repo else f"{p} has no GitHub repo, so the crew cannot open pull requests yet; local tickets still work.",
+                     "options": opts, "stack": PROJECTS[p]["kind"].capitalize() + " (invented for the demo).", "cycle": p in self.cycle_projects(),
+                     "tickets": self.ticket_list(p), "drafts": self.ticket_drafts(p), "running": False, "last_draft_error": "", "last_file_error": "", "request_limit": 2000}
 
     def mockup_page(self, bid, name):
         return self.maker.mockup_page(bid, name) if self.maker else None
@@ -501,7 +586,7 @@ class World:
         return self.cycle_records().get(cid)
 
     def cycle_list(self):
-        return [{"id": r["id"], "project": r["project"], "issue": r["issue"], "title": r["title"], "status": r["status"], "apply": r["apply"],
+        return [{"id": r["id"], "project": r["project"], "issue": r["issue"], "ticket": r.get("ticket"), "branch": r.get("branch"), "title": r["title"], "status": r["status"], "apply": r["apply"],
                  "started": r["started"], "finished": r["finished"], "cost": r["cost"], "pr": r["pr"]}
                 for r in sorted(self.cycle_records().values(), key=lambda x: x["started"], reverse=True)]
 
@@ -850,7 +935,7 @@ class World:
             "inbox": self.inbox(t, runs), "panels": panels, "fixes": fixes, "cycles": self.cycle_list(), "fixqueue": self.queue,
             "briefs": self.maker.summary() if self.maker else [], "plans": self.maker.plan_summary() if self.maker else [],
             "spend": self.spend(t), "schedules": self.schedules(), "docs": self.docs(),
-            "projects": [{"name": k, "repo": f"{ORG}/{k}", "summary": v["summary"], "duties": v["duties"], "guardrails": GUARDRAILS,
+            "projects": [{"name": k, "repo": "" if k in NO_REPO else f"{ORG}/{k}", "summary": v["summary"], "duties": v["duties"], "guardrails": GUARDRAILS,
                           "verify": v["verify"], "board": None, "cycle": k == "wayfarer-web"} for k, v in sorted(PROJECTS.items())],
             "duties": [{"name": n, "summary": f"{n}: {s}", "role": s} for n, s in DUTIES],
             "runs": runs[-200:][::-1],
@@ -914,6 +999,8 @@ class World:
                 return 400, {"error": "bad number"}
             c = self.card(q("project"), int(num), kind, t)
             return (200, {"card": c, "fetched": self.at(t)}) if c else (404, {"error": "no such card"})
+        if path == "/api/tickets":
+            return self.tickets_view(q("project"))
         if path == "/api/progress":
             if q("project") not in PROJECTS:
                 return 400, {"error": "unknown project"}
@@ -1220,7 +1307,9 @@ class World:
         if path in ("/api/intent", "/api/project-status"):
             return self.intent_post(path, b)
         if path == "/api/cycle/start":
-            return self.cycle_start(b.get("project"), b.get("issue"), b.get("confirm"))
+            return self.cycle_start(b.get("project"), b.get("issue"), b.get("confirm"), b.get("ticket"))
+        if path in ("/api/ticket/draft", "/api/ticket/file", "/api/ticket/discard", "/api/repo"):
+            return 400, {"error": "Demo mode: nothing is drafted, filed or created."}
         if path == "/api/work":
             project, issue, action = b.get("project"), b.get("issue"), b.get("action")
             if project not in PROJECTS:

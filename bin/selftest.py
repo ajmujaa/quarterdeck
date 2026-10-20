@@ -3449,7 +3449,7 @@ check("cycle: the dashboard cannot start one: a cycle is not a duty, so no run b
       "cycle" not in {x["name"] for x in d.duty_list()} and not (ROOT / "duties" / "cycle.sh").exists())
 _dw = _dm.World(clock=lambda: 1000.0); _dst = _dw.state()
 check("cycle: the demo world has invented cycle records, listed in the state, with the project flag and no real names",
-      len(_dst["cycles"]) == 2 and any(c["status"] == "awaiting-review" for c in _dst["cycles"]) and any(c["status"] == "stopped-cap" for c in _dst["cycles"])
+      len(_dst["cycles"]) == 3 and any(c["status"] == "awaiting-review" for c in _dst["cycles"]) and any(c["status"] == "stopped-cap" for c in _dst["cycles"])
       and any(p["cycle"] for p in _dst["projects"]) and all(c["project"] in _dm.PROJECTS for c in _dst["cycles"]))
 _dc = next(c for c in _dst["cycles"] if c["status"] == "awaiting-review")
 _rd = d.compose_mission("cycle:" + _dc["id"], _dw.panel_transcript, _dst["fixes"], _dst["runs"], _dst["inbox"], _dst["fixqueue"], get_cycle=_dw.cycle_record)

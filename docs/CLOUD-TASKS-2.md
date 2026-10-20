@@ -91,3 +91,25 @@ Findings, from the page code and the owner's screenshots:
    "All projects" box and the project list do not mention it. Label such items "Add-on: <name>" and let the scope box
    include the add-on when it is installed, or say plainly why it is separate.
 Report what you tested and what still confuses.
+
+## 6. Home is the owner's, Projects is its own page, guardrails are editable (the owner's design, 2026-10-20; ticket #124)
+The owner's words: "it feels it all messed up". Home mixes things that belong to one project (Mission trajectory, Needs
+you, a Hermes alert on top) with things that belong to the person (Your Day, Brain Dump). Design:
+1. **Home = the person, across everything.** Only: Your Day, Brain Dump, a fleet timeline of all projects together,
+   Recently finished (small), and Budget today. One calm next action at the top may stay, but it must be about the
+   person's day or the single most urgent thing across projects, labelled with its project or add-on.
+2. **A Projects page** (own place in the rail). Opens on all projects together: one row or card per project (state, what
+   needs the owner, last run, spend). Choosing a project filters the page to that project: its Needs you, Missions
+   (open first, finished small), Pull requests, Board, Ledger. The project scope lives in the URL (section 5) and
+   shows on every page. Remove the row of project chips under the Home list ("agent-fleet Idle, drydock Idle...") and the
+   "All projects" box on pages where it means nothing; the Projects page is where scope is chosen.
+3. **Needs you and Mission trajectory move to Projects** (Home keeps at most a count that links there).
+4. **Add-on alerts** (Hermes) get their own small "Add-ons" strip or the add-on's own page, never the top of Home.
+5. **Guardrails can be edited.** The project page shows them read-only today (a dialog from "N guardrails"). Add:
+   edit, add, remove, reorder, with a Save that goes through the existing attach edit path (`_attach.edit`), keeps the
+   built-in "never merge / never push to the default branch / never touch secrets" ones locked on (shown, not removable,
+   with the reason), and records the change in the log. Same from the CLI: `qtdeck guardrail <project> add|remove "..."`.
+   Show the effective list the crew really receives.
+6. Keep Calm mode working, keep every page real-data-only, no em dashes, no inline script (CSP).
+Test with the headless browser: Home shows only the five things; Projects filters; guardrail edit round-trips and a
+locked guardrail cannot be removed through the API either.

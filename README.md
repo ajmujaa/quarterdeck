@@ -49,4 +49,4 @@ Dashboard · Crew · Brain map · Fleet · Connections · Helm (optional voice)
 
 Early. Built and used daily on macOS. The Linux sandbox is run in CI only. Read [SECURITY.md](SECURITY.md) before you trust it with anything you care about.
 
-[Guide](GUIDE.md) · [Security](SECURITY.md) · [Threat model](THREAT-MODEL.md) · [Apache-2.0](LICENSE)
+[Guide](GUIDE.md) · [Security](SECURITY.md) · [Threat model](THREAT-MODEL.md) · [Apache-2.0](LICENSE) · [Licensing](LICENSING.md)

@@ -129,9 +129,11 @@ try {
   const pp = await page.evaluate(() => ({h1: document.querySelector("#ptitle").textContent.trim(), fs: parseFloat(getComputedStyle(document.querySelector("#ptitle")).fontSize), cards: document.querySelectorAll("#view .pj-card").length, slot: !!document.querySelector("#guardrails-slot"),
     guard: (document.querySelector("#guardrails-slot") || {}).innerText || "", acts: document.querySelector("#pacts").innerText.replace(/\s+/g, " "), sub: document.querySelector("#psub").textContent.trim(), text: document.querySelector("#view").innerText.replace(/\s+/g, " ")}));
   ok("  the project page names the project large, shows its repo (or says there is none), the stack sentence, its facts, its Ready card and a slot for the guardrails card", pp.h1 === A && pp.fs >= 24 && pp.cards === 1 && pp.slot && (MODE === "demo" || (pp.acts.includes("x/alpha-app") && pp.sub === "Python with FastAPI, tests by pytest")) && /ready/i.test(pp.text), JSON.stringify(pp).slice(0, 500));
-  ok("  the read-only guardrails summary is in the slot and its dialog still opens", MODE === "demo" ? /guardrails/i.test(pp.guard) : (pp.guard.includes("Never touch the payments folder") && pp.guard.includes("2 guardrails")), pp.guard);
-  await page.locator("#guardrails-slot sl-button").click(); await sleep(400);
-  ok("  (the dialog, from Show all)", (await text("#dtitle")).endsWith("guardrails") && (await page.locator("#dbody li").count()) >= 1);
+  await here("#guardrails-slot .gr-locked", 15000);
+  const gv = await page.evaluate(() => ({text: (document.querySelector("#guardrails-slot") || {}).innerText || "", vals: [...document.querySelectorAll("#guardrails-slot .gr-in")].map(e => e.value)}));
+  ok("  the guardrails editor is in the slot: the locked rules, and the project's own rules as fields", MODE === "demo" ? /guardrails/i.test(gv.text) : (gv.text.includes("Never merge a pull request.") && gv.vals.some(v => v.includes("Never touch the payments folder"))), JSON.stringify(gv));
+  await page.evaluate(() => showGuardrails()); await sleep(400);
+  ok("  (the older dialog still opens and lists the same rules)", (await text("#dtitle")).endsWith("guardrails") && (await page.locator("#dbody li").count()) >= 1);
   await page.keyboard.press("Escape"); await sleep(300);
   if (MODE === "real") {
     await here("#view .tk-card", 15000);

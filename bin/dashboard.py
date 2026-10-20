@@ -4145,6 +4145,33 @@ def project_duties_api(b):
     return 200, r
 
 
+def guardrails_view(project):
+    """GET /api/guardrails?project=: the locked rules with their reasons, the project's own, and the exact text the crew receives."""
+    import guardrails as _gr
+    _ticket_entry(project)
+    return _gr.listing(project)
+
+
+def project_guardrails_api(b):
+    """Save a project's guardrails: the full ordered list the page shows, through guardrails.replace (attach.edit and the atomic 0600 registry write)."""
+    import guardrails as _gr
+    if DEMO["world"] is not None:
+        return 400, {"error": "Demo mode: nothing is changed."}
+    if b.get("confirm") is not True:
+        return 400, {"error": "confirm is required: this changes the rules every agent is given for the project"}
+    project, items = b.get("project"), b.get("guardrails")
+    if not isinstance(items, list) or not all(isinstance(x, str) for x in items):
+        return 400, {"error": "guardrails is the full list of rules, as text"}
+    try:
+        _ticket_entry(project)
+        r = _gr.replace(project, items)
+    except ValueError as e:
+        return 400, {"error": str(e)}
+    except OSError as e:
+        return 500, {"error": "could not write: " + type(e).__name__}
+    return 200, r
+
+
 # ---- design briefs, mock-ups and sprint plans: the owner's approval screens ------------------------------------------
 # Every write here is one explicit click with confirm:true, and every write lands in the data folder (state/briefs, workspace/,
 # state/plans) except two the owner names on purpose: a plan's card moves (through the board keeper's own move) and the opt-in
@@ -5355,6 +5382,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._demo_reply((200, {"project": pr, "items": items, "next": _ready.next_action(pr, entry, items, tk), "ready": _ready.is_ready(items), "preview": False,
                                                "draft": None, "running": {"prove": False, "docs": False}, "last_error": {"prove": "", "docs": ""}, "has_repo": bool(entry["repo"]),
                                                "default_branch": "main", "demo": True}))
+            if u.path == "/api/guardrails":         # the made-up project's own rules, listed by the same function
+                import guardrails as _gr
+                pr = (q.get("project") or [""])[0]
+                if pr not in demo.PROJECTS:
+                    return self._demo_reply((400, {"error": "unknown project"}))
+                return self._demo_reply((200, {**_gr.listing_of(_gr.LOCKED_TEXTS + list(demo.GUARDRAILS)), "demo": True}))
             if u.path == "/api/mockup":             # a made-up page, still served the strict way
                 return self._mockup_page((q.get("brief") or [""])[0], (q.get("name") or [""])[0])
             if u.path == "/api/state":              # the made-up state, with the Projects summary counted by the same function the real one uses
@@ -5423,6 +5456,12 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/tickets":
             try:
                 return self._send(200, json.dumps(tickets_view((q.get("project") or [""])[0])))
+            except ValueError as e:
+                return self._send(400, json.dumps({"error": str(e)}))
+
+        if u.path == "/api/guardrails":
+            try:
+                return self._send(200, json.dumps(guardrails_view((q.get("project") or [""])[0])))
             except ValueError as e:
                 return self._send(400, json.dumps({"error": str(e)}))
 
@@ -5672,7 +5711,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(code, json.dumps(body))
 
         for path_, fn_ in (("/api/ticket/draft", ticket_draft_api), ("/api/ticket/file", ticket_file_api), ("/api/ticket/discard", ticket_discard_api), ("/api/repo", repo_api),
-                         ("/api/ready/prove", ready_prove_api), ("/api/docs/draft", docs_draft_api), ("/api/docs/apply", docs_apply_api), ("/api/project/duties", project_duties_api)):
+                         ("/api/ready/prove", ready_prove_api), ("/api/docs/draft", docs_draft_api), ("/api/docs/apply", docs_apply_api), ("/api/project/duties", project_duties_api),
+                         ("/api/project/guardrails", project_guardrails_api)):
             if u.path == path_:
                 code, body = fn_(b)
                 return self._send(code, json.dumps(body))

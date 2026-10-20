@@ -1342,6 +1342,8 @@ class World:
             return 400, {"error": "Demo mode: nothing is drafted, filed or created."}
         if path in ("/api/ready/prove", "/api/docs/draft", "/api/docs/apply", "/api/project/duties"):
             return 400, {"error": "Demo mode: nothing is run, drafted or changed."}
+        if path == "/api/project/guardrails":
+            return 400, {"error": "Demo mode: nothing is changed."}
         if path == "/api/work":
             project, issue, action = b.get("project"), b.get("issue"), b.get("action")
             if project not in PROJECTS:

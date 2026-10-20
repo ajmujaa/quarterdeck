@@ -1395,14 +1395,99 @@ function projectsOverview(){
     : emptyState({inline: true, title: "The project summaries could not be read just now.", body: "The pages of each project are still under the tabs. This page tries again by itself."});
   return `<div class="stack">${calmHide(fleetStrip(f))}${cards}${addonsStrip()}${needsCard(f.att, f.waiting)}${calmHide(trajectoryCard(f))}</div>`;
 }
-// A stand-in for the editable guardrails card (the next change replaces its body): today it is the read-only summary and the button that opens the existing dialog.
+/* ---- Guardrails: the rules every agent is given for a project. The card is a function of the project and lives in #guardrails-slot; it reads GET /api/guardrails and
+   saves the full ordered list with POST /api/project/guardrails (bin/guardrails.py). The three locked rules are shown, never editable or removable. ---- */
+const GR = {project: "", data: null, items: [], add: "", busy: false, at: 0, loading: false};
+const GR_MAX = 300;
+const grSame = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const grDirty = () => !!GR.data && (!grSame(GR.items, GR.data.custom) || GR.data.missing_locked.length > 0);
+const grFresh = project => GR.data && GR.project === project;
+function grRender(focus){ const s = $("#guardrails-slot"); if(s) s.innerHTML = guardrailsCard(sel); if(focus) focusSoon(focus); }
+function grSync(){ const b = $("#gr-save"); if(b) b.disabled = !grDirty() || GR.busy; }
+async function loadGuardrails(force){
+  const p = sel;
+  if(!p || GR.loading) return;
+  if(GR.project !== p) Object.assign(GR, {project: p, data: null, items: [], add: "", busy: false, at: 0});
+  if(!force && GR.data && Date.now() - GR.at < 15000) return;
+  GR.loading = true; GR.at = Date.now();
+  try{
+    const r = await fetch("/api/guardrails?project=" + encodeURIComponent(p));
+    if(r.status === 401){ showUnpaired(); return; }
+    const j = r.ok ? await r.json() : null;
+    if(j && sel === p){
+      const first = !GR.data, before = JSON.stringify(GR.data), clean = !grDirty();
+      GR.data = j;
+      if(clean) GR.items = j.custom.slice();
+      if((first || before !== JSON.stringify(j)) && view === "projects" && !document.activeElement?.closest("#guardrails-slot")) grRender();
+    }
+  }catch(e){ /* the next poll asks again */ }
+  finally{ GR.loading = false; }
+}
+function grEdit(i, v){ GR.items[i] = String(v); grSync(); }
+function grNew(v){ GR.add = String(v); }
+function grAdd(){
+  const d = GR.data, t = GR.add.trim(), el = $("#gr-new");
+  if(!d || GR.busy) return;
+  if(!t) return fieldError(el, "Write the guardrail first.");
+  if(t.length > GR_MAX) return fieldError(el, `That is ${t.length} characters; the limit is ${GR_MAX}.`);
+  if(GR.items.length >= d.limit) return fieldError(el, `A project may have at most ${d.limit} guardrails of its own.`);
+  const key = x => x.trim().replace(/\s+/g, " ").toLowerCase();
+  if([...d.locked.map(x => x.text), ...GR.items].some(x => key(x) === key(t))) return fieldError(el, "That is already a guardrail.");
+  GR.items.push(t); GR.add = "";
+  announce(`Added as guardrail ${GR.items.length}. Save guardrails to keep it.`);
+  grRender("#gr-new");
+}
+function grRemove(i){
+  GR.items.splice(i, 1);
+  announce("Guardrail removed from the list. Save guardrails to keep the change.");
+  grRender(GR.items.length ? `#gr-${Math.min(i, GR.items.length - 1)}` : "#gr-new");
+}
+function grMove(i, dir){
+  const j = i + dir;
+  if(j < 0 || j >= GR.items.length) return;
+  [GR.items[i], GR.items[j]] = [GR.items[j], GR.items[i]];
+  announce(`Guardrail moved to position ${j + 1} of ${GR.items.length}.`);
+  grRender(`#gr-mv-${j}-${dir < 0 ? "up" : "down"}`);
+}
+async function grSave(){
+  const d = GR.data, p = sel;
+  if(!d || GR.busy || !grDirty()) return;
+  GR.busy = true; grSync();
+  const j = await post("/api/project/guardrails", {project: p, guardrails: [...d.locked.map(x => x.text), ...GR.items], confirm: true});
+  GR.busy = false;
+  if(sel !== p) return;
+  if(!j){
+    grSync();
+    const msg = lastPostError, at = GR.items.findIndex(x => msg.includes(`'${x.trim().slice(0, 40)}'`));
+    if(!msg.startsWith("Demo mode")) fieldError($(at >= 0 ? "#gr-" + at : "#gr-new"), msg);
+    return;
+  }
+  GR.data = j; GR.items = j.custom.slice(); GR.at = Date.now();
+  const pr = (S.projects || []).find(x => x.name === p);
+  if(pr) pr.guardrails = [...j.locked.map(x => x.text), ...j.custom];
+  toast("Guardrails saved."); announce(`Guardrails saved. ${j.custom.length} of your own.`);
+  grRender("#gr-save");
+}
 function guardrailsCard(project){
   const p = (S.projects || []).find(x => x.name === project);
   if(!p) return "";
-  const g = p.guardrails || [];
-  return card(null, g.length ? `<p class="hint">${g.length} ${plural(g.length, "rule")} ${plural(g.length, "is", "are")} put into every prompt for this project, for every agent.</p>
-      <ul class="pj-rules">${g.slice(0, 3).map(x => `<li>${esc(x)}</li>`).join("")}</ul>${btn("Show all " + g.length + " guardrails", {size: "small", click: act("showGuardrails")})}`
-    : `<p class="hint">No guardrails are set for this project.</p>`, {kicker: "Guardrails", count: g.length || null, label: "Guardrails", cls: "guardrails"});
+  const d = grFresh(project) ? GR.data : null;
+  if(!d) return card(null, `<p class="hint">Loading the guardrails.</p>`, {kicker: "Guardrails", label: "Guardrails", cls: "guardrails"});
+  const locked = d.locked.map(x => `<li class="gr-locked"><sl-icon name="lock" class="gr-lock"></sl-icon><span class="gr-t">${esc(x.text)}<small class="gr-why" data-calm="hide">${esc(x.reason)}</small></span></li>`).join("");
+  const rows = GR.items.map((t, i) => `<li class="gr-row">
+      ${slInput({id: "gr-" + i, label: `Guardrail ${i + 1} for ${project}`, value: t, cls: "gr-in", attrs: `maxlength="${GR_MAX}" ${actOn("input", "grEdit", i, T.value)}`})}
+      <span class="gr-tools"><sl-icon-button class="x" id="gr-mv-${i}-up" name="chevron-up" label="Move guardrail ${i + 1} up" ${i === 0 ? "disabled" : ""} ${act("grMove", i, -1)}></sl-icon-button>
+      <sl-icon-button class="x" id="gr-mv-${i}-down" name="chevron-down" label="Move guardrail ${i + 1} down" ${i === GR.items.length - 1 ? "disabled" : ""} ${act("grMove", i, 1)}></sl-icon-button>
+      <sl-icon-button class="x" id="gr-rm-${i}" name="x-lg" label="Remove guardrail ${i + 1}" ${act("grRemove", i)}></sl-icon-button></span></li>`).join("");
+  const body = `<p class="hint" data-calm="hide">Rules every agent is given for this project.</p>
+    <ul class="gr-list" aria-label="Locked guardrails">${locked}</ul>
+    ${d.missing_locked.length ? `<p class="hint">This project's list is missing a locked rule. Save guardrails puts it back.</p>` : ""}
+    ${rows ? `<ul class="gr-list" aria-label="Your guardrails for ${esc(project)}">${rows}</ul>` : ""}
+    <div class="gr-add">${slInput({id: "gr-new", label: "Add a guardrail", value: GR.add, placeholder: "For example: keep each change small", attrs: `maxlength="${GR_MAX + 50}" ${actOn("input", "grNew", T.value)} ${actOn("keydown", "onEnter", "grAdd")}`})}
+      ${btn("Add", {size: "small", click: act("grAdd"), attrs: 'id="gr-add" aria-label="Add this guardrail to the list"'})}</div>
+    <div class="btns">${btn("Save guardrails", {variant: "primary", click: act("grSave"), disabled: !grDirty() || GR.busy, attrs: 'id="gr-save"'})}</div>
+    <sl-details summary="What the crew receives" id="gr-eff"><pre class="gr-eff" tabindex="0">${esc(d.effective)}</pre></sl-details>`;
+  return card(null, body, {kicker: "Guardrails", count: d.locked.length + d.custom.length, label: "Guardrails", cls: "guardrails"});
 }
 function projectPage(){
   const o = pjOf(sel), f = homeFacts();
@@ -3417,8 +3502,8 @@ async function attachLook(){
       ${slTextarea({id: "at-forbid", label: "Paths the crew may not touch, one per line", rows: 6, value: e.forbidden_paths.join("\n")})}
       <p class="hint">The build, CI and dependency files the harness already protects cannot be removed.</p>
       <div class="sec-h">Standing rules</div>
-      <div class="focus-rows" style="flex-direction:column;align-items:flex-start;gap:0">${j.guardrail_options.map((g, i) => slCheckbox(esc(g), {attrs: `data-ag="${esc(g)}" checked${i < 2 ? " disabled" : ""}`})).join("")}</div>
-      <p class="hint">Never merging and never pushing to ${esc(e.default_branch)} stay on.</p>
+      <div class="focus-rows" style="flex-direction:column;align-items:flex-start;gap:0">${j.guardrail_options.map((g, i) => slCheckbox(esc(g), {attrs: `data-ag="${esc(g)}" checked${i < 3 ? " disabled" : ""}`})).join("")}</div>
+      <p class="hint">Never merging, never pushing to ${esc(e.default_branch)} and never touching secrets stay on.</p>
       <div class="sec-h">A note for other coding agents</div>
       ${slCheckbox("Also add an AGENTS.md to the project", {id: "at-agents"})}
       <p class="hint">Off by default. It would be a small new file in the project that says how the crew works there. An AGENTS.md that is already there is never changed.</p>
@@ -4910,7 +4995,7 @@ function render(){
   renderSelBar();
   if(v.id === "log") loadLog();
   if(v.id === "timeline") loadTimeline();
-  if(v.id === "projects"){ loadTickets(); loadReady(); }
+  if(v.id === "projects"){ loadTickets(); loadReady(); loadGuardrails(); }
   if(v.id === "overview" && !atPlace) loadTimeline("24h");
   if(v.id === "fleet") loadFleet();
   if(v.id === "connections") loadConnections();
@@ -5058,7 +5143,7 @@ const ACTIONS = {
   selectAddon, selectPlace, selectProject, setBilling, setBrainMode, setCapSave, setFleetView, setHandsFree, setKeyRemove, setKeySave, setLens, setSizeBy, setTheme, sgSpeakToggle, showGuardrails, showLog, showPrivacy,
   startCycle, startMissionPanel, stopRun, talkSubmit, thinkToggle, tlClick, tlHover, tlSet, toggleCalm, toggleDemo, toggleLedger,
   toggleMissionForm, toggleMobileMenu, toggleOld, toggleReplay, toggleSched, toggleSel, toggleShowcaseForm, unpublishShowcase, unqueue, workOn,
-  openProject, openProjects, addonNeeds, homeDay, finToggle, trajToggle, tkRequest, tkDraft, tkFile, tkDiscard, tkRepoName, tkRepoSave, tkRepoCreate, tkMission,
+  grEdit, grNew, grAdd, grRemove, grMove, grSave, openProject, openProjects, addonNeeds, homeDay, finToggle, trajToggle, tkRequest, tkDraft, tkFile, tkDiscard, tkRepoName, tkRepoSave, tkRepoCreate, tkMission,
   rdShow, rdToggle, rdNext, rdDraft, rdApply, rdTurnOn, rdCycle,
   ...EXT.actions,                                   // an add-on's own (assets/ext-*.js), by name
 };

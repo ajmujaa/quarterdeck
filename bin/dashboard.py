@@ -1775,8 +1775,8 @@ def cycle_mission(r, out):
         review = str(r.get("review") or "")[:500]
         nxt = {"running": "The crew is working. Nothing is pushed and no pull request is made for a local ticket.",
                "awaiting-review": f"Review the branch {branch or ''}, merge it yourself if you agree, or connect a GitHub repo to run the reviewers on a pull request.".replace("  ", " "),
-               "needs-human": "A person has to look at this. The reason is above; the ticket stays open.",
-               "failed": "The cycle stopped. The ticket stays open; resume it from a terminal."}.get(status, "")
+               "needs-human": "A person has to look at this. The reason is above; the ticket stays on the list.",
+               "failed": "The cycle stopped. The ticket stays on the list; resume the cycle from a terminal."}.get(status, "")
         out["ticket"] = {"n": r["ticket"], "branch": branch, "review": review, "next": nxt}
     # the history lens is the stage table: one row per stage, its cost in the detail
     out["history"] = [{"at": x.get("finished") or x.get("started"), "duty": x.get("title") or x.get("id"), "verdict": x.get("verdict") or x.get("state"),

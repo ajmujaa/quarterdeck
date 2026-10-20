@@ -24,7 +24,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const arg = (n, d) => { const i = process.argv.indexOf("--" + n); return i < 0 ? d : (process.argv[i + 1] && !process.argv[i + 1].startsWith("--") ? process.argv[i + 1] : true); };
 const QUICK = process.argv.includes("--quick");
 const ALL_VIEWS = ["overview", "brain", "inbox", "missions", "prs", "board", "timeline", "operations", "ledger", "spend", "log", "crew", "fleet", "connections", "documents", "panels", "notes", "showcase", "settings"];
-const VIEWS = String(arg("views", QUICK ? "overview,crew,settings" : ALL_VIEWS.join(","))).split(",");
+// a view may name a project to be on: "missions@saltpan-blog" is the Missions page with that Demo project chosen (a project with no GitHub repo, so the repo options and the tickets list are drawn)
+const VIEWS = String(arg("views", QUICK ? "overview,crew,settings,missions@saltpan-blog" : ALL_VIEWS.join(",") + ",missions@saltpan-blog,missions@wayfarer-web")).split(",");
 const THEMES = String(arg("themes", QUICK ? "dark" : "dark,light")).split(",");
 const CALMS = { both: [false, true], off: [false], on: [true] }[String(arg("calm", QUICK ? "off" : "both"))] || [false];
 const SEED = arg("seed-agents", false);      // "one" | "all": no Demo; a made-up registry whose project has 3 agent files, so the Crew page's own-agents section is measured
@@ -271,15 +272,18 @@ async function setMode(theme, calm) {
   await page.waitForTimeout(250);
 }
 async function showView(v) {
-  await page.evaluate(v => { try { dockGo(v); } catch (e) { go(v); } }, v);
+  await page.evaluate(v => { window.scrollTo(0, 0); try { dockGo(v); } catch (e) { go(v); } }, v);        // from the top: a page the focus walk scrolled must not move the next one's selector
   await page.waitForTimeout(v === "brain" ? 1500 : 450);
 }
 
 const stats = {views: 0, stops: 0}, selBox = {};
+const baseSel = await page.evaluate(() => sel);
 for (const theme of THEMES) for (const calm of CALMS) {
   await setMode(theme, calm);
-  for (const view of VIEWS) {
-    const c = {view, theme, calm: calm ? "calm" : "normal"};
+  for (const spec of VIEWS) {
+    const [view, proj] = spec.split("@");
+    const c = {view: spec, theme, calm: calm ? "calm" : "normal"};
+    await page.evaluate(p => { if (sel !== p) selectProject(p); }, proj || baseSel);          // a view names its project, any other goes back to the one the run began on
     await showView(view);
     await page.evaluate(() => { window.__ctN = 0; });
     for (const x of await page.evaluate(inPage, {contrast: true, ui: true})) add(x.rule, x.where, x.detail, c);

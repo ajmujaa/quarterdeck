@@ -867,25 +867,46 @@ def cycle_estimate(project, records=None):
     return cycle_estimate_calc(mine, cycle_ceiling(), daily_budget(), spent_today())
 
 
-def start_cycle(project, issue, confirm):
-    """Start `qtdeck cycle <project> --issue <n> --apply`, detached, the way a duty is started. The record (and so the id) is made by
-    the script a moment after it starts; wait briefly for it. Nothing here merges or pushes: that is the script's own rule."""
+def start_cycle(project, issue, confirm, ticket=None):
+    """Start `qtdeck cycle <project> --issue <n> --apply`, or `--ticket <n> --apply` for a LOCAL ticket (exactly one of the two), detached, the way a
+    duty is started. The record (and so the id) is made by the script a moment after it starts; wait briefly for it. Nothing here merges or
+    pushes: that is the script's own rule. A ticket cycle ends at a local branch for the owner to review."""
     no_demo("start a cycle")
     projects = read_json(PROJECTS_FILE, {})
     if not isinstance(project, str) or project not in projects:
         raise ValueError("unknown project")
     if projects[project].get("cycle") is not True:
         raise ValueError(f"'{project}' has not opted in to full cycles: add \"cycle\": true to its registry entry")
-    if type(issue) is not int or not 0 < issue < 10**7:
-        raise ValueError("bad issue")
+    if ticket is not None and issue is not None:
+        raise ValueError("start a cycle from an issue or from a ticket, not both")
+    if ticket is not None:
+        if type(ticket) is not int or not 0 < ticket < 10**9:
+            raise ValueError("bad ticket")
+        import tickets as _tk
+        try:
+            t = _tk.get(project, ticket)
+        except _tk.TicketError as e:
+            raise ValueError(str(e))
+        if t.get("source") == "github":
+            raise ValueError(f"ticket {ticket} is GitHub issue #{t.get('issue')}: start the cycle from the issue")
+        if t.get("status") not in ("open", "building"):
+            raise ValueError(f"ticket {ticket} is {t.get('status')}: a cycle starts from an open ticket")
+        key, lock, what = f"t{ticket}", f"cycle-{project}-t{ticket}", f"ticket #{ticket}"
+    else:
+        if type(issue) is not int or not 0 < issue < 10**7:
+            raise ValueError("bad issue")
+        key, lock, what = str(issue), f"cycle-{project}-{issue}", f"#{issue}"
     if confirm is not True:
-        raise ValueError("a cycle spends money and writes a branch and a pull request: confirm it")
-    if f"cycle-{project}-{issue}" in running_locks():
-        raise ValueError(f"a cycle for #{issue} on {project} is already running")
+        raise ValueError("a cycle spends money and writes a branch" + ("" if ticket is not None else " and a pull request") + ": confirm it")
+    if lock in running_locks():
+        raise ValueError(f"a cycle for {what} on {project} is already running")
     b = daily_budget()
     if b is not None and spent_today() >= b:
         raise ValueError(f"today's budget is spent (${spent_today():.2f} of ${b:.2f}); a cycle would stop at once")
-    argv = [str(ROOT / "bin" / "qtdeck"), "cycle", project, "--issue", str(issue), "--apply"]
+    if ticket is not None:
+        argv = _tk.argv_cycle(project, ticket, apply=True)
+    else:
+        argv = [str(ROOT / "bin" / "qtdeck"), "cycle", project, "--issue", str(issue), "--apply"]
     LOGS.mkdir(exist_ok=True)
     out = open(LOGS / f"cycle-{project}.log", "a")
     out.write(f"\n[{iso(now_utc())}] started by dashboard: {' '.join(argv[2:])}\n")
@@ -895,13 +916,15 @@ def start_cycle(project, issue, confirm):
     cid = None
     for _ in range(40):                       # up to 4 s for the script to write its record
         time.sleep(0.1)
-        for f in CYCLES.glob(f"cyc-*-{issue}-*.json") if CYCLES.is_dir() else []:
+        for f in CYCLES.glob(f"cyc-*-{key}-*.json") if CYCLES.is_dir() else []:
             r = read_json(f, None)
-            if isinstance(r, dict) and r.get("project") == project and r.get("issue") == issue and f.stat().st_mtime >= t0 - 1:
+            if not isinstance(r, dict) or r.get("project") != project or f.stat().st_mtime < t0 - 1:
+                continue
+            if (r.get("ticket") == ticket) if ticket is not None else (r.get("issue") == issue and not isinstance(r.get("ticket"), int)):
                 cid = r.get("id"); break
         if cid:
             break
-    return {"started": f"cycle {project} --issue {issue}", "id": cid}
+    return {"started": f"cycle {project} " + (f"--ticket {ticket}" if ticket is not None else f"--issue {issue}"), "id": cid}
 
 
 # ---- status from GitHub ---------------------------------------------------------
@@ -1706,8 +1729,10 @@ def cycle_nodes(r):
         if real:
             verdicts = sorted({str(x.get("verdict")) for x in done if x.get("verdict") and x.get("verdict") != "SKIPPED"})
             note = " · ".join(([", ".join(verdicts)] if verdicts else []) + ([_money(cost)] if cost else []))
-        elif key == "human" and st == "awaiting":
-            note = "Read the pull request"
+        if key == "human" and st == "awaiting" and not note:
+            note = "Read the local branch" if isinstance(r.get("ticket"), int) else "Read the pull request"
+        if st == "skipped":
+            note = str(next((x.get("detail") for x in real if x.get("detail")), "") or "")[:90]
         state_of[key] = st
         out.append({"id": key, "label": label, "state": st, "note": note})
     if status in ("stopped-cap", "stopped-ceiling"):
@@ -1743,6 +1768,15 @@ def cycle_mission(r, out):
         out["blocker"] = {"cause": body, "cls": None, "rerun": False}
         body = "The cycle stopped here. The stages that finished are on the record and are not repeated when it resumes."
     out["detail"] = {"title": title, "body": body}
+    if isinstance(r.get("ticket"), int) and not isinstance(r.get("ticket"), bool):
+        # a ticket cycle ends at a local branch: what the owner needs to review it, and one line of what is next (plain text; the page selects, never links, the command)
+        branch = r.get("branch") if isinstance(r.get("branch"), str) else None
+        review = str(r.get("review") or "")[:500]
+        nxt = {"running": "The crew is working. Nothing is pushed and no pull request is made for a local ticket.",
+               "awaiting-review": f"Review the branch {branch or ''}, merge it yourself if you agree, or connect a GitHub repo to run the reviewers on a pull request.".replace("  ", " "),
+               "needs-human": "A person has to look at this. The reason is above; the ticket stays open.",
+               "failed": "The cycle stopped. The ticket stays open; resume it from a terminal."}.get(status, "")
+        out["ticket"] = {"n": r["ticket"], "branch": branch, "review": review, "next": nxt}
     # the history lens is the stage table: one row per stage, its cost in the detail
     out["history"] = [{"at": x.get("finished") or x.get("started"), "duty": x.get("title") or x.get("id"), "verdict": x.get("verdict") or x.get("state"),
                        "detail": " · ".join(t for t in (_money(x.get("cost")) if x.get("cost") else "", str(x.get("detail") or "")[:300]) if t)}
@@ -3530,6 +3564,265 @@ def attach_api(b):
     return 200, {"profile": prof, "proposal": prop, "applied": bool(b.get("apply")), "agents_md": agents, "duty_options": [{"name": x["name"], "role": x["role"]} for x in duty_list() if x["name"] in _attach.known_duties()], "guardrail_options": _attach.GUARDRAILS, "pack_status": {x["id"]: x["status"] for x in _packs_mod.load()}}
 
 
+# ---- tickets and the GitHub repo, on the page --------------------------------------------------------------------------------------------
+# The page's "New ticket" box and the options for a project with no repo. The model is reached only through `qtdeck ticket new`, started detached
+# with the owner's words on STANDARD INPUT (never in an argument list, so no process listing shows them); filing to GitHub is `qtdeck ticket file
+# --apply`, so the planner's credential scan and the foreman's filing are the ones the command line uses. The dashboard itself holds no token and
+# never reads one. Each write needs confirm:true, and logs the action and the project (never the request or any value) to logs/tickets.log.
+TICKET_JOBS = {}                 # (project, "draft" | "file") -> {"popen", "at"}: the run this dashboard started last, so a page can ask why nothing came
+TICKET_LOCK = threading.Lock()
+DEMO_TICKET_MSG = "Demo mode: nothing is drafted, filed or created."
+NOT_SIGNED_IN = "GitHub CLI is not signed in: run gh auth login in a terminal, then try again."
+
+
+def _ticket_log(action, project):
+    try:
+        LOGS.mkdir(parents=True, exist_ok=True)
+        with open(LOGS / "tickets.log", "a") as f:
+            f.write(f"{iso(now_utc())} {log_field(action)} {log_field(project)}\n")
+    except OSError:
+        pass                                        # a note that could not be written never undoes the action
+
+
+def _ticket_entry(project):
+    ent = read_json(PROJECTS_FILE, {}).get(project) if isinstance(project, str) else None
+    if not isinstance(ent, dict):
+        raise ValueError("unknown project")
+    return ent
+
+
+def _ticket_job_alive(project, kind):
+    with TICKET_LOCK:
+        job = TICKET_JOBS.get((project, kind))
+    return bool(job and job["popen"].poll() is None)
+
+
+def _ticket_running(project, kind="draft", locks=None):
+    return f"planner-{project}-tickets" in (running_locks() if locks is None else locks) or _ticket_job_alive(project, kind) or _ticket_job_alive(project, "file" if kind == "draft" else "draft")
+
+
+def _ticket_error(project, kind):
+    """Why the last run this dashboard started for the project made nothing: one plain sentence, or "". Read from the ledger row the planner wrote,
+    else from the end of the run's own log. Nothing here quotes the owner's request."""
+    with TICKET_LOCK:
+        job = TICKET_JOBS.get((project, kind))
+    if not job or job["popen"].poll() is None:
+        return ""
+    rows = [r for r in read_json(STATE / "runs.json", []) if isinstance(r, dict) and r.get("project") == project and r.get("duty") == "planner"
+            and isinstance(r.get("at"), str) and r["at"] >= job["at"]]
+    row = rows[-1] if rows else None
+    if row and row.get("verdict") in ("DRAFTED", "FILED"):
+        return ""
+    detail = " ".join(str(row.get("detail") or "").split()) if row else ""
+    if row and row.get("verdict") == "NOTHING_TO_DRAFT":
+        return "Everything in the draft is already on GitHub." if "tracker" in detail else "The planner found nothing to turn into a ticket from that request. Say more about what you want built."
+    if row and row.get("verdict") == "REFUSED":
+        return "A ticket looks like it holds a password or a key, so nothing was sent. Take it out of the request and draft again."
+    if row:
+        if detail.startswith("ticket draft refused"):
+            return "The planner's answer did not pass Quarterdeck's checks, so nothing was kept. Try again; a new draft usually does."
+        return plain_failure(re.sub(r"^ticket draft: ", "", detail))[:300]
+    rc = job["popen"].returncode
+    if rc not in (0, None):
+        try:
+            tail = [ln.strip() for ln in (LOGS / f"ticket-{project}.log").read_text(errors="replace").split("started by dashboard")[-1].splitlines() if ln.strip()]
+        except OSError:
+            tail = []
+        return (tail[-1][:200] if tail else "The planner stopped before it finished.")
+    return "The planner stopped without a result, perhaps at a usage limit. Try again later." if kind == "draft" else ""
+
+
+def _ticket_review(t):
+    """The command that shows a local ticket's branch, from its cycle record; "" when there is none."""
+    cid = t.get("cycle")
+    if t.get("status") not in ("review", "building") or not (isinstance(cid, str) and valid_id(cid)):
+        return ""
+    r = read_json(CYCLES / f"{cid}.json", None)
+    return str(r.get("review") or "")[:500] if isinstance(r, dict) and r.get("kind") == "cycle" else ""
+
+
+def _ticket_shown(x):
+    """A ticket or a draft as the page may show it: every string passes the credential scan, so a model that copied a key into a ticket cannot put it
+    on a screen (the draft stays on disk; the filing scan refuses it)."""
+    try:
+        import outscan as _os
+    except Exception:
+        return {"id": x.get("id"), "title": "(hidden: the credential scan could not run)", "body": "", "acceptance": [], "tickets": []}
+    if isinstance(x, str):
+        return _os.redact(x)
+    if isinstance(x, list):
+        return [_ticket_shown(v) for v in x]
+    if isinstance(x, dict):
+        return {k: _ticket_shown(v) for k, v in x.items()}
+    return x
+
+
+def tickets_view(project):
+    """GET /api/tickets?project=: what the Tickets card and the repo options need. Read-only; no secret in it."""
+    import tickets as _tk, repo as _repo
+    no_demo("read tickets")
+    ent = _ticket_entry(project)
+    store = _tk.load(project)
+    repo = ent.get("repo") or ""
+    locks = running_locks()
+    return {"project": project, "repo": repo, "has_repo": bool(repo), "sentence": "" if repo else _repo.sentence(project), "options": _repo.options(project),
+            "stack": _tk.stack_context(project)["stack"], "cycle": ent.get("cycle") is True,
+            "tickets": [{**_ticket_shown(t), "review": _ticket_review(t)} for t in store["tickets"]], "drafts": [_ticket_shown(d) for d in store["drafts"]],
+            "running": _ticket_running(project, "draft", locks), "last_draft_error": _ticket_error(project, "draft"), "last_file_error": _ticket_error(project, "file"),
+            "request_limit": _tk.REQUEST_MAX}
+
+
+def _ticket_start(argv, log_name, request=None):
+    """Run `argv` detached like a cycle; `request` (text) is written to its standard input, so it is in no argument list. Returns the Popen."""
+    LOGS.mkdir(exist_ok=True)
+    out = open(LOGS / log_name, "a")
+    out.write(f"\n[{iso(now_utc())}] started by dashboard: {' '.join(a[:60] for a in argv[2:])}\n")
+    out.flush()
+    p = subprocess.Popen(argv, stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.PIPE if request is not None else subprocess.DEVNULL,
+                         cwd=str(ROOT), start_new_session=True)
+    out.close()
+    if request is not None:
+        try:
+            p.stdin.write(request.encode())          # at most a few thousand bytes: well inside a pipe's buffer, so this never waits
+        finally:
+            p.stdin.close()
+    threading.Thread(target=p.wait, daemon=True).start()          # reaped when it ends
+    return p
+
+
+def ticket_draft_api(b):
+    import tickets as _tk
+    no_demo("draft tickets")
+    if b.get("confirm") is not True:
+        return 400, {"error": "confirm is required: drafting asks the model, which costs a few cents"}
+    project = b.get("project")
+    try:
+        ent = _ticket_entry(project)
+        request = _tk.check_request(b.get("request"))
+        if not (Path(os.path.expanduser(str(ent.get("path") or ""))) / ".git").exists():
+            return 400, {"error": "that project's folder is not a git checkout"}
+        if _ticket_running(project):
+            return 409, {"error": f"the planner is already working on {project}: wait for it to finish"}
+        bud = daily_budget()
+        if bud is not None and spent_today() >= bud:
+            return 409, {"error": f"today's budget is spent (${spent_today():.2f} of ${bud:.2f}); drafting would stop at once"}
+        argv = _tk.argv_new(project)
+    except ValueError as e:
+        return 400, {"error": str(e)}
+    at = iso(now_utc())
+    try:
+        p = _ticket_start(argv, f"ticket-{project}.log", request)
+    except OSError as e:
+        return 500, {"error": "could not start the planner: " + type(e).__name__}
+    with TICKET_LOCK:
+        TICKET_JOBS[(project, "draft")] = {"popen": p, "at": at}
+    _ticket_log("draft", project)
+    return 200, {"started": True}
+
+
+def ticket_file_api(b):
+    import tickets as _tk
+    no_demo("file tickets")
+    if b.get("confirm") is not True:
+        return 400, {"error": "confirm is required: this saves tickets, or files issues on GitHub"}
+    project, did, local = b.get("project"), b.get("draft"), b.get("local", False)
+    if not isinstance(local, bool):
+        return 400, {"error": "local is true or false"}
+    try:
+        ent = _ticket_entry(project)
+        dr = _tk.draft_get(project, did)
+        repo = ent.get("repo") or ""
+        if repo and not local:
+            if _ticket_running(project, "file"):
+                return 409, {"error": f"the planner is already working on {project}: wait for it to finish"}
+            argv = _tk.argv_file(project, did, apply=True)
+        else:
+            made = _tk.local_add(project, dr["tickets"])
+            _tk.draft_remove(project, did)
+            _ticket_log("file-local", project)
+            return 200, {"tickets": made, "local": True}
+    except ValueError as e:
+        return 400, {"error": str(e)}
+    at = iso(now_utc())
+    try:
+        p = _ticket_start(argv, f"ticket-{project}.log")
+    except OSError as e:
+        return 500, {"error": "could not start the filing: " + type(e).__name__}
+    with TICKET_LOCK:
+        TICKET_JOBS[(project, "file")] = {"popen": p, "at": at}
+    _ticket_log("file-github", project)
+    return 200, {"started": True, "count": len(dr["tickets"]), "repo": repo}
+
+
+def ticket_discard_api(b):
+    import tickets as _tk
+    no_demo("discard a draft")
+    if b.get("confirm") is not True:
+        return 400, {"error": "confirm is required: a discarded draft is gone"}
+    try:
+        _ticket_entry(b.get("project"))
+        _tk.draft_remove(b.get("project"), b.get("draft"))
+    except ValueError as e:
+        return 400, {"error": str(e)}
+    _ticket_log("discard", b.get("project"))
+    return 200, {"discarded": True}
+
+
+def repo_api(b):
+    """Connect a repo the owner already has (set), or make a private one after two explicit yeses (create, push). The program that does it is bin/repo.py;
+    this never creates a GitHub account, and reads and returns no token."""
+    import attach as _attach
+    no_demo("change the repo")
+    if b.get("confirm") is not True:
+        return 400, {"error": "confirm is required: this changes which GitHub repo the project uses"}
+    project, action = b.get("project"), b.get("action")
+    try:
+        ent = _ticket_entry(project)
+        if action == "set":
+            repo = b.get("repo")
+            if not isinstance(repo, str):
+                return 400, {"error": "say the repo as owner/name, like octocat/hello-world"}
+            _attach.set_repo(project, repo.strip())
+            _ticket_log("repo-set", project)
+            return 200, {"ok": True, "repo": repo.strip()}
+        if action != "create":
+            return 400, {"error": "action is set or create"}
+        push = b.get("push", False)
+        if not isinstance(push, bool):
+            return 400, {"error": "push is true or false"}
+        if ent.get("repo"):
+            return 400, {"error": f"{project} already uses the GitHub repo {ent['repo']}"}
+    except ValueError as e:
+        return 400, {"error": str(e)}
+    except OSError as e:
+        return 500, {"error": "could not write: " + type(e).__name__}
+    argv = [sys.executable, str(ROOT / "bin" / "repo.py"), "create", project, "--private", "--yes"] + (["--push"] if push else [])
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL, cwd=str(ROOT))
+    except subprocess.TimeoutExpired:
+        return 200, {"ok": False, "code": 1, "message": "GitHub did not answer in time. Nothing was recorded; check GitHub and try again."}
+    except OSError as e:
+        return 500, {"error": "could not run it: " + type(e).__name__}
+    _ticket_log("repo-create" + ("-push" if push else ""), project)
+    text = (r.stdout or "") + (r.stderr or "")
+    try:
+        import outscan as _os
+        text = _os.redact(text)
+    except Exception:
+        text = ""
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if r.returncode == 3:
+        return 200, {"ok": False, "code": 3, "message": NOT_SIGNED_IN}
+    if r.returncode == 2:
+        return 400, {"error": (lines[0] if lines else "That cannot be created.")[:300]}
+    if r.returncode != 0:
+        return 200, {"ok": False, "code": r.returncode, "message": "The repository was not created. " + " ".join(lines[-2:])[:300]}
+    now = _ticket_entry(project).get("repo") or ""
+    pushed = any(ln.startswith("pushed ") for ln in lines)
+    return 200, {"ok": True, "code": 0, "repo": now, "private": True, "pushed": pushed,
+                 "message": f"Created the private repository {now} and connected it." + (" The default branch was pushed once." if pushed else " Nothing was pushed.")}
+
+
 # ---- design briefs, mock-ups and sprint plans: the owner's approval screens ------------------------------------------
 # Every write here is one explicit click with confirm:true, and every write lands in the data folder (state/briefs, workspace/,
 # state/plans) except two the owner names on purpose: a plan's card moves (through the board keeper's own move) and the opt-in
@@ -4781,6 +5074,12 @@ class Handler(BaseHTTPRequestHandler):
             code, body = project_agents_api((q.get("project") or [""])[0])
             return self._send(code, json.dumps(body))
 
+        if u.path == "/api/tickets":
+            try:
+                return self._send(200, json.dumps(tickets_view((q.get("project") or [""])[0])))
+            except ValueError as e:
+                return self._send(400, json.dumps({"error": str(e)}))
+
         if u.path == "/api/board":
             name = (q.get("project") or [""])[0]
             projects = read_json(PROJECTS_FILE, {})
@@ -5020,6 +5319,11 @@ class Handler(BaseHTTPRequestHandler):
             code, body = attach_api(b)
             return self._send(code, json.dumps(body))
 
+        for path_, fn_ in (("/api/ticket/draft", ticket_draft_api), ("/api/ticket/file", ticket_file_api), ("/api/ticket/discard", ticket_discard_api), ("/api/repo", repo_api)):
+            if u.path == path_:
+                code, body = fn_(b)
+                return self._send(code, json.dumps(body))
+
         if u.path == "/api/fleet/action":
             code, body = fleet_action(b)
             return self._send(code, json.dumps(body))
@@ -5122,7 +5426,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if u.path == "/api/cycle/start":
             try:
-                got = start_cycle(b.get("project"), b.get("issue"), b.get("confirm"))
+                got = start_cycle(b.get("project"), b.get("issue"), b.get("confirm"), b.get("ticket"))
             except ValueError as e:
                 return self._send(409 if "already running" in str(e) or "budget" in str(e) else 400, json.dumps({"error": str(e)}))
             except Exception as e:

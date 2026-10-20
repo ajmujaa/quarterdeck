@@ -113,3 +113,21 @@ you, a Hermes alert on top) with things that belong to the person (Your Day, Bra
 6. Keep Calm mode working, keep every page real-data-only, no em dashes, no inline script (CSP).
 Test with the headless browser: Home shows only the five things; Projects filters; guardrail edit round-trips and a
 locked guardrail cannot be removed through the API either.
+
+## 6b. Live work must be visible (owner, 2026-10-20): this is the main reason for the dashboard
+The owner: "now the drydock project is running and I don't see any indication in the dashboard about the tasks or what's
+going on ... that's the main reason I wanted the dashboard: to see all the projects, and in each project all the git
+worktrees and tasks in one place, and in the all-projects view every session running, and which agent does what."
+Today the data exists (the fleet hook writes `state/fleet-events/<source>.jsonl`, up to the minute on the owner's machine)
+and the Fleet tab shows worktrees, pull requests and live sessions, but it is a tab under Agents, and Home shows none of it.
+Change, as part of section 6:
+1. **Home gets a "Running now" strip** across all projects: one line per live session or running duty (project, worktree
+   or branch, which agent or duty, what it is doing in plain words, how long, waiting on the owner or not). Empty says so.
+2. **The Projects page** shows, for the chosen project: its worktrees (branch, state, last activity, linked pull request,
+   the session working in it) and the running duties, so every task in flight in that project is on one page. With all
+   projects chosen it is the same list across projects, grouped by project.
+3. **Which agent does what:** each running item names the crew member or duty and the session (a Claude Code session from
+   the hook is a session, a Quarterdeck run is a duty). Never invent: if the hook gives no detail, say "no detail reported".
+4. Fleet stays a page, but its content is reachable from Home and from each project, not hidden behind Agents.
+5. A header line shows when the live data was last updated and says plainly when the hook is not installed.
+Test with fixture events (a session working, one idle, one finished; two projects; a worktree with a draft PR).

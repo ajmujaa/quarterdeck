@@ -14,7 +14,7 @@
 #   st_duty pilot --pr 1                         # runs duties/pilot.sh as project tp; output in $OUT, status in $RC
 set -uo pipefail
 REAL="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
+T="$(cd "$(mktemp -d)" && pwd -P)"; trap 'rm -rf "$T"' EXIT
 fails=0; passed=0
 ck() { if eval "$2"; then printf '  ok    %s\n' "$1"; passed=$((passed+1)); else printf '  FAIL  %s\n' "$1"; fails=$((fails+1)); fi; }
 st_done() { echo; [ "$fails" = 0 ] && echo "  all checks passed" || { echo "  $fails check(s) failed"; exit 1; }; }

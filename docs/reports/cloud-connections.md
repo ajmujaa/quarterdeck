@@ -36,7 +36,7 @@ one account failing while the other works, loop work items and `--account`, Brai
 
 ## What `check.py` said
 The first full run on this branch was RED in one suite: the rehearsal (3 steps). With two Gmail accounts the Brain judges each account on its own, so the invented personal account's 35 hour old mail added a second
-"waiting" suggestion and the scripted tour no longer had exactly one. The behaviour is the intended one (two accounts, two suggestions); the invented personal data is now fresher, so the tour is unchanged. After that fix `python3 bin/check.py` on this branch is GREEN (20 min 58 s, run on a quiet machine; every suite, the dashboard not running so its health was not asked).
+"waiting" suggestion and the scripted tour no longer had exactly one. The behaviour is the intended one (two accounts, two suggestions); the invented personal data is now fresher, so the tour is unchanged. After that fix `python3 bin/check.py` on this branch is GREEN (first fix run: 20 min 58 s). Then `main` moved (c94dc63: README restyle, long README moved to GUIDE.md, Helm default off). I merged it into this branch, moved the two paragraphs about accounts into GUIDE.md, and took the one-sentence README fix that `cloud/test-pass` carries (main itself failed `selftest.py` without it). Final `python3 bin/check.py` on this branch: GREEN, 21 min 39 s, every suite, quiet machine, the dashboard not running so its health was not asked.
 
 ## What I could not check
 - A second account with real Google, Slack, Meta, GA4, X or Threads; the real macOS Keychain (the stub covers `KEY@label`, `move_store` there and back, and one-line `security -i` input); the hidden-entry prompt of `qtdeck connect` on a real terminal (only the piped path ran).

@@ -451,10 +451,12 @@ if [ -n "$TICKET" ]; then
   [ -n "$TBRANCH" ] || finish failed "the shipwright reported a branch but the ticket does not name one. Look in $WORKDIR for a branch that starts with ticket/$TICKET-" 1
   TBASE=$(project_get "$PROJECT" default_branch main)
   safe_git -C "$WORKDIR" rev-parse --verify -q "refs/remotes/origin/$TBASE" >/dev/null 2>&1 && TBASE="origin/$TBASE"
-  rec_set --arg b "$TBRANCH" --arg r "git -C $WORKDIR diff $TBASE...$TBRANCH" '.branch = $b | .review = $r'
+  REVIEW_CMD=$(printf 'git -C %s diff %s...%s' "$WORKDIR" "$TBASE" "$TBRANCH")
+  rec_set --arg b "$TBRANCH" --arg r "$REVIEW_CMD" '.branch = $b | .review = $r'
   skip_pr_stages
   stage_patch human "$(jq -nc '{title:"Human review", duty:"human", state:"waiting", verdict:"WAITING", detail:"a person reads the local branch and decides", url:"", cost:0, runs:[]}')"
-  finish awaiting-review "The build is on the local branch $TBRANCH in $WORKDIR, as one commit. Nothing was pushed and no pull request exists. Review it: git -C $WORKDIR diff $TBASE...$TBRANCH   Throw it away: git -C $WORKDIR branch -D $TBRANCH   To get reviewers and a pull request, connect a repo (qtdeck repo $PROJECT) and cycle an issue." 0
+  DISCARD_CMD=$(printf 'git -C %s branch -D %s' "$WORKDIR" "$TBRANCH")
+  finish awaiting-review "The build is on the local branch $TBRANCH in $WORKDIR, as one commit. Nothing was pushed and no pull request exists. Review it: $REVIEW_CMD   Throw it away: $DISCARD_CMD   To get reviewers and a pull request, connect a repo (qtdeck repo $PROJECT) and cycle an issue." 0
 fi
 
 # ---- 3. the shipwright -------------------------------------------------------------------------------------------------

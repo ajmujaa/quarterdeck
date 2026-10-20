@@ -6,7 +6,7 @@
 //   #/brain/map   #/brain/rhythm         the Brain, in either mode
 //   #/work/<view>                        inbox missions prs board timeline operations ledger spend log
 //   #/work/mission[/<id>]                one mission (the id is encodeURIComponent encoded: cycle%3Aabc)
-//   #/work/log[/<project>~<duty>]        the open log
+//   #/work/log[/<project>~<duty>]        the open log (a system log: /~<name>)
 //   #/agents/<view>  #/connections/connections  #/library/<view>  #/settings/settings
 //   #/addon/<place>[/<view>]             an add-on's place and its pages
 //   ...?project=<name>                   the project scope (absent: All projects)
@@ -27,7 +27,7 @@ export const MAX_HASH = 300;
 const RAW = /^#[A-Za-z0-9\-._~!$&'()*+,;=:@/?%]*$/;          // what encodeURIComponent and the route table can produce; a raw space, quote, angle bracket or non-ASCII letter is not ours
 const BAD_CHAR = /[\u0000-\u001f\u007f<>"`\\]|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;   // a decoded value never holds a control character, a character that closes markup or half of a surrogate pair
 const MISSION_ID = /^[a-z]{2,12}:[^]{1,190}$/;                 // fix:<panel>#<n>  panel:<id>  run:<at>|<project>|<duty>  attn:<id>  cycle:<id>  brief:<id>  plan:<id>
-const LOG_ID = /^[^~]{1,80}~[^~]{1,80}$/;                       // <project>~<duty>
+const LOG_ID = /^[^~]{0,80}~[^~]{1,80}$/;                       // <project>~<duty>; a system log has no project: ~<name>
 const VIRTUAL = {work: ["mission", "log"]};                    // pages of a group that are not in its tab list, or that take an id
 const WITH_ID = {mission: validMissionId, log: validLogId};
 

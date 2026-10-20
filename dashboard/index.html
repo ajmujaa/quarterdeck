@@ -833,7 +833,10 @@ function planPage(m){
     ${(p.later || []).filter(l => !p.sprint.includes(l.issue)).length ? card(null, (p.later || []).filter(l => !p.sprint.includes(l.issue)).map(l => `<p><b>#${l.issue} ${esc((by[l.issue] || {}).title || "")}</b> (size ${esc((by[l.issue] || {}).size || "?")}). ${esc(l.reason)}</p>`).join(""), {kicker: "Planned, but not in this sprint"}) : ""}
     ${(p.left_out || []).length ? card(null, p.left_out.map(l => `<p><b>#${l.issue} ${esc(l.title)}.</b> ${esc(l.reason)}</p>`).join(""), {kicker: "Left out"}) : ""}</div>`;
 }
-document.addEventListener("sl-tab-show", e => { const t = e.target.closest && e.target.closest("#ptabs"); if(t && !t._sync && e.detail.name && e.detail.name !== view) go(e.detail.name); });
+// The tab group also reports a tab it chose by itself when it first draws (a page that is not one of the tabs, like an open mission): only a tab the owner just pressed navigates.
+let lastInputAt = 0;
+for(const ev of ["pointerdown", "keydown"]) document.addEventListener(ev, () => { lastInputAt = Date.now(); }, true);
+document.addEventListener("sl-tab-show", e => { const t = e.target.closest && e.target.closest("#ptabs"); if(t && !t._sync && Date.now() - lastInputAt < 2000 && e.detail.name && e.detail.name !== view) go(e.detail.name); });
 // What the project select shows: a project, an add-on ("__addon:<id>", also while that add-on's own place is open), or All projects ("_").
 const ADDON_VALUE = "__addon:";
 function scopeValue(){

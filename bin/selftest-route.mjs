@@ -117,7 +117,9 @@ ok("a log id is <project>~<duty>", () => {
   const r = parseHash("#/work/log/mastyard~surveyor", known);
   assert.deepEqual([r.view, r.id], ["log", "mastyard~surveyor"]);
   assert.equal(buildHash(r), "#/work/log/mastyard~surveyor");
+  assert.deepEqual([parseHash("#/work/log/~heartbeat", known).view, parseHash("#/work/log/~heartbeat", known).id], ["log", "~heartbeat"], "a system log has no project");
   assert.equal(validLogId("a~b~c"), false);
+  assert.equal(validLogId("~"), false);
   assert.equal(parseHash("#/work/log/nonsense", known).ok, false);
   assert.equal(parseHash("#/work/inbox/mastyard~surveyor", known).ok, false, "only Mission and Log take an id");
 });

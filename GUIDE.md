@@ -178,6 +178,10 @@ The crew themselves are files in `crew/`. Each knows no project and holds one po
 
 **A project's own agents.** On the Agents page, a project that keeps Claude Code agents in its own `.claude/agents/` folder sees them listed under "This project's own agents", marked "from the project", with a note on which of the crew's jobs they plausibly cover and which Quarterdeck's crew still covers for it. It reads only the name, description, tools and model line at the top of each file in that one folder (at most 50 files, 64 KB each, a link is followed only to a file inside the same project, the prompt itself never read or shown), only for projects you registered, and writes nothing. The matches are a keyword guess, labelled as such. Quarterdeck cannot run a project's own agents; that would be a separate step you opt into.
 
+## Back, Forward and links
+
+The address bar says where you are. The page, the project you are looking at and the mission you have open are all in it (for example `#/work/missions?project=alpha`), so Back and Forward move between the pages you visited, a reload opens the same place, and a mission or a page can be bookmarked or sent to yourself as a link. The Brain's Esc and Leave step back to where you came from. Nothing in the address is a secret, and the one-time pairing link is removed from it as soon as it has been used.
+
 ## Calm mode
 
 Calm mode is a switch in the top bar. It shows larger text in one column and only what needs you, and folds the rest behind **Show everything**. It starts on by itself if your system asks for reduced motion. The dashboard in every mode has one clear next thing to do, shows real data or nothing, and puts every change behind a click.

@@ -34,6 +34,29 @@ Add-on views (`assets/ext-*.js`) use the same helpers; they run in the page's gl
 `bin/ui-dead-css.py` lists classes `ui.css` defines that no markup uses (selftest runs it). Delete a rule when its markup goes.
 `bin/a11y-check.mjs` starts its own throwaway dashboard, opens every view (both themes, Calm on and off) in Playwright's Chromium and checks names (from the browser's accessibility tree), ids, headings, landmarks, `img` alt, aria validity, `tabindex`, text contrast (4.5:1, 3:1 large) and, with `--focus`, a visible focus indicator on every Tab stop; with `--flows`, the skip link, the dialog trap, Esc and focus return, the poll keeping focus, and the Brain's Esc. `--quick` is three views and the flows (what selftest runs). It needs Playwright and a Chromium; without them it exits 3 and selftest prints a skip. Selftest also checks without a browser: every icon-only button has a name, every field has a label, no positive `tabindex`, no click action on a bare div or span, every dialog has a label, no text under 12px, the focus ring token, the landmarks, and the contrast of every colour token in both themes.
 
+## Navigation
+The address holds the page, the project scope and the open mission (`assets/route.js`, a pure module with its own node test: `bin/selftest-route.mjs`). The page code is `routeKnown`, `routeState`, `pushRoute`, `routeTouch`, `applyRoute`, `initRoute`, `routeNav` and `routeBack` in `index.html`.
+
+| Address | Page |
+|---|---|
+| `#/home/overview` | Home |
+| `#/brain/map`, `#/brain/rhythm` | the Brain, either mode (My rhythm only in Demo) |
+| `#/work/<view>` | inbox, missions, prs, board, timeline, operations, ledger, spend, log |
+| `#/work/mission[/<id>]` | one mission; the id is `encodeURIComponent` encoded (`cycle%3Aabc`) |
+| `#/work/log[/<project>~<duty>]` | the open log (a system log: `/~<name>`) |
+| `#/agents/crew`, `#/agents/fleet`, `#/connections/connections`, `#/library/<view>`, `#/settings/settings` | the other places |
+| `#/addon/<place>[/<view>]` | an add-on's place and its pages (no project scope) |
+| `...?project=<name>` | the project scope; absent means All projects |
+| `#/work/inbox?addon=<name>` | the add-on scope: Needs you shows only that add-on's items |
+
+Rules:
+1. Only what the owner does pushes a history entry: `go`, `dockGo`, `selectPlace`, `selectProject`, `selectAddon`, opening or closing a mission, the Brain's Map | Rhythm switch and its project choice. Each calls `routeTouch()`, which waits for the end of the task, so one click that sets three variables is one entry, and the same address is no entry.
+2. The 3 second poll, `render()` and every other redraw never touch the address. `popstate` and `hashchange` (Back, Forward, a typed or pasted address) call `applyRoute()` then `render()` and push nothing.
+3. On load the address wins; `localStorage` is only the fallback for a bare address (its keys are still written). An address that is not ours is replaced by Home.
+4. The pairing link `#pair=<nonce>` is not a route: it is read, removed with `replaceState`, and the first route then replaces that entry.
+5. Esc and Leave in the Brain go one step back in history when the page the owner came from is earlier in this tab's history, otherwise they go to it as a new entry.
+6. The scope is shown on every page header as a chip (All projects, the project, or Add-on: <name>); the chip opens the project select, which stays the one place a scope is chosen. An add-on is a group in that select. A mission page names its project, or its add-on, in a line of its own above the title.
+
 ## The Brain workspace
 The Brain and My rhythm are two modes of one immersive workspace with one toolbar (`brainBar()`), so neither is a window you have to come back from.
 Left to right: Leave, a Map | Rhythm switch (`sl-button-group`, same place and size in both modes), then the mode's own controls.

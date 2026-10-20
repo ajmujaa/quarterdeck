@@ -144,3 +144,19 @@ a Quarterdeck duty, so it is not counted). Change:
 3. "This project's own agents" and "Which jobs are covered": show only when the project has its own agents; otherwise one
    sentence.
 4. The scan (section 1) decides which agents are suggested; the page offers them first.
+
+## 7. Smoother first run (round 3, owner agreed 2026-10-20; do after section 6c, same branch)
+Today a newcomer clones, runs `setup`, runs `dashboard`, then `attach`. Make it feel like one path:
+1. **One-line install, no clone.** A Homebrew formula (a tap: files only, in `packaging/homebrew/qtdeck.rb`, with the
+   version, URL and sha256 as placeholders filled by a script `bin/release.py`; do not publish anything) so
+   `brew install ajmujaa/quarterdeck/qtdeck` is the macOS path later. Also a thin npm wrapper in `packaging/npm/`
+   (a `bin` shim that finds Python and runs the program; tested offline). Do not publish either.
+2. **A first-run screen in the dashboard.** The first time, the dashboard opens in Demo mode with one panel: a checklist of what
+   the machine has and lacks (`claude`, `gh`, `git`, `node`, `python3`, a Claude or API sign-in), a copy button on every fix command, and
+   one primary button, "Look around in Demo". Real data only (the same facts as `qtdeck doctor`), calm wording, no em dashes.
+3. **A guided "Attach a project" panel** that takes a pasted folder path (never scans the home folder: that breaks the privacy rule)
+   and walks the section 4 flow: scan, missing docs, crew, ready.
+4. **After the first project, one next action** only ("file your first ticket", or "start the dashboard sessions hook" if live
+   work is not connected).
+5. Measure: write down how many commands and clicks it takes from a clean machine to "ready", before and after.
+Test with the headless browser and a fresh temporary data folder; no network.

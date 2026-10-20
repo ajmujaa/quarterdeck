@@ -98,8 +98,8 @@ if [ "$APPLY" = 1 ]; then
   safe_git -C "$WT" ${COMMIT_ID[@]+"${COMMIT_ID[@]}"} commit -q -m "$(printf 'docs: add %s\n\nDrafted by the Quarterdeck scribe from a survey of the project. Read it and correct it before you merge.\n' "$(tr '\n' ' ' <<<"$written" | sed 's/ *$//; s/ / and /g')")" \
     || die "scribe: commit failed"
   # the branch holds exactly the allowed files and nothing else, on top of the default branch
-  changed=$(safe_git -C "$WT" diff --name-only "$FROM..$BRANCH" | sort | tr '\n' ' ')
-  want=$(printf '%s\n' "$written" | sort | tr '\n' ' ')
+  changed=$(safe_git -C "$WT" diff --name-only "$FROM..$BRANCH" | LC_ALL=C sort | tr '\n' ' ')
+  want=$(printf '%s\n' "$written" | LC_ALL=C sort | tr '\n' ' ')
   if [ "$changed" != "$want" ]; then
     safe_git -C "$SOURCE_REPO_DIR" branch -D "$BRANCH" >/dev/null 2>&1 || true
     record_run "$PROJECT" scribe ERROR "the branch did not hold exactly the drafted files; it was removed"

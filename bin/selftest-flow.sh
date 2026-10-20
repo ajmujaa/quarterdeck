@@ -47,7 +47,7 @@ reg() { jq -r "$1" "$T/config/projects.json" 2>/dev/null; }
 store() { jq -r "$2" "$T/state/tickets/$1.json" 2>/dev/null; }                      # store <project> <jq filter>
 ghn() { local n; n=$(grep -cE "$1" "$T/gh-calls" 2>/dev/null); echo "${n:-0}"; }    # ghn <regex>: how many recorded gh calls match
 nogh() { [ ! -s "$T/gh-calls" ]; }                                                   # the gh stand-in was never called, not even to read
-files_in() { git -C "$1" diff --name-only "main...$2" | sort | tr '\n' ' '; }       # files_in <checkout> <branch>
+files_in() { git -C "$1" diff --name-only "main...$2" | LC_ALL=C sort | tr '\n' ' '; }       # files_in <checkout> <branch>
 mode() { python3 -c 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777))' "$1"; }
 datasnap() { (cd "$T" && find config state -type f 2>/dev/null | sort | while IFS= read -r f; do cksum "$f"; done); }
 setreg() { # setreg <jq assignment>: edit the 0600 registry the way a person would, and keep it 0600
@@ -527,7 +527,7 @@ docs_reply() { # docs_reply <DOC_JSON or "-" for none> <result line>: the scribe
 $2"; fi
 }
 docs_prompt() { jq -rs '[.[] | select(.prompt | contains("You are the scribe"))] | last | .prompt' "$T/claude-calls"; }
-branches_of() { git -C "$1" for-each-ref --format='%(refname:short)' refs/heads | sort | tr '\n' ' '; }
+branches_of() { git -C "$1" for-each-ref --format='%(refname:short)' refs/heads | LC_ALL=C sort | tr '\n' ' '; }
 nlines() { grep -c "$1" <<<"$2"; }                    # nlines <regex> <text>: how many lines match (0 when none)
 
 # ---- part 6. the survey ---------------------------------------------------------------------------------------------------------------------------
@@ -749,8 +749,8 @@ part8_scribe() {
   OUT=$($QD docs sample-pr --apply 2>&1); RC=$?
   local PBR="docs/sample-pr-$(date +%Y%m%d)"
   ck "a project WITH a repo: --apply pushes the new branch only and opens ONE pull request (gh pr create --base main --head $PBR), and merges nothing" '[ "$RC" = 0 ] && [ "$(ghn "^gh pr create")" = 1 ] && grep -q "^gh pr create -R acme/sample-pr --base main --head $PBR" "$T/gh-calls" && [ "$(ghn "^gh pr (merge|review|edit)")" = 0 ] && grep -q "pull request: https://github.com/x/tp/pull/900" <<<"$OUT" && [ "$(last_verdict)" = PR ]'
-  ck "  the remote got that branch and nothing else: its branches are main and $PBR, and main is where it was; the local main is untouched too" '[ "$(git -C "$T/origin-pr.git" for-each-ref --format="%(refname:short)" refs/heads | sort | tr "\n" " ")" = "$PBR main " ] && [ "$(git -C "$T/origin-pr.git" rev-parse main)" = "$omain" ] && [ "$(git -C "$PR" rev-parse main)" = "$omain" ] && [ -z "$(git -C "$PR" status --porcelain)" ]'
-  ck "  the branch on the remote holds exactly the two files" '[ "$(git -C "$T/origin-pr.git" diff --name-only main..$PBR | sort | tr "\n" " ")" = "README.md docs/ARCHITECTURE.md " ]'
+  ck "  the remote got that branch and nothing else: its branches are main and $PBR, and main is where it was; the local main is untouched too" '[ "$(git -C "$T/origin-pr.git" for-each-ref --format="%(refname:short)" refs/heads | LC_ALL=C sort | tr "\n" " ")" = "$PBR main " ] && [ "$(git -C "$T/origin-pr.git" rev-parse main)" = "$omain" ] && [ "$(git -C "$PR" rev-parse main)" = "$omain" ] && [ -z "$(git -C "$PR" status --porcelain)" ]'
+  ck "  the branch on the remote holds exactly the two files" '[ "$(git -C "$T/origin-pr.git" diff --name-only main..$PBR | LC_ALL=C sort | tr "\n" " ")" = "README.md docs/ARCHITECTURE.md " ]'
   ck "  the pull request is opened by gh_post (which scans the title and the body for credentials), the ledger row carries its address" 'grep -q "gh_post 90 pr create" "$REAL/duties/scribe.sh" && ! grep -q "\"\$GH\" pr create\|^ *gh pr create" "$REAL/duties/scribe.sh" && jq -e ".[-1] | select(.duty == \"scribe\" and .verdict == \"PR\" and (.url | test(\"/pull/900\")))" "$T/state/runs.json" >/dev/null'
   # hostile text in a repo file reaches the model only inside the untrusted blocks of the prompt
   mkproj sample-hostile

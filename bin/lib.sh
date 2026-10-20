@@ -867,7 +867,8 @@ claude_run() { # claude_run <workdir> <prompt> [tools, comma separated] [deny-to
       # A tracked change turns reuse off for the call. An untracked file counts by name and content (review r9 D2; a link, a borrowed node_modules,
       # by where it points). ponytail: ignored files are not in the key (hashing a node_modules on every call costs more than the call saves).
       if head=$(safe_git -C "$wdir" rev-parse HEAD 2>/dev/null) && [ -z "$(safe_git -C "$wdir" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
-        rkey=$( { printf '%s\n' "$duty" "$QD_PROVIDER" "billing=$bmode" "$model" "$effort" "$names" "$allow" "$deny" "$turns" "$head" "$wdir"
+        # profile=: the survey facts of the project (profile_block) are part of what decides the answer, whether or not this prompt carries them
+        rkey=$( { printf '%s\n' "$duty" "$QD_PROVIDER" "billing=$bmode" "$model" "$effort" "$names" "$allow" "$deny" "$turns" "$head" "$wdir" "profile=$(profile_block "${QUARTERDECK_PROJECT:-}" | shasum -a 256 | cut -c1-16)"
                   safe_git -C "$wdir" status --porcelain 2>/dev/null
                   safe_git -C "$wdir" ls-files -o --exclude-standard -z 2>/dev/null | (cd "$wdir" && python3 -c '
 import hashlib, os, sys
@@ -1237,11 +1238,22 @@ untrusted() { # untrusted <label>  (the text on stdin)
     "BEGIN UNTRUSTED $label $nonce" "$text" "END UNTRUSTED $label $nonce"
 }
 
+# profile_block <project> — the facts the survey gathered about a project (bin/survey.py), as one bounded block (at most 3000 characters) for the START
+# of a prompt, where it can be cached. Built by the harness from state/projects/<project>/profile.json: every name that came from the project's files is
+# clipped and made plain there, and the block says in words that these are data. Byte-stable for an unchanged project (no time, no absolute path), so a
+# prompt prefix that carries it is the same from one run to the next. Empty when the project was never surveyed (or this install has no survey.py).
+profile_block() {
+  [ -f "$QUARTERDECK_DIR/bin/survey.py" ] || return 0
+  case "${1:-}" in ""|*[!a-z0-9_.-]*) return 0 ;; esac
+  python3 "$QUARTERDECK_DIR/bin/survey.py" block "$1" 2>/dev/null || true
+}
+
 preamble() { # preamble <project>
+  local pb; pb=$(profile_block "$1"); [ -z "$pb" ] || pb="$pb"$'\n\n'
   cat <<EOF
 You are working on the project "$1" ($(project_get "$1" repo)).
 
-Hard rules for this project:
+${pb}Hard rules for this project:
 $(project_guardrails "$1")
 $(packs=$(project_packs_text "$1"); [ -n "$packs" ] && printf '\nNotes on this project'"'"'s stack (follow them; the hard rules above win if they differ):\n%s\n' "$packs")
 

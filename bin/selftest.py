@@ -3646,8 +3646,8 @@ check("Brain and My rhythm are two modes of one workspace: one toolbar with a Ma
       'sl-button-group label="Brain view"' in _bb and 'act("setBrainMode", "map")' in _bb and 'act("setBrainMode", "rhythm")' in _bb and 'act("leaveBrain")' in _bb
       and "function setBrainMode" in _pg2 and "brainMode = \"map\"" in _pg2 and "createElement(\"sl-button\")" not in _rui and "#brain-bar .bb-tools" not in _pg2
       and "container:bbar/inline-size" in _ui and "@container bbar (max-width:1160px)" in _ui and "sl-dropdown" in _bb and 'data-k="more"' in _bb)
-check("the Brain toolbar has no project filter, My rhythm's project choice is the app's one scope (the same `sel`) in the toolbar, and the top bar's selector is the only other one",
-      "brainProject" not in _pg2 and 'id: "brain-proj"' not in _pg2 and "function rhythmScope" in _pg2 and "sel = v; localStorage.setItem(\"quarterdeck.project\", v)" in _pg2
+check("the Brain toolbar has no project filter, My rhythm's project choice is the app's one scope (the same kept project, setKept) in the toolbar, and the top bar's selector is the only other one",
+      "brainProject" not in _pg2 and 'id: "brain-proj"' not in _pg2 and "function rhythmScope" in _pg2 and "if(v === sel) return;\n  setKept(v);" in _pg2
       and _pg2.count('id="proj-switch"') == 1 and "proj-switch" not in _bb)
 check("no view carries a project filter of its own: Timeline and Notes use the top bar's project, and a project inside a form is a labelled field",
       "tlUi.project" not in _pg2 and "noteUi.project" not in _pg2 and 'label: "Show one project"' not in _pg2

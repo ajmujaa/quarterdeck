@@ -1369,8 +1369,8 @@ function projectCard(o, opts = {}){
   const act1 = opts.open === false ? "" : btn("Open", {variant: "primary", size: "small", click: act("openProject", o.name), attrs: `aria-label="Open ${esc(o.name)}"`});
   const ready = opts.open === false ? "" : `<button class="mlink link" ${act("openProject", o.name, true)} aria-label="Is ${esc(o.name)} ready?">Ready?</button>`;
   const own = opts.open === false;                           // on the project's own page the heading above already names it and gives the stack sentence
-  return card(own ? null : o.name, `${o.stack && !own ? `<p class="sub pj-stack">${esc(o.stack)}</p>` : ""}${dl}${act1 || ready ? `<div class="btns pj-go">${act1}${ready}</div>` : ""}`,
-    {cls: "pj-card", tone: st[2], label: o.name, kicker: own ? "At a glance" : null, actions: pill(st[1], st[0]), attrs: `data-project="${esc(o.name)}" data-state="${esc(o.state)}"`});
+  return card(own ? "At a glance" : o.name, `${o.stack && !own ? `<p class="sub pj-stack">${esc(o.stack)}</p>` : ""}${dl}${act1 || ready ? `<div class="btns pj-go">${act1}${ready}</div>` : ""}`,
+    {cls: "pj-card", tone: st[2], label: o.name, actions: pill(st[1], st[0]), attrs: `data-project="${esc(o.name)}" data-state="${esc(o.state)}"`});
 }
 function openProject(name, ready){
   if(ready){ rdScope(name); RD.show = true; }                 // the Ready? link opens the project with its checklist showing
@@ -1391,7 +1391,8 @@ function addonsStrip(){
 }
 function projectsOverview(){
   const f = homeFacts(), ov = (S.overview || []).filter(o => S.projects.some(p => p.name === o.name));
-  const cards = ov.length ? `<div class="pj-grid">${ov.map(o => projectCard(o)).join("")}</div>` : `<sl-skeleton effect="sheen" style="height:140px"></sl-skeleton>`;
+  const cards = ov.length ? `<div class="pj-grid">${ov.map(o => projectCard(o)).join("")}</div>`
+    : emptyState({inline: true, title: "The project summaries could not be read just now.", body: "The pages of each project are still under the tabs. This page tries again by itself."});
   return `<div class="stack">${calmHide(fleetStrip(f))}${cards}${addonsStrip()}${needsCard(f.att, f.waiting)}${calmHide(trajectoryCard(f))}</div>`;
 }
 // A stand-in for the editable guardrails card (the next change replaces its body): today it is the read-only summary and the button that opens the existing dialog.

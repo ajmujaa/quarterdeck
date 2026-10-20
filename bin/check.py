@@ -46,6 +46,7 @@ LABELS = {
     "selftest-stack.sh": "the stack scan: framework and tools named, build and lint proposed, a reason per duty",
     "selftest-tickets.sh": "tickets: drafted from a request, filed only with --apply, local tickets and branches when there is no repo, repo create after a yes",
     "selftest-tickets-ui.sh": "tickets on the dashboard: draft first, file on a click, the repo options, a mission from a ticket, Demo mode does nothing",
+    "selftest-nav.sh": "navigation: the address holds the page, project and mission (Back, Forward, reload, deep links, hostile addresses), the scope chip, mission steps by kind, the trajectory, add-ons in the scope box",
     "selftest-flow.sh": "the whole flow without a model: attach a sample React app (survey, missing docs by the scribe, the ready checklist), tickets, a cycle to a local branch on the CLI and the dashboard",
 }
 

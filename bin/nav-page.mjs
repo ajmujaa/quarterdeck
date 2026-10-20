@@ -37,7 +37,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 const shot = async name => { try { await page.screenshot({path: path.join(SHOTS, MODE + "-" + name + ".png")}); } catch (e) { /* a picture is a bonus */ } };
 const text = async sel => (await page.locator(sel).first().innerText().catch(() => "")).replace(/\s+/g, " ").trim();
 const here = async (sel, ms = 15000) => { try { await page.waitForSelector(sel, {state: "visible", timeout: ms}); return true; } catch (e) { return false; } };
-const snap = () => page.evaluate(() => ({hash: location.hash, len: history.length, qd: history.state && history.state.qd, view, sel, atPlace, missionId, scopeAddon, title: document.querySelector("#ptitle").textContent.trim(),
+const snap = () => page.evaluate(() => ({hash: location.hash, len: history.length, qd: history.state && history.state.qd, view, sel, atPlace, missionId, scopeAddon: typeof scopeAddon === "undefined" ? "" : scopeAddon, title: document.querySelector("#ptitle").textContent.trim(),
   chip: (document.querySelector("#pscope .scope-chip") || {}).innerText || "", pick: document.querySelector("#proj-switch").value}));
 const ready = () => page.waitForFunction(() => typeof S !== "undefined" && S && S.projects && document.querySelector("#view") && document.querySelector("#view").children.length > 0 && !!document.querySelector("#ptitle").textContent.trim(), null, {timeout: 30000});
 const entries = async () => { const c = await ctx.newCDPSession(page); const h = await c.send("Page.getNavigationHistory"); await c.detach().catch(() => {}); return h.entries.map(e => e.url); };

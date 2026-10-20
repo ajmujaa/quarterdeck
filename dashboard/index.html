@@ -1435,20 +1435,51 @@ async function loadConnections(force){
   try{ const j = await (await fetch("/api/connections")).json(); if(j && Array.isArray(j.services)){ connData = j; if(view === "connections") render(); } }catch(e){}
 }
 const connWords = {ok: "Working", ready: "Ready, not run yet", failing: "Failing", "needs set-up": "Needs set-up", off: "Off"};
-function connRow(c){
-  const cls = c.state === "ok" ? "good" : c.state === "failing" ? "bad" : c.state === "needs set-up" ? "warn" : "";
-  const last = c.last_at ? `Last refreshed ${esc(ago(c.last_at))}.` : c.local ? "" : "Not refreshed yet.";
-  const creds = c.credentials.map(k => `<form class="conn-cred" ${actOn("submit", "seq", ["connSave", c.id, k.key], ["preventDefault"])}>
-      ${slInput({id: `cr-${c.id}-${k.key}`, label: k.label, type: k.secret ? "password" : "text", password: !!k.secret, placeholder: k.present ? "Enter a new value to replace it" : "Enter it here",
+const connLab = a => a.label === "default" ? "" : a.label;            // the label the server wants: "" is the default account
+const connWho = (c, a) => a.label === "default" ? c.label : `${c.label}, ${a.label} account`;
+const connBadLabel = "An account label is lowercase letters, digits and dashes, at most 24.";
+let connAdding = {};                                                     // service id -> the "Add another account" field is open
+// The credential fields of one account. The ids and the labels carry the account, so no two fields on the page are alike.
+function connCreds(c, a){
+  const lab = connLab(a), who = connWho(c, a);
+  return a.credentials.map(k => `<form class="conn-cred" ${actOn("submit", "seq", ["connSave", c.id, k.key, lab], ["preventDefault"])}>
+      ${slInput({id: `cr-${c.id}-${k.key}${lab ? "-" + lab : ""}`, label: lab ? `${k.label} (${lab} account)` : k.label, type: k.secret ? "password" : "text", password: !!k.secret, placeholder: k.present ? "Enter a new value to replace it" : "Enter it here",
         help: `${k.present ? `Saved in ${k.stored === "keychain" ? "the macOS Keychain" : "the private file"}. It is not shown again.` : "Not entered yet."}${k.help ? " " + k.help : ""}`})}
-      <div class="btns">${btn("Save", {size: "small", attrs: 'type="submit"'})}${k.present ? btn("Remove", {size: "small", click: act("connRemove", k.key)}) : ""}</div></form>`).join("");
-  return `<section class="card conn" id="conn-${esc(c.id)}"><div class="conn-h"><h2>${esc(c.label)}</h2>${pill(cls, connWords[c.state] || c.state)}
-      <div class="conn-end">${c.local ? "" : slSwitch(c.enabled ? "On" : "Off", {checked: c.enabled, change: actOn("change", "connEnable", c.id, T.checked), attrs: `aria-label="${esc(c.label)} on or off"`})}
+      <div class="btns">${btn("Save", {size: "small", attrs: `type="submit" aria-label="Save ${esc(k.label)} for ${esc(who)}"`})}${k.present ? btn("Remove", {size: "small", click: act("connRemove", c.id, k.key, lab), attrs: `aria-label="Remove ${esc(k.label)} for ${esc(who)}"`}) : ""}</div></form>`).join("");
+}
+// What one account says about itself: the refresh time, the last error, what it still needs.
+function connFacts(c, a){
+  const last = a.last_at ? `Last refreshed ${esc(ago(a.last_at))}.` : c.local ? "" : "Not refreshed yet.";
+  return `<p class="sub">${last}${c.minutes && !c.local ? ` Checks every ${c.minutes} minutes.` : ""}</p>
+      ${a.error ? `<sl-alert variant="danger" open style="margin-top:12px"><sl-icon slot="icon" name="exclamation-octagon"></sl-icon>${esc(a.error)}</sl-alert>` : ""}
+      ${a.state === "needs set-up" ? `<p class="sub">Still needs: ${esc(a.missing.join(", "))}.</p>` : ""}`;
+}
+const connCls = a => a.state === "ok" ? "good" : a.state === "failing" ? "bad" : a.state === "needs set-up" ? "warn" : "";
+const connTestBtn = (c, a) => c.local || !c.credentials.length ? "" : btn("Test", {size: "small", click: act("connTest", c.id, connLab(a)), attrs: `aria-label="Test ${esc(connWho(c, a))} now"`});
+// One extra account of a service: its own state, switch, fields, test and remove.
+function connAcct(c, a){
+  const who = connWho(c, a);
+  return `<div class="conn-acct" id="conn-${esc(c.id)}-${esc(a.label)}"><div class="conn-h"><h3>${esc(a.label)} account</h3>${pill(connCls(a), connWords[a.state] || a.state)}
+      <div class="conn-end">${slSwitch(a.enabled ? "On" : "Off", {checked: a.enabled, change: actOn("change", "connEnable", c.id, T.checked, a.label), attrs: `aria-label="${esc(who)} on or off"`})}</div></div>
+    ${connFacts(c, a)}${connCreds(c, a)}
+    <div class="btns">${connTestBtn(c, a)}${btn("Remove account", {size: "small", click: act("connRemoveAccount", c.id, a.label), attrs: `aria-label="Remove the ${esc(who)}"`})}</div></div>`;
+}
+function connAddField(c){
+  return connAdding[c.id] ? `<form class="conn-cred conn-add" ${actOn("submit", "seq", ["connAddSave", c.id], ["preventDefault"])}>
+      ${slInput({id: `add-${c.id}`, label: `Label for the new ${c.label} account`, placeholder: "work", help: "Lowercase letters, digits and dashes, at most 24. For example work or personal."})}
+      <div class="btns">${btn("Add account", {size: "small", attrs: 'type="submit"'})}${btn("Cancel", {size: "small", click: act("connAddOpen", c.id, false)})}</div></form>`
+    : btn("Add another account", {size: "small", click: act("connAddOpen", c.id, true), attrs: `aria-label="Add another ${esc(c.label)} account"`});
+}
+function connRow(c){
+  const d = (c.accounts || [])[0] || c, extra = (c.accounts || []).slice(1);
+  return `<section class="card conn" id="conn-${esc(c.id)}"><div class="conn-h"><h2>${esc(c.label)}</h2>${pill(connCls(c), connWords[c.state] || c.state)}
+      <div class="conn-end">${c.local ? "" : slSwitch(c.enabled ? "On" : "Off", {checked: c.enabled, change: actOn("change", "connEnable", c.id, T.checked, ""), attrs: `aria-label="${esc(c.label)} on or off"`})}
       <sl-icon-button name="question-circle" label="How to connect ${esc(c.label)}" ${act("connHelp", c.id)}></sl-icon-button></div></div>
-    <div class="conn-body">${esc(c.what)} ${pill(c.verified ? "good" : "", c.verified ? "Tested" : "Not tested")}<p class="sub">${last}${c.minutes && !c.local ? ` Checks every ${c.minutes} minutes.` : ""}</p>
-      ${c.error ? `<sl-alert variant="danger" open style="margin-top:12px"><sl-icon slot="icon" name="exclamation-octagon"></sl-icon>${esc(c.error)}</sl-alert>` : ""}
-      ${c.state === "needs set-up" ? `<p class="sub">Still needs: ${esc(c.missing.join(", "))}.</p>` : ""}
-      ${creds}</div></section>`;
+    <div class="conn-body">${esc(c.what)} ${pill(c.verified ? "good" : "", c.verified ? "Tested" : "Not tested")}${extra.length ? `<p class="sub">This is the default account. The others are below.</p>` : ""}
+      ${connFacts(c, c)}${connCreds(c, d)}
+      <div class="btns">${connTestBtn(c, d)}</div>
+      ${extra.map(a => connAcct(c, a)).join("")}
+      ${c.multi ? `<div class="conn-more">${connAddField(c)}</div>` : ""}</div></section>`;
 }
 // The help drawer for one service: what it reads and does not read, what to get, the steps, the permissions, how to revoke, and what was tested.
 function connHelp(id){
@@ -1487,19 +1518,40 @@ async function connStore(to){
   const j = await post("/api/connections", {action: "store", to, confirm: true});
   if(j){ toast(`Moved ${j.moved} ${j.moved === 1 ? "credential" : "credentials"}.`); loadConnections(true); }
 }
-async function connSave(id, key){
-  const el = document.getElementById(`cr-${id}-${key}`), v = el ? String(el.value || "").trim() : "";
+async function connSave(id, key, lab){
+  const el = document.getElementById(`cr-${id}-${key}${lab ? "-" + lab : ""}`), v = el ? String(el.value || "").trim() : "";
   if(!v) return fieldError(el, "Enter a value first.");
-  const j = await post("/api/connections", {action: "credential", id, key, value: v, confirm: true});
+  const j = await post("/api/connections", {action: "credential", id, key, label: lab || "default", value: v, confirm: true});
   if(j){ el.value = ""; toast("Saved. It will not be shown again."); loadConnections(true); }
 }
-async function connRemove(key){
-  const j = await post("/api/connections", {action: "credential", key, value: "", confirm: true});
+async function connRemove(id, key, lab){
+  const j = await post("/api/connections", {action: "credential", id, key, label: lab || "default", value: "", confirm: true});
   if(j){ toast("Removed."); loadConnections(true); }
 }
-async function connEnable(id, on){
-  const j = await post("/api/connections", {action: "enable", id, on, confirm: true});
+async function connEnable(id, on, lab){
+  const j = await post("/api/connections", {action: "enable", id, label: lab || "default", on, confirm: true});
   if(j){ toast(on ? "Switched on." : "Switched off."); loadConnections(true); } else loadConnections(true);
+}
+function connAddOpen(id, open){ connAdding[id] = !!open; render(); if(open) focusSoon(`#add-${id}`); }
+async function connAddSave(id){
+  const el = document.getElementById(`add-${id}`), v = el ? String(el.value || "").trim() : "";
+  const c = ((connData || {}).services || []).find(x => x.id === id);
+  if(!/^[a-z0-9][a-z0-9-]{0,23}$/.test(v)) return fieldError(el, connBadLabel);
+  if(v === "default" || (c && (c.accounts || []).some(a => a.label === v))) return fieldError(el, "That label is already used for this service. Pick another.");
+  const j = await post("/api/connections", {action: "enable", id, label: v, on: false, add: true, confirm: true});
+  if(j){ connAdding[id] = false; toast("Account added. Enter its credentials, then switch it on."); loadConnections(true); }
+}
+async function connTest(id, lab){
+  toast("Testing. This can take a little while.");
+  const j = await post("/api/connections", {action: "enable", id, label: lab || "default", on: true, test: true, confirm: true});
+  if(j){ toast(j.ok ? "Refreshed." : (j.message || "The test failed."), !j.ok); loadConnections(true); }
+}
+async function connRemoveAccount(id, lab){
+  const c = ((connData || {}).services || []).find(x => x.id === id);
+  if(!await confirmDlg(`The ${lab} account of ${c ? c.label : id} is forgotten: its saved credentials, its sign-in and what was refreshed from it are deleted from this computer. The service itself is not touched.`,
+    {title: "Remove this account?", ok: "Remove account", danger: true})) return;
+  const j = await post("/api/connections", {action: "enable", id, label: lab, on: false, remove: true, confirm: true});
+  if(j){ toast("Account removed."); loadConnections(true); }
 }
 /* ---- settings: a page of facts, read-only except the theme ---- */
 let setData = null, setAt = 0;
@@ -2902,7 +2954,7 @@ function paletteResults(q){
     more(`pull request · ${x.project}`, `#${x.number} ${x.title}`, () => window.open(safeUrl(x.url), "_blank", "noopener"));
   for(const f of EXT.search) f(q, few, more);
   for(const k of S.connectors || []) for(const it of few((k.items || []).filter(it => hitq(q, it.title, it.sub))))
-    more(k.label, it.title || it.sub, () => { if(/^https:\/\//.test(it.url || "")) window.open(it.url, "_blank", "noopener"); else showInBrain("c:" + k.name); });
+    more(k.label, it.title || it.sub, () => { if(/^https:\/\//.test(it.url || "")) window.open(it.url, "_blank", "noopener"); else showInBrain("c:" + (k.key || k.name)); });
   return [...base, ...extra.slice(0, 20)];
 }
 let palFns = [];
@@ -3998,15 +4050,16 @@ function brainGraph(){
 
   for(const c of S.connectors || []){
     const fresh = c.connected && (c.unread > 0 || (c.items || []).some(i => i.new));
-    const ig = (S.integrations || {})[c.name], bad = ig && !ig.ok;   // a direct feed that is failing says why
+    const ck = c.key || c.name;            // a service with several accounts has one node each; the default account's key stays the plain name
+    const ig = (S.integrations || {})[ck], bad = ig && !ig.ok;   // a direct feed that is failing says why
     const fp = feeds && c.connected ? feeds.feedPanel(c, Date.now()) : null;   // what changed, what needs you
-    const old = (c.unread != null ? c.unread + " unread · " : "") + "read " + ago(c.updated) + (ig ? ", refreshed " + ago(ig.at) : "");
-    add("c:" + c.name, c.label, "world", "connection", {hub: true, ref: {feed: c.name}, state: bad ? "attn" : !c.connected ? "off" : fp ? fp.state : fresh ? "new" : "idle",
+    const old = (c.account ? c.account + " account · " : "") + (c.unread != null ? c.unread + " unread · " : "") + "read " + ago(c.updated) + (ig ? ", refreshed " + ago(ig.at) : "");
+    add("c:" + ck, c.label, "world", "connection", {hub: true, ref: {feed: ck}, state: bad ? "attn" : !c.connected ? "off" : fp ? fp.state : fresh ? "new" : "idle",
       sub: bad ? ig.error_short : !c.connected ? "Not connected" : fp ? fp.sub : old,
       lines: !c.connected ? [`Quarterdeck holds no login for ${c.label}. Put a snapshot in state/connectors/${c.name}.json to show it here.`] : fp ? fp.lines.concat([old]) : [],
       actions: fp && fp.url ? [{label: "Open " + c.label, url: fp.url}] : []});
-    (c.items || []).forEach(it => add(`c:${c.name}:${it.url || it.title + it.at}`, it.title || "(untitled)", "world", c.label, {
-      parent: "c:" + c.name, state: it.new ? "new" : "idle", sub: it.sub || "", lines: it.at && !isNaN(new Date(it.at)) ? [new Date(it.at).toLocaleString([], {weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"})] : [],
+    (c.items || []).forEach(it => add(`c:${ck}:${it.url || it.title + it.at}`, it.title || "(untitled)", "world", c.label, {
+      parent: "c:" + ck, state: it.new ? "new" : "idle", sub: it.sub || "", lines: it.at && !isNaN(new Date(it.at)) ? [new Date(it.at).toLocaleString([], {weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"})] : [],
       actions: it.url ? [{label: "Open in " + c.label, url: it.url}] : []}));
   }
 
@@ -4323,7 +4376,7 @@ const ACTIONS = {
   seeAttention: () => { go("brain"); setTimeout(openAttention, 900); },
   brainErrClear: () => { brainErr = ""; render(); },
   ackInbox, addSched, approveMissionPlan, attachAdd, attachLook, attachNew, backToLedger, bargeInToggle, briefAct, briefAsk, briefForIssue, briefRetry, briefSend,
-  capDone, capSubmit, caseStepTo, closeCard, closeDrawer, closeMissionPage, closeMobileMenu, closePalette, connEnable, connHelp, connRemove, connSave, connStore, crewRun,
+  capDone, capSubmit, caseStepTo, closeCard, closeDrawer, closeMissionPage, closeMobileMenu, closePalette, connAddOpen, connAddSave, connEnable, connHelp, connRemove, connRemoveAccount, connSave, connStore, connTest, crewRun,
   crewEnableHelp, crewSchedule, openRun, runGo, runPaint,
   dockStartOver, dockGo, dockToggle, explainWrites, fileAsIssues, fixItem, fixSelected, fleetAct, focusEdit, go, helmOrb, leaveBrain, linkPanelToMission,
   loadBoard, markSeen, mergePr, noteAdd, noteDone, noteEditSave, noteEditStart, noteEditStop, noteFilter, notePromote, noteTag, nwMakeBrief,

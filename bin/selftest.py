@@ -2191,7 +2191,7 @@ check("a surveyor reviews a new pull request after it opens",
       next(p for p in _w1.open_prs(120) if p["number"] == 42)["review"]["verdict"] == "CLEAN" and next(p for p in _w1.open_prs(90) if p["number"] == 42)["review"] is None)
 _errs = lambda t: [i["text"] for i in _snap(_w1, t)["inbox"] if "#131 tests failed" in i["text"]]
 check("a run fails, shows in Needs you, then the re-run clears it", not _errs(100) and _errs(160) and not _errs(300))
-_unread = lambda t: {c["name"]: len([i for i in c["items"] if i["new"]]) for c in _snap(_w1, t)["connectors"]}
+_unread = lambda t: {n: sum(len([i for i in c["items"] if i["new"]]) for c in _snap(_w1, t)["connectors"] if c["name"] == n) for n in {c["name"] for c in _snap(_w1, t)["connectors"]}}      # per service, all its accounts together
 check("a mail, a Slack mention and an analytics spike arrive on schedule",
       _unread(0)["gmail"] == 0 and _unread(70)["gmail"] == 1 and _unread(140)["slack"] == 1 and _unread(190)["analytics"] == 1 and _unread(0)["analytics"] == 0)
 check("spend climbs as runs finish", _snap(_w1, 300)["spend"]["today"] > _snap(_w1, 0)["spend"]["today"])

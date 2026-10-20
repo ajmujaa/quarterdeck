@@ -119,7 +119,8 @@ def chat_digest(state, opts=None):
     counts = []
     for c in _list(state.get("connectors")):
         if isinstance(c, dict) and c.get("name") in ("gmail", "slack") and c.get("connected") and isinstance(c.get("unread"), int):
-            counts.append(f"{c['unread']} {c['name']}")
+            acct = c.get("account")      # a service with several accounts has one entry each: say which account the count is for
+            counts.append(f"{c['unread']} {c['name']}" + (f" ({_s(acct, 24)})" if isinstance(acct, str) and acct else ""))
     caps = _dict(state.get("captures"))
     if isinstance(caps.get("open"), int):
         counts.append(f"{caps['open']} open notes")

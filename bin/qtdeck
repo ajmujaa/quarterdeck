@@ -25,6 +25,8 @@ Usage: qtdeck <command>
 
   setup                       check the tools you need and say how to install what is missing (installs nothing)
   attach <dir> [--apply]      scan a project folder and propose a set-up; --apply registers it
+  connect <service> [--account <label>]
+                              connect a service (several accounts of one service are fine); connect list shows them
   run <project> <duty> [...]  run one duty once, for example: run my-app surveyor --pr 12 (reports only unless --apply)
   dashboard [--no-open]       start the dashboard on this machine and open it (--no-open: only print the link)
   doctor                      a quick wiring check: tools, sign-ins, data folder, dashboard, sandbox
@@ -116,6 +118,11 @@ qtdeck new <name> [--in DIR] [--about "..."]
   qtdeck attach <dir> [--name N] [--verify "<command>"] [--verbose] [--apply]
                         scan a folder and propose the crew set-up; --apply registers it
 
+  qtdeck connect list                                    every service and account, its state and last refresh
+  qtdeck connect <service> [--account <label>]         enter the credentials of one account (typed or piped, never an argument), switch it on
+  qtdeck connect remove <service> [--account <label>] [--yes]   forget one account: credentials, sign-in and saved data
+                        a label is lowercase letters, digits and dashes, at most 24; no label means the default account
+
 Onboarding any project is two commands:
   cd ~/Projects/Whatever && qtdeck add
   qtdeck run whatever review
@@ -138,7 +145,7 @@ cmd="${1:-status}"; shift || true
 case "$cmd" in
   -h|--help|help) if [ "${1:-}" = more ]; then usage_more; else usage; fi; exit 0 ;;
   setup) exec python3 "$SELF/setup.py" "$@" ;;
-  status|doctor|check|home|projects|duties|crew|add|remove|repo|run|spend|fix|cycle|plan|brief|mockup|dashboard|keys|billing|logs|runs|new|attach) ;;
+  status|doctor|check|home|projects|duties|crew|add|remove|repo|run|spend|fix|cycle|plan|brief|mockup|dashboard|keys|billing|logs|runs|new|attach|connect) ;;
   *) { echo "qtdeck: unknown command '$cmd'"; echo; usage; } >&2; exit 2 ;;
 esac
 source "$SELF/lib.sh"
@@ -309,6 +316,9 @@ case "$cmd" in
   attach)
     # scan a folder, propose how the crew should work on it, and register it only with --apply
     exec python3 "$QUARTERDECK_DIR/bin/attach.py" "$@" ;;
+  connect)
+    # several accounts per service; secrets come from the terminal or standard input, never an argument
+    exec python3 "$QUARTERDECK_DIR/bin/connect.py" "$@" ;;
   new)
     # start something new: a folder, a git repository, a README; nothing is registered
     exec python3 "$QUARTERDECK_DIR/bin/newproject.py" "$@" ;;

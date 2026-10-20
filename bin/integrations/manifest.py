@@ -349,7 +349,7 @@ def add_account(service_id, label, services=None):
 
     def go(cur):
         srcs = cur.setdefault("sources", {})
-        src = srcs.setdefault(service_id, {"enabled": False, "minutes": 60})
+        src = srcs.setdefault(service_id, {"enabled": False, "minutes": s["minutes"]})       # the default account stays off, on its own interval
         acc = src.setdefault("accounts", {})
         if not isinstance(acc, dict):
             acc = src["accounts"] = {}

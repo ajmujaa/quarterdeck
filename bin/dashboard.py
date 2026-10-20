@@ -3260,6 +3260,7 @@ import chatctx
 import claudeproc
 import fleetview
 import projagents
+from integrations import accounts as integrations_accounts
 from integrations import manifest as integrations_manifest
 import billing as _billing                               # who pays for a duty's model calls, and the API key's presence (bin/billing.py)
 
@@ -3386,17 +3387,54 @@ def csp(nonce=None):
             "img-src 'self' data:; font-src 'self'; connect-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'")
 
 
+def connection_test(sid, label, timeout=180):
+    """Refresh one account once, in its own process (the loop's way, so a hang cannot block the dashboard). Returns {"ok", "message"}: a short
+    sentence, never a value. Demo mode never calls a real service."""
+    svc = next((x for x in integrations_manifest.load_services() if x["id"] == sid), None)
+    if svc is None or svc["local"] or not svc["module"]:
+        return {"ok": False, "message": "this service is read by a helper app, so there is nothing to test here"}
+    if label != "default":
+        src = (integrations_manifest.common.load_config()["sources"].get(sid) or {})
+        if label not in integrations_accounts.labels_of(src):
+            return {"ok": False, "message": "no such account: add it first"}
+    run_py = ROOT / "bin" / "integrations" / "run.py"
+    env = {k: v for k, v in os.environ.items() if k in ("PATH", "HOME", "LANG", "QUARTERDECK_HOME", "QUARTERDECK_DIR", "QUARTERDECK_SECRETS_DIR")}
+    try:
+        r = subprocess.run([sys.executable, str(run_py), svc["module"], "--account", label], env=env, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "message": "the refresh did not finish in time"}
+    except OSError:
+        return {"ok": False, "message": "could not start the refresh"}
+    line = (r.stdout.strip().splitlines() or [""])[-1]
+    why = line.split("failed:", 1)[1].strip() if "failed:" in line else ""
+    return {"ok": r.returncode == 0, "message": "Refreshed." if r.returncode == 0 else (why[:200] or "the refresh failed")}
+
+
 def connections_api(b):
-    """Put a credential in the private store (never read back), or switch a service's feed on or off. Both need the owner's confirm."""
+    """Put a credential in the private store (never read back), or switch a service's feed on or off. Both need the owner's confirm.
+    An account of a service is named by `label` (default "default"). Actions stay credential, enable and store:
+      enable with on:true (or add:true) on a label that does not exist yet adds the account; enable with on:false and remove:true removes it;
+      enable with test:true refreshes it once and answers {ok, message}."""
     if b.get("confirm") is not True:
         return 400, {"error": "confirm is required: this changes how a service is connected"}
     sid, action = str(b.get("id") or ""), b.get("action")
     try:
+        label = integrations_accounts.norm(b.get("label"))
         if action == "credential":
-            present = integrations_manifest.set_credential(str(b.get("key") or ""), b.get("value"))
-            result = {"key": b.get("key"), "present": present}
+            if label != "default" and sid and str(b.get("value") or "").strip():
+                integrations_manifest.add_account(sid, label)               # a credential for a new label makes the account, so it is never an orphan
+            present = integrations_manifest.set_credential(str(b.get("key") or ""), b.get("value"), label=label)
+            result = {"key": b.get("key"), "label": label, "present": present}
+        elif action == "enable" and b.get("test") is True:
+            if demo_on():
+                return 400, {"error": "Demo mode: nothing is connected or tested."}
+            result = connection_test(sid, label)
+        elif action == "enable" and b.get("remove") is True and b.get("on") is not True:
+            result = {"removed": integrations_manifest.remove_account(sid, label), "label": label}
         elif action == "enable":
-            result = {"enabled": integrations_manifest.set_enabled(sid, b.get("on") is True)}
+            if label != "default" and (b.get("on") is True or b.get("add") is True):
+                integrations_manifest.add_account(sid, label)          # "Add another account" sends add:true, switched off
+            result = {"enabled": integrations_manifest.set_enabled(sid, b.get("on") is True, label=label), "label": label}
         elif action == "store":                                          # move every credential to the file or the keychain, verified, then switch
             result = {"moved": integrations_manifest.move_store(str(b.get("to") or "")), "store": integrations_manifest.store_info()["kind"]}
         else:
@@ -3407,8 +3445,9 @@ def connections_api(b):
         return 500, {"error": "could not write: " + type(e).__name__}
     try:
         LOGS.mkdir(parents=True, exist_ok=True)
-        with open(LOGS / "connections.log", "a") as f:                  # which key or service changed, never a value
-            f.write(f"{iso(now_utc())} {log_field(action)} {log_field(sid or b.get('key') or b.get('to'))}\n")
+        what = "test" if b.get("test") is True else "remove" if b.get("remove") is True else action
+        with open(LOGS / "connections.log", "a") as f:                  # which key or service and account changed, never a value
+            f.write(f"{iso(now_utc())} {log_field(what)} {log_field(sid or b.get('key') or b.get('to'))} {log_field(label)}\n")
     except OSError:
         pass
     return 200, result
@@ -4191,32 +4230,68 @@ def dedupe_events(items):
     return out
 
 
+def _conn_items(d, name):
+    items = []
+    for it in (d.get("items") if isinstance(d.get("items"), list) else [])[:200]:
+        if not isinstance(it, dict):
+            continue
+        url = it.get("url")
+        items.append({"title": _clip(it.get("title"), 140), "sub": _clip(it.get("sub"), 140),
+                      "at": _clip(it.get("at"), 40), "new": it.get("new") is True,
+                      "url": url if isinstance(url, str) and url.startswith("https://") else None})
+    if name == "calendar":
+        items = dedupe_events(items)          # dedupe first, then cap: the card shows more distinct events
+    return items
+
+
+def _conn_entry(name, label, d):
+    if not isinstance(d, dict):
+        return {"name": name, "label": label, "connected": False}
+    unread = d.get("unread")
+    return {"name": name, "label": label, "connected": True, "updated": _clip(d.get("updated"), 40),
+            "unread": unread if type(unread) is int else None, "items": _conn_items(d, name)[:12]}
+
+
+def _snapshot_services():
+    """snapshot name -> the service id whose folder holds it (meta writes facebook and instagram)."""
+    try:
+        return {sn: m["id"] for m in integrations_manifest.load_services() for sn in m["snapshots"]}
+    except Exception:
+        return {}
+
+
 def brain_connectors():
+    """One entry per outside connection. A service with a single account is the entry it always was. A service with more than one account (the
+    default and at least one more that has a snapshot or is switched on) gets one entry per account, each with `account` and a unique `key`
+    (the default account's key is the plain name), so two accounts are never one list of items with the account hidden."""
     out = []
     known = {n for n, _ in KNOWN_CONNECTORS}
     try:        # a connection the user added is just a snapshot file with a plain name; the Brain shows it with no code edit
         extra = sorted(p.stem for p in CONNECTORS.glob("*.json") if p.stem not in known and re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,30}", p.stem))
     except OSError:
         extra = []
+    svc_of = _snapshot_services()
+    sources = (read_json(HOME / "config" / "integrations.json", {}) or {}).get("sources")
+    sources = sources if isinstance(sources, dict) else {}
     for name, label in list(KNOWN_CONNECTORS) + [(n, n) for n in extra[:20]]:
-        d = read_json(CONNECTORS / f"{name}.json", None)
-        if not isinstance(d, dict):
-            out.append({"name": name, "label": label, "connected": False})
+        svc = svc_of.get(name, name)
+        cfg_acc = integrations_accounts.labels_of(sources.get(svc) if isinstance(sources.get(svc), dict) else {})
+        try:
+            on_disk = [p.name for p in (CONNECTORS / svc).iterdir() if p.is_dir() and integrations_accounts.valid(p.name)] if (CONNECTORS / svc).is_dir() else []
+        except OSError:
+            on_disk = []
+        more = [l for l in sorted(set(cfg_acc) | set(on_disk)) if l != "default"
+                and ((CONNECTORS / svc / l / f"{name}.json").is_file() or (l in cfg_acc and sources[svc]["accounts"][l].get("enabled") is True))]
+        if not more:
+            out.append(_conn_entry(name, label, read_json(CONNECTORS / f"{name}.json", None)))
             continue
-        items = []
-        for it in (d.get("items") if isinstance(d.get("items"), list) else [])[:200]:
-            if not isinstance(it, dict):
-                continue
-            url = it.get("url")
-            items.append({"title": _clip(it.get("title"), 140), "sub": _clip(it.get("sub"), 140),
-                          "at": _clip(it.get("at"), 40), "new": it.get("new") is True,
-                          "url": url if isinstance(url, str) and url.startswith("https://") else None})
-        if name == "calendar":
-            items = dedupe_events(items)          # dedupe first, then cap: the card shows more distinct events
-        unread = d.get("unread")
-        out.append({"name": name, "label": label, "connected": True,
-                    "updated": _clip(d.get("updated"), 40),
-                    "unread": unread if type(unread) is int else None, "items": items[:12]})
+        for acct in ["default"] + more:
+            d = read_json(CONNECTORS / svc / acct / f"{name}.json", None)
+            if d is None and acct == "default":
+                d = read_json(CONNECTORS / f"{name}.json", None)
+            e = _conn_entry(name, f"{label} ({acct})", d)
+            e["account"], e["key"] = acct, integrations_accounts.status_key(name, acct)
+            out.append(e)
     return out
 
 

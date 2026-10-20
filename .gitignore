@@ -26,3 +26,4 @@ config/speech.json
 .claude/worktrees/
 .playwright-mcp/
 .t
+.DS_Store

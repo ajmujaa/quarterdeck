@@ -3725,6 +3725,9 @@ if _nodeok.path():
     _hr = _sp.run(["node", "--no-warnings", str(ROOT / "bin" / "selftest-handlers.mjs")], capture_output=True, text=True)
     check("handlers under node: hostile ids and text (quotes, backticks, </script>, &#39;, line separators, ${}) only ever round-trip as JSON data, and only names in the table run",
           _hr.returncode == 0, (_hr.stderr or _hr.stdout)[-400:])
+    _rt = _sp.run(["node", "--no-warnings", str(ROOT / "bin" / "selftest-route.mjs")], capture_output=True, text=True)
+    check("the router under node (dashboard/assets/route.js): every page, project and add-on round-trips through the address; hostile ids, bad and over-long addresses are Home and never throw",
+          _rt.returncode == 0, (_rt.stderr or _rt.stdout)[-400:])
 else:
     print("  skip  handlers under node: node is not installed")
 

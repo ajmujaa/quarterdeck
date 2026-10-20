@@ -180,8 +180,10 @@ const $ = s => document.querySelector(s);
 const plural = (n, one, many = one + "s") => n === 1 ? one : many;
 let S = null, lastOk = 0, returnFocus = null, curLog = null;
 let showQuiet = false, filter = "";
-let sel = localStorage.getItem("quarterdeck.project") || "";
+let keptSel = localStorage.getItem("quarterdeck.project") || "";          // the project the owner chose; it is kept while they are on a page that has no project scope
+let sel = keptSel;                                                         // the project the current page shows: keptSel on a page with a scope (see syncSel), "" on Home, Settings and the rest
 let view = localStorage.getItem("quarterdeck.view") || "overview";
+if(view === "work") view = "projects";                                     // Work was renamed Projects: a remembered view of the old name opens the new place
 // An add-on's place (EXT.places) sits in the rail beside the projects but is not one. Kept apart from `sel` so the forty
 // places that read a project name never see it. "" means a project, or all of them.
 let atPlace = localStorage.getItem("quarterdeck.place") || "";
@@ -201,6 +203,13 @@ const actOn = (ev, name, ...args) => `data-on-${ev}="${esc(name)}"${args.length 
 const act = (name, ...args) => actOn("click", name, ...args);
 const T = {el: {$: "el"}, ev: {$: "ev"}, value: {$: "value"}, checked: {$: "checked"}, sel: {$: "sel"}};
 const mine = x => !sel || x.project === sel;
+// Which pages have a project scope. A page of the Projects place, the Agents place and the Library pages that list per project do; Home, the Brain's map, Connections, Settings,
+// Spend (fleet wide) and Showcase do not, and show no scope box and no scope chip. The Brain keeps its own project choice (My rhythm) in its toolbar.
+const SCOPED_VIEWS = new Set(["projects", "inbox", "missions", "mission", "prs", "board", "ledger", "timeline", "operations", "log", "crew", "fleet", "panels", "documents", "notes"]);
+const scopeApplies = (v = view) => !atPlace && SCOPED_VIEWS.has(v);
+const usesProject = (v = view) => scopeApplies(v) || (!atPlace && v === "brain");
+function syncSel(){ sel = usesProject() ? keptSel : ""; }
+function setKept(p){ keptSel = p; try{ localStorage.setItem("quarterdeck.project", p); }catch(e){} syncSel(); }
 const hit = (...bits) => !filter || bits.join(" ").toLowerCase().includes(filter);
 // A fix's own card already shows its current step (whichever duty that is);
 // the step's own agent card would say the identical thing again beside it,
@@ -422,8 +431,10 @@ async function restartDemo(){
 
 /* ---- navigation ---- */
 const VIEWS = [
-  {id:"overview",  label:"Command center",  ic:"grid",  title:"Command center",
-   sub:"One place to see what is moving, what needs you, and where the work leads."},
+  {id:"overview",  label:"Home",  ic:"grid",  title:"Home",
+   sub:"You, across everything: your day, your notes, the whole fleet at a glance and what it costs today. The work itself is under Projects."},
+  {id:"projects", label:"Overview", ic:"folder", title:"Projects",
+   sub:"Every project at a glance: what needs you, the last run and what it cost. Open one to see only its pages."},
   {id:"brain", label:"Brain", ic:"eye", title:"Brain",
    sub:"The whole operation as one map: code, agents, the crew, your inbox and calendar. Drag to turn it, click or tap a dot to see what it is and where it leads. The counts and buttons around the map list the same things for the keyboard."},
   {id:"missions", label:"Missions", ic:"target", title:"Missions",
@@ -485,10 +496,11 @@ function selectPlace(id, v){
 function selectProject(p){
   closeMobileMenu();
   atPlace = ""; localStorage.setItem("quarterdeck.place", ""); scopeAddon = "";
-  sel = p; localStorage.setItem("quarterdeck.project", p);
+  if(!usesProject()){ view = "projects"; localStorage.setItem("quarterdeck.view", "projects"); }         // choosing a project from a page that has no scope opens that project's page
+  setKept(p);
   curLog = null; board = null; boardFor = null; prs = null; prsFor = null;
   // a project whose agents live in its own repository has no Quarterdeck duties to show: send the page to its Fleet
-  if(fleetProjects.has(p)){ view = "fleet"; localStorage.setItem("quarterdeck.view", "fleet"); fleetAt = 0; loadFleet(); }
+  if(fleetProjects.has(p)){ view = "fleet"; localStorage.setItem("quarterdeck.view", "fleet"); fleetAt = 0; loadFleet(); syncSel(); }
   routeTouch(); render();
 }
 // An add-on is a scope too, chosen in the same select as the projects. One with a place of its own opens that place; one without opens Needs you, filtered to it.
@@ -496,7 +508,7 @@ function selectAddon(id){
   const a = addonList().find(x => x.id === id);
   if(!a) return;
   closeMobileMenu();
-  sel = ""; localStorage.setItem("quarterdeck.project", ""); curLog = null; board = null; boardFor = null; prs = null; prsFor = null;
+  setKept(""); curLog = null; board = null; boardFor = null; prs = null; prsFor = null;
   if(a.place && isPlace(a.place)){ scopeAddon = ""; selectPlace(a.place); }
   else{ atPlace = ""; localStorage.setItem("quarterdeck.place", ""); scopeAddon = id; go("inbox"); }
 }
@@ -555,7 +567,8 @@ function applyRoute(r, draw = true){
     if(r.group === "addon"){ atPlace = r.addon; view = r.view; }
     else{
       atPlace = ""; view = r.view; scopeAddon = r.addon || "";
-      if(r.project !== sel){ sel = r.project; curLog = null; board = null; boardFor = null; prs = null; prsFor = null; }
+      if(usesProject(view)){ if(r.project !== keptSel){ curLog = null; board = null; boardFor = null; prs = null; prsFor = null; } keptSel = r.project; }
+      syncSel();
       if(view === "mission"){ if(r.id !== missionId){ missionLens = "summary"; delete missionCache[r.id]; } missionId = r.id; }
       if(view === "log" && r.id){ const [proj, duty] = r.id.split("~"), name = proj ? duty + "-" + proj : duty; if(((S && S.logs) || []).includes(name)) curLog = name; }
       if(view === "brain") brainMode = r.brain === "rhythm" && S && S.demo && S.demo.on ? "rhythm" : "map";
@@ -564,7 +577,7 @@ function applyRoute(r, draw = true){
     if(view !== "log") logFrom = null;
     filter = ""; $("#q").value = "";
     try{
-      localStorage.setItem("quarterdeck.view", view); localStorage.setItem("quarterdeck.place", atPlace); localStorage.setItem("quarterdeck.project", sel);
+      localStorage.setItem("quarterdeck.view", view); localStorage.setItem("quarterdeck.place", atPlace); localStorage.setItem("quarterdeck.project", keptSel);
       const g = groupOf(view); if(g && view !== "mission") localStorage.setItem("quarterdeck.tab." + g.id, view);
       if(view === "mission" && missionId) localStorage.setItem("quarterdeck.mission", missionId);
     }catch(e){}
@@ -581,8 +594,9 @@ function initRoute(){
   const h = location.hash;
   if(h && h !== "#" && !routeMod.isPairHash(h)) applyRoute(routeMod.parseHash(h, routeKnown()), false);
   else{
-    if(!(S.projects || []).some(p => p.name === sel)) sel = "";
+    if(!(S.projects || []).some(p => p.name === keptSel)) keptSel = "";
     if(!VIEWS.some(x => x.id === view && (x.place || "") === atPlace)) view = atPlace || "overview";
+    syncSel();
     routeApplied = routeHash();
   }
   routeReady = true;
@@ -627,18 +641,20 @@ function focusClock(f){
 setInterval(() => { const f = focusNow(); if(f && !calmOn()) document.querySelectorAll(".fclock").forEach(e => { e.textContent = focusClock(f); }); }, 1000);
 window.addEventListener("quarterdeck-focus", () => { if(S) renderNav(); });
 
-/* ---- navigation: seven plain places; the pages inside each are tabs ---- */
+/* ---- navigation: seven plain places; the pages inside each are tabs. Home is the person; Projects is where the work is (an overview of every
+   project first, then the pages of one project); the Brain, Agents, Connections, Library and Settings are the rest. ---- */
 const NAV_GROUPS = [
   {id:"home",        label:"Home",        ic:"house",       views:["overview"]},
   {id:"brain",       label:"Brain",       ic:"diagram-3",   views:["brain"]},
-  {id:"work",        label:"Work",        ic:"kanban",      views:["inbox","missions","prs","board","timeline","operations","ledger","spend","log"]},
+  {id:"projects",    label:"Projects",    ic:"briefcase",   views:["projects","inbox","missions","prs","board","ledger","timeline","operations","spend","log"]},
   {id:"agents",      label:"Agents",      ic:"robot",       views:["crew","fleet"]},
   {id:"connections", label:"Connections", ic:"plug",        views:["connections"]},
   {id:"library",     label:"Library",     ic:"book",        views:["documents","panels","notes","showcase"]},
   {id:"settings",    label:"Settings",    ic:"gear",        views:["settings"]},
 ];
-const groupOf = v => NAV_GROUPS.find(g => g.views.includes(v)) || (v === "mission" ? NAV_GROUPS.find(g => g.id === "work") : undefined);
-const lastTab = g => { try{ const t = localStorage.getItem("quarterdeck.tab." + g.id); if(t && g.views.includes(t)) return t; }catch(e){} return g.views[0]; };
+const groupOf = v => NAV_GROUPS.find(g => g.views.includes(v)) || (v === "mission" ? NAV_GROUPS.find(g => g.id === "projects") : undefined);
+// The tab last used in a place. The Projects place was called Work: a tab remembered under that name is still honoured.
+const lastTab = g => { try{ for(const k of g.id === "projects" ? ["projects", "work"] : [g.id]){ const t = localStorage.getItem("quarterdeck.tab." + k); if(t && g.views.includes(t)) return t; } }catch(e){} return g.views[0]; };
 function navCount(v){
   if(v.count) return v.count();
   return {notes:(S.captures || {}).open || 0, inbox:obsAttention().length, panels:S.panels.filter(mine).filter(p => !p.superseded_by).length,
@@ -851,6 +867,9 @@ function projSwitch(v){
 }
 function renderProjSwitch(){
   const el = $("#proj-switch"); if(!el || !S) return;
+  const show = !!atPlace || scopeApplies(view);                 // the scope box exists only where it means something (the table is in dashboard/UI.md)
+  if(el.hidden === show) el.hidden = !show;
+  if(!show) return;
   const addons = addonList();
   setHtml(el, `<sl-option value="_">All projects</sl-option>` + S.projects.map(p => `<sl-option value="${esc(p.name)}">${esc(p.name)}</sl-option>`).join("")
     + (addons.length ? `<sl-divider></sl-divider><small class="sw-grp">Add-ons</small>` + addons.map(a => `<sl-option value="${ADDON_VALUE}${esc(a.id)}">${esc(a.label)}</sl-option>`).join("") : "")
@@ -875,8 +894,8 @@ function renderMore(){
 }
 function renderNav(){
   renderProjSwitch();
-  const fo = focusNow(), cur = groupOf(view), need = obsAttention().length;
-  setHtml($("#dock-links"), NAV_GROUPS.map(g => railBtn(g.label, g.ic, !atPlace && cur && cur.id === g.id, act("dockGo", lastTab(g)), "", g.id === "work" ? need : 0)).join("")
+  const fo = focusNow(), cur = groupOf(view), need = obsAttention(false).length;       // the badge counts everything that needs you, whichever project the page shows
+  setHtml($("#dock-links"), NAV_GROUPS.map(g => railBtn(g.label, g.ic, !atPlace && cur && cur.id === g.id, act("dockGo", lastTab(g)), "", g.id === "projects" ? need : 0)).join("")
     + EXT.places.map(pl => railBtn(pl.label, pl.ic, atPlace === pl.id, act("selectPlace", pl.id), "", pl.badge ? pl.badge() : 0)).join("")
     + (fo ? `<button class="rail-btn focus ${fo.endsAt < Date.now() ? "over" : ""}" ${act("dockGo", "brain")} title="Focus: ${esc(fo.names.join(" + "))}" aria-label="Focus timer"><b class="fclock">${focusClock(fo)}</b><span>Focus</span></button>` : ""));
   const sys = S.system;
@@ -886,8 +905,8 @@ function renderNav(){
       : "Every run writes without asking: it posts, pushes and opens pull requests by itself. Click for details.";
   }
   const tabs = atPlace ? (EXT.places.find(pl => pl.id === atPlace) || {tabs: []}).tabs
-    : [["overview","Home","house"],["inbox","Needs you","exclamation-triangle"],["missions","Work","kanban"],["crew","Agents","robot"]];
-  setHtml($("#mobile-bottom"), tabs.map(([id,label,ic]) => (() => { const on = view === id || (id === "missions" && groupOf(view) && groupOf(view).id === "work" && view !== "inbox"); return `<button class="${on ? "on" : ""}" ${on ? 'aria-current="page"' : ""} ${act("go", id)} aria-label="${label}">${slIcon(ic)}${label}</button>`; })()).join("")
+    : [["overview","Home","house"],["inbox","Needs you","exclamation-triangle"],["projects","Projects","briefcase"],["crew","Agents","robot"]];
+  setHtml($("#mobile-bottom"), tabs.map(([id,label,ic]) => (() => { const on = view === id || (id === "projects" && groupOf(view) && groupOf(view).id === "projects" && view !== "inbox"); return `<button class="${on ? "on" : ""}" ${on ? 'aria-current="page"' : ""} ${act("go", id)} aria-label="${label}">${slIcon(ic)}${label}</button>`; })()).join("")
     + `<button ${act("toggleMobileMenu")} aria-label="More navigation">${slIcon("list")}More</button>`);
 }
 
@@ -1128,20 +1147,13 @@ function openEvent(e){
   if(S.runs.some(x => ledgerKey(x) === key)) showLedgerRow(key, e.project);
   else{ dockGo("ledger"); toast("That run is older than the Ledger lists on screen", true); }
 }
-const tlEvents = []; // the Home strip's events by index, so a click needs no data in the page text
-function tlChip(e){
-  tlEvents.push(e);
-  return `<button class="tl-chip c-${tl.classOf(e)}" role="listitem" ${act("openEvent", tlEvents.length - 1)}
-    title="${esc((e.project || "fleet") + " · " + (e.duty || "") + " · " + (e.verdict || "") + (e.detail ? " · " + e.detail : ""))}">
-    <time>${esc(new Date(e.at).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"}))}</time><b>${esc(e.project || "fleet")} · ${esc(e.duty || "")}</b><small>${esc(e.verdict || "")}</small></button>`;
-}
-async function loadTimeline(){
-  const w = tlUi.window, c = tlData[w];
+async function loadTimeline(w = tlUi.window){
+  const c = tlData[w];
   if(c && Date.now() - c.at < 15000) return;
   tlData[w] = {...(c || {events: []}), at: Date.now()};
   try{
     const j = await (await fetch("/api/timeline?window=" + encodeURIComponent(w))).json();
-    if(j && Array.isArray(j.events)){ tlData[w] = {at: Date.now(), now: j.now, events: j.events, total: j.total, capped: j.capped}; if(view === "timeline") render(); }
+    if(j && Array.isArray(j.events)){ tlData[w] = {at: Date.now(), now: j.now, events: j.events, total: j.total, capped: j.capped}; if(view === "timeline" || (view === "overview" && !atPlace)) render(); }
   }catch(e){}
 }
 function tlSet(k, v){ tlUi[k] = v; tlSave(); if(k === "window") loadTimeline(); render(); }
@@ -1153,10 +1165,6 @@ function viewTimeline(){
   const track = document.querySelector(".tl-track"), room = track ? track.clientWidth : innerWidth - (innerWidth > 760 ? 76 : 0) - 56 - (innerWidth > 700 ? 160 : 100);
   const L = tlLast = tl.buildLanes(events, {windowKey: tlUi.window, now, project: sel, duty: tlUi.duty, verdict: tlUi.verdict, projects: names, buckets: Math.max(4, Math.min(96, Math.floor(room / 44)))});   // a marker every 44px at the closest, so each is a 40px target
   const seg = k => btn(tl.WINDOW_LABELS[k], {size: "small", variant: tlUi.window === k ? "primary" : "", attrs: `aria-pressed="${tlUi.window === k}"`, click: act("tlSet", "window", k)});
-  const lane = l => `<div class="tl-lane"><div class="tl-name" title="${esc(l.name)}">${esc(l.name)} <small>${l.total}</small></div>
-    <div class="tl-track" role="group" aria-label="${esc(l.name)}: ${l.total} events">${l.bins.map(b => `<button class="tlm c-${b.cls}" style="left:${tl.pct(b, L.from, L.to).toFixed(2)}%"
-      data-t="${esc(tl.binText(b, tlTime))}" data-l="${esc(l.name)}" data-i="${b.i}" ${actOn("hover", "tlHover", T.el)} ${actOn("focus", "tlHover", T.el)} ${act("tlClick", T.el)}
-      aria-label="${esc(tl.binText(b, tlTime))}"><span>${b.n > 1 ? b.n : ""}</span></button>`).join("")}</div></div>`;
   const filtered = tlUi.duty || tlUi.verdict;
   const bar = `<div class="toolbar"><sl-button-group label="Time window">${Object.keys(tl.WINDOWS).map(seg).join("")}</sl-button-group>
       ${slSelect({label: "Duty", cls: "nolabel inline", size: "small", value: tlUi.duty, change: actOn("change", "tlSet", "duty", T.sel), options: [["", "All duties"], ...duties.map(n => [n, n])]})}
@@ -1165,7 +1173,7 @@ function viewTimeline(){
   const body = `${bar}
     <div class="tl-legend">${tl.CLASSES.map(c => `<span><i class="c-${c.id}"></i>${esc(c.label)}</span>`).join("")}<span>A number is how many events share that spot.</span></div>
     ${d ? "" : `<p class="hint">Reading the ledger…</p>`}
-    <div class="tl-lanes">${L.lanes.map(lane).join("") || emptyState({inline: true, title: "Nothing in this window.", body: filtered ? "Clear the filters or choose a longer window." : "Runs and merges show up here as they happen.", label: filtered ? "Clear filters" : "", click: act("tlClear")})}</div>
+    <div class="tl-lanes">${L.lanes.map(l => tlLane(l, L)).join("") || emptyState({inline: true, title: "Nothing in this window.", body: filtered ? "Clear the filters or choose a longer window." : "Runs and merges show up here as they happen.", label: filtered ? "Clear filters" : "", click: act("tlClear")})}</div>
     <div class="tl-axis">${tl.axisTicks(tlUi.window, now, tlTime).map(t => `<span style="left:${t.at}%">${esc(t.label)}</span>`).join("")}</div>
     <div id="tl-detail" class="tl-detail" aria-live="polite">${L.total} event${L.total === 1 ? "" : "s"} in the last ${tl.WINDOW_LABELS[tlUi.window]}${d && d.capped ? " (the newest " + events.length + " are drawn)" : ""}. Hover or focus a marker for detail; click one to open its Ledger row.</div>`;
   return card(null, body, {kicker: "Runs and merges", count: `last ${tl.WINDOW_LABELS[tlUi.window]}`, label: "Timeline"});
@@ -1236,17 +1244,20 @@ function trajectoryCard(f){
     : emptyState({inline: true, title: all.length ? "Nothing is open." : "Nothing is running.", body: all.length ? "Everything that started has finished." : "A fix, a panel or a run appears here once one has started."});
   return card(null, body + finished, {kicker: "Mission trajectory", count: f.running ? f.running + " running" : "", actions: `<button class="mlink link" ${act("dockGo", "missions")}>All missions</button>`, cls: "traj", label: "Mission trajectory"});
 }
-function needsCard(f){
-  const next = S.schedules.filter(x => !x.paused && x.seconds_until != null).sort((a, b) => a.seconds_until - b.seconds_until)[0];
-  const rows = f.att.slice(0, 3).map(x => callout(x.blocker === "config" ? "blocked" : "awaiting", mlink(attnMissionId(x), x.source, "title") + (x.addon ? " " + addonPill(x) : ""), esc(x.text),
+// Needs you, as a short list: what is waiting for the owner (the same unacknowledged items the Needs you page lists, plus pull requests waiting for review), each row
+// naming its project or its add-on. `items` and `waiting` are already scoped by the page (all projects on the overview, one project on a project's page).
+function needsCard(items, waiting, limit = 5){
+  const next = S.schedules.filter(x => !x.paused && x.seconds_until != null && mine(x)).sort((a, b) => a.seconds_until - b.seconds_until)[0];
+  const rows = items.slice(0, limit).map(x => callout(x.blocker === "config" ? "blocked" : "awaiting", mlink(attnMissionId(x), x.source, "title") + (x.addon ? " " + addonPill(x) : ""), esc(x.text),
       {meta: x.at ? (x.stale ? "Snapshot read " : "Run ") + ago(x.at) : "Current status", actions: btn(x.blocker === "config" ? "Inspect blocker" : "Inspect", {size: "small", variant: "primary", click: isPlace(x.view) ? act("selectPlace", x.view) : act("dockGo", "ledger")})}))
-    .concat(f.waiting.slice(0, 3).map(r => callout("awaiting", mlink(fixMissionId(r), r.title, "title"), `${esc(r.project)} · pull request #${esc((r.pr || "").split("/").pop())} is open and waiting for your review.`,
+    .concat(waiting.slice(0, Math.max(0, limit - items.length)).map(r => callout("awaiting", mlink(fixMissionId(r), r.title, "title"), `${esc(r.project)} · pull request #${esc((r.pr || "").split("/").pop())} is open and waiting for your review.`,
       {actions: btn("Open the pull request", {size: "small", variant: "primary", href: r.pr})})));
-  const n = f.att.length + f.waiting.length;
+  const n = items.length + waiting.length;
   return card(null, (rows.join("") || `<p class="hint">Nothing needs you right now.${next ? ` Next scheduled: ${esc(next.project)} ${esc(next.duty)} ${calmOn() ? esc(untilAt(next)) : "in " + esc(countdown(next.seconds_until))}.` : ""}</p>`)
     + `<p class="hint" style="margin-top:12px"><button class="mlink link" ${act("dockGo", "inbox")}>All of Needs you</button></p>`,
     {kicker: "Needs you", kcls: n ? "await" : "", count: n, cls: "needs", label: "Needs you"});
 }
+// The harbor map: an optional Map | List toggle at the top of the Projects overview. The project cards are the list; the map is the same projects as berths, in an order. A berth opens the project.
 function fleetStrip(f){
   if(!S.projects.length) return "";
   const stateOf = p => {
@@ -1257,55 +1268,149 @@ function fleetStrip(f){
   };
   const items = S.projects.map(p => { const [st, label] = stateOf(p); return {name: p.name, st, label}; });
   const open = n => act("selectProject", n);
-  const list = `<section class="fleet-strip" aria-label="Projects">${items.map(i =>
-    `<button class="chip" ${open(i.name)}><span class="dot ${i.st}"></span>${esc(i.name)}<small>${esc(i.label)}</small></button>`).join("")}</section>`;
-  if(!harbor) return list;
+  if(!harbor) return "";
   const map = fleetView === "map";
   const hull = `<svg class="hull" width="34" height="22" viewBox="0 0 40 26" aria-hidden="true" fill="currentColor"><path d="M4 18h32l-5 6H9z"/><rect x="14" y="4" width="12" height="14"/></svg>`;
   const berths = `<section class="berths" aria-label="Projects, map">${harbor.berthOrder(items).map(i =>
     `<button class="berth ${i.st}" ${open(i.name)}>${hull}<span class="berth-name"><span class="dot ${i.st}"></span>${esc(i.name)}</span><small>${esc(i.label)}</small></button>`).join("")}</section>`;
   const seg = (k, t) => btn(t, {size: "small", variant: fleetView === k ? "primary" : "", attrs: `aria-pressed="${fleetView === k}"`, click: act("setFleetView", k)});
-  return `<div class="fleet-wrap ${map ? "is-map" : ""}"><div class="fleet-tools"><sl-button-group label="Fleet view">${seg("map", "Map")}${seg("list", "List")}</sl-button-group></div>${map ? berths : ""}${list}</div>`;
+  return `<div class="fleet-wrap ${map ? "is-map" : ""}"><div class="fleet-tools"><sl-button-group label="Fleet view">${seg("map", "Map")}${seg("list", "List")}</sl-button-group></div>${map ? berths : ""}</div>`;
 }
 let fleetView = "list", harbor = null;
 try{ if(localStorage.getItem("quarterdeck.fleetView") === "map") fleetView = "map"; }catch(e){}
 function setFleetView(v){ fleetView = v === "map" ? "map" : "list"; try{ localStorage.setItem("quarterdeck.fleetView", fleetView); }catch(e){} render(); }
 import("/assets/harbor.js").then(m => { harbor = m; if(S) render(); }).catch(() => {});
+// Recently finished: small and collapsed, across every project; each row names its project. Finished missions and finished runs together, newest first.
+let finOpen = false;
+function finToggle(){ finOpen = !finOpen; render(); }
 function finishedCard(){
-  const rows = S.runs.filter(mine).filter(r => !routine(r)).slice(0, 5);
-  return card(null, (rows.map(r => li({title: mlink(runMissionId(r), r.duty + (r.detail ? ": " + r.detail.replace(/https?:\/\/\S+\/pull\/(\d+)/, "PR #$1") : ""), "title"),
-      sub: `${esc(r.project || "fleet")} · ${ago(r.at)}`, end: pill(verdictClass(r.verdict), r.verdict)})).join("")
-      || `<p class="hint">The first finished run will appear here.</p>`)
-    + `<p class="hint" style="margin-top:12px"><button class="mlink link" ${act("dockGo", "ledger")}>All of the Ledger</button></p>`, {kicker: "Recently finished", label: "Recently finished"});
+  const runs = S.runs.filter(mine).filter(r => !routine(r)).slice(0, 8).map(r => ({id: runMissionId(r), title: r.duty + (r.detail ? ": " + r.detail.replace(/https?:\/\/\S+\/pull\/(\d+)/, "PR #$1") : ""), project: r.project || "fleet", when: r.at, verdict: r.verdict}));
+  const done = recentMissions(40).filter(x => x.state === "done").slice(0, 8).map(x => ({id: x.id, title: x.title, project: x.project || "no project", when: x.when, verdict: "Done"}));
+  const rows = [...done, ...runs].filter(x => x.when).sort((a, b) => b.when.localeCompare(a.when)).slice(0, 6);
+  const list = rows.map(x => li({title: mlink(x.id, x.title, "title"), sub: `${esc(x.project)} · ${ago(x.when)}`, end: pill(x.verdict === "Done" ? "good" : verdictClass(x.verdict), x.verdict)})).join("");
+  const body = rows.length ? `<button class="mlink link" aria-expanded="${finOpen}" ${act("finToggle")}>${finOpen ? "Hide" : "Show"} the last ${rows.length}</button>${finOpen ? `<div id="fin-list">${list}</div>${asst ? `<div class="away">${awayText()}</div>` : ""}` : ""}`
+    : `<p class="hint">The first finished run will appear here.</p>`;
+  return card(null, body, {kicker: "Recently finished", count: rows.length || null, label: "Recently finished", cls: "fin"});
 }
 function budgetCard(){
   const budget = Number(S.spend.daily_budget || 0), spent = Number(S.spend.today || 0);
-  if(!budget) return card(null, `<p class="hint">No daily budget is set. Spent today: ${usd(spent)}.</p><p class="hint" style="margin-top:12px"><button class="mlink link" ${act("dockGo", "spend")}>View usage</button></p>`, {kicker: "Budget"});
+  if(!budget) return card(null, `<p class="hint">No daily budget is set, so nothing stops automatic work for cost. Spent today: ${usd(spent)}.</p><p class="hint" style="margin-top:12px"><button class="mlink link" ${act("dockGo", "spend")}>View usage</button></p>`, {kicker: "Budget today", label: "Budget"});
   const used = Math.min(8, Math.round(spent / budget * 8));
-  return card(null, `<div class="budget"><b>${usd(spent)} of ${usd(budget)}</b><span class="sub">today, fleet-wide</span></div>
+  return card(null, `<div class="budget"><b>${usd(spent)} of ${usd(budget)}</b><span class="sub">today, every project</span></div>
     <div class="stat-row" aria-hidden="true">${Array.from({length: 8}, (_, i) => `<i class="${i < used ? "on" : ""}"></i>`).join("")}</div>
-    <p class="hint" style="margin-top:12px">API-equivalent prices. <button class="mlink link" ${act("dockGo", "spend")}>View usage</button></p>`, {kicker: "Budget today", label: "Budget"});
+    <p class="hint" style="margin-top:12px">The daily cap is ${usd(budget)}${spent >= budget ? ", and it is reached: scheduled and queued work has stopped" : ": scheduled and queued work stops when it is reached"}. API-equivalent prices. <button class="mlink link" ${act("dockGo", "spend")}>View usage</button></p>`, {kicker: "Budget today", label: "Budget"});
+}
+/* ---- Home is the person, across everything: one calm next action, Your day, Brain dump, the fleet timeline, Recently finished and the Budget, and one line
+   that says how much needs you and links to Projects. Nothing about one project lives here (Needs you and the Mission trajectory are on Projects). ---- */
+function homeCount(){
+  const items = obsAttention(false), n = items.length;
+  if(!n) return `<p class="home-count hint" role="status">Nothing needs you right now.</p>`;
+  const projects = new Set(items.filter(x => !x.addon && x.project).map(x => x.project)), addons = new Set(items.filter(x => x.addon).map(x => x.addon.id));
+  const where = [projects.size ? `in ${projects.size} ${plural(projects.size, "project")}` : "", addons.size ? `from ${addons.size} ${plural(addons.size, "add-on")}` : ""].filter(Boolean).join(" and ");
+  return `<p class="home-count"><button class="mlink link" ${act("openProjects")}>${n} ${plural(n, "thing needs", "things need")} you${where ? " " + where : ""}</button></p>`;
+}
+// The next action: the person's day first (an overdue reminder, or a meeting in the next three hours), else the one most urgent thing across projects, always saying whose it is.
+function homeNext(){
+  const now = Date.now(), rem = connOf("reminders"), cal = connOf("calendar");
+  const r = asst && rem && rem.connected ? asst.remindersSummary(connItems("reminders"), now) : null;
+  if(r && r.overdue.length) return {tag: "Your day", title: "Overdue: " + r.overdue[0].title, why: r.overdue.length > 1 ? `${r.overdue.length} reminders are overdue.` : "One reminder is overdue.", label: "See Your day", day: true};
+  const soon = cal && cal.connected ? connItems("calendar").filter(i => i.at && !/all day/i.test(i.sub || "") && Date.parse(i.at) > now && Date.parse(i.at) - now < 3 * 3600e3).sort((a, b) => Date.parse(a.at) - Date.parse(b.at))[0] : null;
+  if(soon) return {tag: "Your day", title: "Next: " + soon.title, why: "At " + new Date(soon.at).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"}) + ".", label: "See Your day", day: true};
+  let n = nextCur = nextNow();
+  const att = obsAttention(false);
+  if(!n) return null;
+  if(n.act === "attach") return {tag: "", title: n.title, why: n.why, label: n.label, n};
+  if(/^Nothing needs you/.test(n.title)){
+    const x = att[0];
+    if(!x) return null;                                    // nothing is pressing: nothing is shown
+    n = nextCur = {title: x.source, why: x.text, label: x.blocker === "config" ? "Inspect blocker" : "Inspect", go: x.view, project: x.project};
+    return {tag: x.addon ? "Add-on: " + x.addon.label : x.project || "", title: n.title, why: n.why, label: n.label, n};
+  }
+  const x = att.find(a => n.title.startsWith(a.source));
+  const m = /^Review PR #\d+ on (\S+)$/.exec(n.title);
+  return {tag: x && x.addon ? "Add-on: " + x.addon.label : n.project || (x && x.project) || (m ? m[1] : (/^\S+ failed on (\S+)$/.exec(n.title) || [])[1] || ""), title: n.title, why: n.why, label: n.label, n};
+}
+function homeDay(){ const el = $("#home-day"); if(el){ el.scrollIntoView({block: "center"}); el.focus({preventScroll: true}); } }
+const tlLane = (l, L) => `<div class="tl-lane"><div class="tl-name" title="${esc(l.name)}">${esc(l.name)} <small>${l.total}</small></div>
+    <div class="tl-track" role="group" aria-label="${esc(l.name)}: ${l.total} events">${l.bins.map(b => `<button class="tlm c-${b.cls}" style="left:${tl.pct(b, L.from, L.to).toFixed(2)}%"
+      data-t="${esc(tl.binText(b, tlTime))}" data-l="${esc(l.name)}" data-i="${b.i}" ${actOn("hover", "tlHover", T.el)} ${actOn("focus", "tlHover", T.el)} ${act("tlClick", T.el)}
+      aria-label="${esc(tl.binText(b, tlTime))}"><span>${b.n > 1 ? b.n : ""}</span></button>`).join("")}</div></div>`;
+function homeTimeline(){
+  if(!S.projects.length || !tl) return "";
+  const d = tlData["24h"], events = d ? d.events : [], now = d && d.now ? Date.parse(d.now) : Date.now();
+  const track = document.querySelector(".tl-track"), room = track ? track.clientWidth : innerWidth - (innerWidth > 760 ? 76 : 0) - 56 - (innerWidth > 700 ? 160 : 100);
+  const L = tlLast = tl.buildLanes(events, {windowKey: "24h", now, projects: S.projects.map(p => p.name), buckets: Math.max(4, Math.min(48, Math.floor(room / 44)))});
+  const body = d && d.now ? (L.total ? `<div class="tl-lanes">${L.lanes.map(l => tlLane(l, L)).join("")}</div>
+      <div id="tl-detail" class="tl-detail" aria-live="polite">${L.total} event${L.total === 1 ? "" : "s"} in the last 24 hours, every project. Hover or focus a marker for detail.</div>`
+    : `<p class="hint">Nothing has run in the last 24 hours.</p>`) : `<p class="hint">Reading the ledger…</p>`;
+  return card(null, body, {kicker: "Fleet timeline", cls: "timeline-card", attrs: 'data-calm="hide"', count: "last 24 hours", actions: `<button class="mlink link" ${act("dockGo", "timeline")}>Open the full timeline</button>`, label: "Fleet timeline"});
 }
 function viewCommandCenterNew(){
   if(filter) return viewHomeSearch();
-  const f = homeFacts();
-  let n = nextCur = nextNow();
-  // The headline counts every blocker and every pull request waiting for you; the next step must not say "nothing needs you" beside it.
-  if(n && /^Nothing needs you/.test(n.title) && (f.att.length || f.waiting.length)){
-    const x = f.att[0], w = f.waiting[0];
-    n = nextCur = x ? {title: x.source, why: x.text, label: x.blocker === "config" ? "Inspect blocker" : "Inspect", go: x.view}
-                    : {title: "A pull request is waiting for your review", why: w.title, label: "Open it", url: w.pr};
-  }
-  if(n) loadBrainPrs();
-  const h = homeHeadline(f, n);
-  const events = tl ? tl.recentStrip(S.runs.filter(mine), sel ? [] : extEvents(), 12) : [];
-  const nextBlock = n ? `<section class="card next-card tone-${h.state === "idle" ? "" : h.state}" aria-label="Next step"><div><div class="kicker">Next step</div><h2>${esc(n.title)}</h2><p>${esc(n.why)}</p>${asst ? `<div class="away">${awayText()}</div>` : ""}</div>
-      ${btn(esc(n.label), {variant: "primary", click: act("runNext")})}</section>` : "";
-  if(h.noProjects) return nextBlock + `<div style="margin-top:20px">${homeNow()}</div>`;
-  return nextBlock + `<div class="home-grid">${calmHide(trajectoryCard(f))}${needsCard(f)}</div>` + calmHide(fleetStrip(f)) + calmHide(homeNow())
-    + (events.length ? card(null, `<div class="tl-strip" role="list" aria-label="The last ${events.length} events, newest first">${(tlEvents.length = 0, events.map(tlChip).join(""))}</div>`,
-        {kicker: "Fleet timeline", cls: "timeline-card", attrs: 'data-calm="hide"', actions: `<button class="mlink link" ${act("dockGo", "timeline")}>Open the Timeline</button>`, label: "Fleet timeline"}) : "")
-    + `<div class="home-row">${calmHide(finishedCard())}${calmHide(budgetCard())}</div>`;
+  if(S.projects.length) loadBrainPrs();
+  const nx = homeNext();
+  const nextBlock = nx ? `<section class="card next-card tone-${nx.n && /failed|blocked|BLOCKED/.test(nx.title) ? "blocked" : "awaiting"}" aria-label="Next action"><div><div class="kicker">Next${nx.tag ? " · " + esc(nx.tag) : ""}</div><h2>${esc(nx.title)}</h2><p>${esc(nx.why)}</p></div>
+      ${btn(esc(nx.label), {variant: "primary", click: nx.day ? act("homeDay") : act("runNext")})}</section>` : "";
+  if(!S.projects.length) return nextBlock + `<div style="margin-top:20px">${homeNow()}</div>`;
+  return nextBlock + homeCount() + homeNow() + homeTimeline() + `<div class="home-row">${calmHide(finishedCard())}${calmHide(budgetCard())}</div>`;
+}
+/* ---- Projects: the place where the work is. It opens on every project together (one card each, then the add-ons, what needs you, and the missions);
+   choosing a project (the Open button, a berth or the scope box) makes the same place show that project: its facts, its Ready card, its tickets and
+   its guardrails, and the tabs (Needs you, Missions, Pull requests, Board, Ledger and the rest) show only that project. The scope lives in the address. ---- */
+const PJ_STATE = {blocked: ["Blocked", "bad", "blocked"], "needs you": ["Needs you", "warn", "awaiting"], running: ["Running", "blue", "running"], idle: ["Idle", "", ""]};
+const pjOf = name => ((S && S.overview) || []).find(o => o.name === name) || null;
+function projectCard(o, opts = {}){
+  const st = PJ_STATE[o.state] || PJ_STATE.idle, short = (t, n) => t.length > n ? t.slice(0, n - 1).trimEnd() + "…" : t;
+  const needs = o.needs ? `<b>${o.needs}</b> ${plural(o.needs, "thing")}${o.top ? ": " + esc(short(String(o.top.text || ""), 110)) : ""}` : "Nothing needs you.";
+  const last = o.last_run ? `${esc(o.last_run.duty)}, ${pill(verdictClass(o.last_run.verdict), o.last_run.verdict)} ${esc(ago(o.last_run.at))}` : "No run recorded yet.";
+  const dl = `<dl class="pj-facts"><div><dt>Needs you</dt><dd>${needs}</dd></div><div><dt>Last run</dt><dd>${last}</dd></div>
+      <div><dt>Spend</dt><dd>${usd(o.spend_today)} today, ${usd(o.spend_week)} in 7 days</dd></div>
+      <div><dt>Missions</dt><dd>${o.missions_open} open, ${o.missions_done} finished</dd></div></dl>`;
+  const act1 = opts.open === false ? "" : btn("Open", {variant: "primary", size: "small", click: act("openProject", o.name), attrs: `aria-label="Open ${esc(o.name)}"`});
+  const ready = opts.open === false ? "" : `<button class="mlink link" ${act("openProject", o.name, true)} aria-label="Is ${esc(o.name)} ready?">Ready?</button>`;
+  const own = opts.open === false;                           // on the project's own page the heading above already names it and gives the stack sentence
+  return card(own ? null : o.name, `${o.stack && !own ? `<p class="sub pj-stack">${esc(o.stack)}</p>` : ""}${dl}${act1 || ready ? `<div class="btns pj-go">${act1}${ready}</div>` : ""}`,
+    {cls: "pj-card", tone: st[2], label: o.name, kicker: own ? "At a glance" : null, actions: pill(st[1], st[0]), attrs: `data-project="${esc(o.name)}" data-state="${esc(o.state)}"`});
+}
+function openProject(name, ready){
+  if(ready){ rdScope(name); RD.show = true; }                 // the Ready? link opens the project with its checklist showing
+  selectProject(name);
+  if(ready) focusSoon("#rd-next");
+}
+function addonNeeds(id){ setKept(""); atPlace = ""; localStorage.setItem("quarterdeck.place", ""); scopeAddon = id; go("inbox"); }
+function openProjects(){ setKept(""); curLog = null; board = null; boardFor = null; prs = null; prsFor = null; scopeAddon = ""; atPlace = ""; localStorage.setItem("quarterdeck.place", ""); go("projects"); }
+// The add-ons, apart from the projects: only an add-on with an alert or a place of its own is listed. An alert never goes to the top of Home.
+function addonsStrip(){
+  const att = obsAttention(false), rows = addonList().map(a => ({a, alerts: att.filter(x => x.addon && x.addon.id === a.id)})).filter(r => r.alerts.length || (r.a.place && isPlace(r.a.place)));
+  if(!rows.length) return "";
+  const row = ({a, alerts}) => li({icon: "plug", title: `${pill("", "Add-on: " + a.label)} ${alerts.length ? esc(alerts[0].text) : "Nothing needs you."}`,
+    sub: alerts.length ? `${alerts.length} ${plural(alerts.length, "alert")}${alerts[0].at ? " · " + esc(ago(alerts[0].at)) : ""}` : "Has its own page.",
+    end: (a.place && isPlace(a.place) ? btn("Open " + esc(a.label), {size: "small", click: act("selectPlace", a.place)}) : "")
+      + (alerts.length ? btn("See in Needs you", {size: "small", variant: "primary", click: act("addonNeeds", a.id)}) : "")});
+  return card(null, rows.map(row).join(""), {kicker: "Add-ons", count: rows.reduce((n, r) => n + r.alerts.length, 0) || null, cls: "addons", label: "Add-ons"});
+}
+function projectsOverview(){
+  const f = homeFacts(), ov = (S.overview || []).filter(o => S.projects.some(p => p.name === o.name));
+  const cards = ov.length ? `<div class="pj-grid">${ov.map(o => projectCard(o)).join("")}</div>` : `<sl-skeleton effect="sheen" style="height:140px"></sl-skeleton>`;
+  return `<div class="stack">${calmHide(fleetStrip(f))}${cards}${addonsStrip()}${needsCard(f.att, f.waiting)}${calmHide(trajectoryCard(f))}</div>`;
+}
+// A stand-in for the editable guardrails card (the next change replaces its body): today it is the read-only summary and the button that opens the existing dialog.
+function guardrailsCard(project){
+  const p = (S.projects || []).find(x => x.name === project);
+  if(!p) return "";
+  const g = p.guardrails || [];
+  return card(null, g.length ? `<p class="hint">${g.length} ${plural(g.length, "rule")} ${plural(g.length, "is", "are")} put into every prompt for this project, for every agent.</p>
+      <ul class="pj-rules">${g.slice(0, 3).map(x => `<li>${esc(x)}</li>`).join("")}</ul>${btn("Show all " + g.length + " guardrails", {size: "small", click: act("showGuardrails")})}`
+    : `<p class="hint">No guardrails are set for this project.</p>`, {kicker: "Guardrails", count: g.length || null, label: "Guardrails", cls: "guardrails"});
+}
+function projectPage(){
+  const o = pjOf(sel), f = homeFacts();
+  return `<div class="stack pj-page">${o ? projectCard(o, {open: false}) : ""}${needsCard(f.att.filter(x => !x.addon), f.waiting, 3)}${readyCard(sel)}${readyLink(sel)}${repoOptionsCard(sel)}${ticketsCard(sel)}
+    <div id="guardrails-slot">${guardrailsCard(sel)}</div></div>`;
+}
+function viewProjects(){
+  if(!S.projects.length) return emptyState({kicker: "Projects", title: "No projects yet.", body: "Add a project and the crew has something to look after.", label: "Add a project", click: act("openAttach")});
+  return sel ? projectPage() : projectsOverview();
 }
 function viewMissions(){
   const missions = (S.missions || []).filter(mine).filter(m => hit(m.project, m.objective))
@@ -1322,7 +1427,7 @@ function viewMissions(){
         sub: `${esc(p.project)} · ${esc(p.discipline)} · ${esc(p.status)} · ${ago(p.started)}`})).join("")
       : emptyState({inline: true, title: "No current panels in this scope.", body: "Open Panels to inspect historical work or run a new review."}),
       {kicker: "Available evidence", label: "Available evidence"});
-  return `<div class="stack">${readyCard(sel)}${readyLink(sel)}${repoOptionsCard(sel)}${ticketsCard(sel)}${intro}<div id="missionform"></div><div class="mission-list">${list}</div>${ev}</div>`;
+  return `<div class="stack">${trajectoryCard(homeFacts())}${intro}<div id="missionform"></div><div class="mission-list">${list}</div>${ev}</div>`;
 }
 function viewInbox(){
   const alerts = obsAttention().filter(x => hit(x.source,x.text,x.kind));
@@ -1375,8 +1480,8 @@ function recentMissions(limit = 8){
   const cy = (S.cycles || []).filter(mine).map(c => ({id: "cycle:" + c.id, title: `Cycle · ${Number.isInteger(c.ticket) ? "ticket #" + c.ticket : "#" + c.issue} ${c.title || ""}`.trim(), project: c.project,
     state: c.status === "running" ? "running" : c.status === "awaiting-review" ? "awaiting" : ["needs-human", "failed", "stopped-cap", "stopped-ceiling"].includes(c.status) ? "blocked" : "done",
     when: c.finished || c.started || ""}));
-  // a design brief or a sprint plan waiting for you is a mission too; a brief for a new idea has no project and shows whatever is picked
-  const bf = (S.briefs || []).filter(b => mine(b) || !b.project).map(b => ({id: "brief:" + b.id, title: "Brief · " + b.title, project: b.project,
+  // a design brief or a sprint plan waiting for you is a mission too; a brief for a new idea has no project yet, so it shows with every project together and under none in particular
+  const bf = (S.briefs || []).filter(b => sel ? b.project === sel : true).map(b => ({id: "brief:" + b.id, title: "Brief · " + b.title, project: b.project,
     state: b.status === "drafting" || b.mockups === "working" ? "running" : b.status === "failed" || b.mockups === "failed" ? "blocked"
       : ["proposed", "changes_requested"].includes(b.status) || b.mockups === "ready" ? "awaiting" : "done", when: b.at || ""}));
   const pl = (S.plans || []).filter(mine).map(p => ({id: "plan:" + p.id, title: `Sprint plan · ${p.project}`, project: p.project,
@@ -1419,7 +1524,7 @@ async function loadTickets(force){
       const before = JSON.stringify(TK.data);
       TK.data = j;
       const changed = ticketsSettle(j) || JSON.stringify(j) !== before;
-      if(changed && view === "missions" && !tkTyping()) render();
+      if(changed && view === "projects" && !tkTyping()) render();
     }
   }catch(e){ /* the next poll asks again */ }
   finally{ TK.loading = false; }
@@ -1595,7 +1700,7 @@ async function loadReady(force){
       const before = JSON.stringify(RD.data);
       RD.data = j;
       const changed = rdSettle(j) || JSON.stringify(j) !== before;
-      if(changed && view === "missions" && !tkTyping()) render();
+      if(changed && view === "projects" && !tkTyping()) render();
     }
   }catch(e){ /* the next poll asks again */ }
   finally{ RD.loading = false; }
@@ -3343,7 +3448,7 @@ function yourDay(){
     ${rem && rem.connected ? `<div class="sec-h">Reminders${r.overdue.length ? ` · ${r.overdue.length} overdue` : ""}</div>
       ${due.slice(0, 4).map(i => row({title: i.title, time: new Date(i.at).getTime() < now ? "overdue" : "today"})).join("") || '<p class="hint">Nothing due today.</p>'}
       ${r.undated ? `<div class="cap-item"><span>${r.undated} more with no date</span></div>` : ""}` : ""}`,
-    {kicker: "Your day", count: fresh, label: "Your day"});
+    {kicker: "Your day", count: fresh, label: "Your day", attrs: 'id="home-day" tabindex="-1"'});
 }
 function homeNow(){
   const C = S.captures || {items: [], open: 0};
@@ -3460,7 +3565,7 @@ function attachDone(j){        // the drawer's last screen: the real checklist, 
   $("#dbody").innerHTML = `<p>${esc(name)} is in your registry, and its survey is kept in your data folder. Nothing was changed inside the project.</p>
     <div class="sec-h">Is it ready?</div>${readyItemsHtml(r.items, null)}
     <p class="sub">Next: ${esc(r.next.text)}</p>
-    <div class="btns">${btn("Open the Ready card", {variant: "primary", click: act("seq", ["closeDrawer"], ["selectProject", name], ["rdShow"], ["go", "missions"])})}${btn("Close", {click: act("closeDrawer")})}</div>`;
+    <div class="btns">${btn("Open the Ready card", {variant: "primary", click: act("seq", ["closeDrawer"], ["selectProject", name], ["rdShow"], ["go", "projects"])})}${btn("Close", {click: act("closeDrawer")})}</div>`;
   focusSoon("#dtitle");
 }
 const drawerOn = () => { const d = $("#drawer"); return !!(d && d.open); };
@@ -3483,6 +3588,7 @@ function paletteResults(q){
   const out = [];
   const push = (scope, label, action) => out.push({scope, label, action});
   if(q.length >= 3 && hitq(q, "brain", "3d map", "memory map")) push("place", "Brain", act("seq", ["closePalette"], ["dockGo", "brain"]));
+  if(q.length >= 3 && hitq(q, "projects", "all projects", "overview")) push("place", "Projects, every project together", act("seq", ["closePalette"], ["openProjects"]));
   for(const p of S.projects) if(hitq(q, p.name)) push("project", p.name, act("seq", ["selectProject", p.name], ["closePalette"]));
   for(const m of S.missions || []) if(hitq(q, m.objective, m.project))
     push(`mission · ${m.project}`, m.objective, act("seq", ["closePalette"], ["selectProject", m.project], ["go", "missions"], ["openMission", m.id]));
@@ -4062,7 +4168,7 @@ async function doCommand(t, opts = {}){
   if(!asst) return "Still loading. Try again in a second.";
   if(cv) mem = cv.expire(mem, Date.now());
   const placeName = id => (EXT.places.find(pl => pl.id === id) || {}).label;
-  const views = [...VIEWS.filter(v => !v.hidden).map(v => ({id: v.id, label: v.place ? placeName(v.place) + " " + v.label : v.label})), {id: "overview", label: "Home"}, ...EXT.places.map(pl => ({id: pl.id, label: pl.label}))];
+  const views = [...VIEWS.filter(v => !v.hidden).map(v => ({id: v.id, label: v.id === "projects" ? "Projects" : v.place ? placeName(v.place) + " " + v.label : v.label})), ...EXT.places.map(pl => ({id: pl.id, label: pl.label}))];
   let c = asst.parseCommand(t, {views, projects: S.projects.map(p => p.name), duties: [...new Set(S.projects.flatMap(p => p.duties || []))]});
   if(c.intent === "unknown") c = await understandRemote(t, views, c);
   $("#talk-confirm").replaceChildren();
@@ -4225,7 +4331,7 @@ function setBrainMode(m){
 const rhythmProject = () => ((S && S.projects) || []).some(p => p.name === sel) ? sel : "";
 function rhythmScope(v){
   if(v === sel) return;
-  sel = v; localStorage.setItem("quarterdeck.project", v); curLog = null; board = null; boardFor = null; prs = null; prsFor = null; scopeAddon = "";
+  setKept(v); curLog = null; board = null; boardFor = null; prs = null; prsFor = null; scopeAddon = "";
   routeTouch(); renderProjSwitch(); paintFocus(true); rhythmSync();
 }
 // Replay: drag a day slider and the nodes re-size from that day's buckets, with that day's Ledger events in the panel.
@@ -4723,14 +4829,13 @@ function scopeNow(){
 const scopeChip = sc => `<button class="chip scope-chip" data-kind="${sc.kind}" ${act("openScope")} aria-label="Scope: ${esc(sc.label)}. Change the scope." title="What this page shows. Choose a project or an add-on.">${slIcon("folder2")}<b>${esc(sc.label)}</b></button>`;
 function openScope(){ const el = $("#proj-switch"); if(el && el.show) el.show(); else if(el) el.focus(); }
 function pageMeta(v){
-  const g = groupOf(v.id), scope = v.id === "brain" ? null : scopeNow();
+  const g = groupOf(v.id), scope = v.id === "brain" || !(atPlace || scopeApplies(v.id)) ? null : scopeNow();
   const where = atPlace ? ((EXT.places.find(pl => pl.id === atPlace) || {}).label || "") : g ? g.label : v.label;
   const kicker = [where, v.id !== "overview" && g && g.views.length > 1 ? v.label : ""].filter(Boolean).join(" · ");
   const p = atPlace || v.id === "brain" || v.id === "fleet" ? null : S.projects.find(x => x.name === sel);
   let title = p ? `${sel} · ${v.title}` : v.title, sub = v.sub, acts = "";
-  if(v.id === "overview" && !atPlace){
-    const f = homeFacts(), h = homeHeadline(f, nextNow());
-    title = h.text; sub = h.sub; acts = h.noProjects ? "" : pill(h.state, h.state === "idle" ? "Idle" : MSTATE[h.state][0]);
+  if(v.id === "projects" && p){
+    title = sel; sub = (pjOf(sel) || {}).stack || p.summary || v.sub;
   } else if(v.id === "mission" && missionNow()){
     const m = missionNow(); title = m.title; sub = m.line || ""; acts = pill(m.state, (MSTATE[m.state] || MSTATE.idle)[0]);
     return {kicker: `Mission · ${m.mission_ref}`, title, sub, acts, p: null, scope, project: m.project ? ["Project", m.project] : m.addon ? ["Add-on", (addonList().find(a => a.id === m.addon || a.place === m.addon) || {}).label || m.addon.charAt(0).toUpperCase() + m.addon.slice(1)] : ["Project", "None"]};
@@ -4738,7 +4843,7 @@ function pageMeta(v){
     const rows = crewRows().filter(r => r.state !== "off"), n = rows.length, run = rows.filter(r => r.state === "running").length, att = rows.filter(r => r.state === "attention").length;
     const where = sel ? `on ${sel}` : `across ${S.projects.length} ${plural(S.projects.length, "project")}`;
     sub = `${n} ${plural(n, "agent")} ${where}: ${run ? run + " running" : "none running"}, ${att ? att + " " + plural(att, "needs", "need") + " attention" : "none need attention"}. A run only reports unless you switch on Write for real.`;
-  } else if(v.id === "spend") sub = v.sub + " Figures shown are fleet-wide regardless of project selection.";
+  } else if(v.id === "spend") sub = v.sub + " Figures shown are for every project together.";
   else if(v.id === "board" && p && p.board && boardFor === sel && board && board.fetched) sub = v.sub + "  ·  read " + ago(board.fetched);
   if(p) acts = `${p.repo ? `<a class="pill blue" href="https://github.com/${esc(p.repo)}" target="_blank" rel="noopener">${esc(p.repo)} ↗</a>
        <a class="pill" href="https://github.com/${esc(p.repo)}/issues" target="_blank" rel="noopener">issues ↗</a>` : pill("", "no GitHub repo")}
@@ -4749,6 +4854,7 @@ function pageMeta(v){
 }
 function render(){
   if(!S) return;
+  syncSel();
   if(cardSel && (view !== "board" || cardSel.project !== sel)) closeCard();
   if(schedOpen && $("#s-project")) schedDraft = {
     project:$("#s-project").value, duty:$("#s-duty").value, args:$("#s-args").value,
@@ -4764,6 +4870,7 @@ function render(){
   };
   // A remembered view can belong to the other side of the rail; fall back to its front page.
   if(!VIEWS.some(x => x.id === view && (x.place || "") === atPlace)) view = atPlace || "overview";
+  syncSel();                                              // the project the page shows: the chosen one on a page with a scope, none elsewhere
   const v = VIEWS.find(x => x.id === view);
   const home = v.id === "overview" && !atPlace;
   const imm = v.id === "brain" && !atPlace;
@@ -4779,15 +4886,15 @@ function render(){
   if(document.title !== meta.title + " · Quarterdeck"){ document.title = meta.title + " · Quarterdeck"; if(annRunning !== null) announce(meta.title); }
   const brainMounted = v.id === "brain" && !brainErr && $("#brain-slot .brain-host");
   const keep = ["cap-in", "note-new", "note-q", "note-edit", "bf-note"].map(id => ({id, e: document.getElementById(id)})).filter(k => k.e)
-    .map(k => ({id: k.id, v: k.e.value, f: document.activeElement === k.e, at: k.e.selectionStart, to: k.e.selectionEnd}));
+    .map(k => ({id: k.id, v: k.e.value, f: document.activeElement === k.e, at: k.e.selectionStart, to: k.e.selectionEnd})).filter(k => typeof k.v === "string");     // a field the browser has not upgraded yet has no value to keep
   const fleetNote = fleetProjects.has(sel) && !["fleet", "brain", "crew"].includes(v.id) && !atPlace
     ? `<div class="note-line">${esc(sel)} runs its own agents, so this page has nothing from Quarterdeck's duties. ${btn("See all its work in Fleet", {size: "small", variant: "primary", click: act("go", "fleet")})}</div>` : "";
   // Pages that are about a project say so plainly, with the one next step, when there are no projects at all.
-  const needsProject = !atPlace && S.projects && !S.projects.length && !(S.demo && S.demo.on) && ["panels", "documents", "board", "prs", "crew", "log", "ledger", "timeline", "operations"].includes(v.id);
+  const needsProject = !atPlace && S.projects && !S.projects.length && !(S.demo && S.demo.on) && ["projects", "panels", "documents", "board", "prs", "crew", "log", "ledger", "timeline", "operations"].includes(v.id);
   renderTabs(v.id);
   const hadTab = $("#view").contains(document.activeElement) && document.activeElement.tagName === "SL-TAB";
   if(needsProject) setHtml($("#view"), emptyState({kicker: v.label, title: "No projects yet.", body: "This page fills in once a project is added.", label: "Add a project", click: act("openAttach")}));
-  else if(!brainMounted) setHtml($("#view"), fleetNote + (({overview:viewCommandCenterNew, brain:viewBrain, missions:viewMissions, notes:viewNotes, timeline:viewTimeline, inbox:viewInbox, mission:viewMission,
+  else if(!brainMounted) setHtml($("#view"), fleetNote + (({overview:viewCommandCenterNew, projects:viewProjects, brain:viewBrain, missions:viewMissions, notes:viewNotes, timeline:viewTimeline, inbox:viewInbox, mission:viewMission,
                            showcase:viewShowcase, operations:viewOperations, panels:viewPanels, documents:viewDocuments,
                            board:viewBoard, prs:viewPrs, spend:viewSpend, crew:viewCrew, fleet:viewFleet, connections:viewConnections, settings:viewSettings, ledger:viewLedger, log:viewLog})[v.id] || v.render)());
   if(runBack && Date.now() < runBack.until && (!document.activeElement || document.activeElement === document.body)) setTimeout(() => focusRun(runBack.key), 40);   // the poll re-draws the rows: the Run button the dialog gave focus back to keeps it
@@ -4802,7 +4909,8 @@ function render(){
   renderSelBar();
   if(v.id === "log") loadLog();
   if(v.id === "timeline") loadTimeline();
-  if(v.id === "missions"){ loadTickets(); loadReady(); }
+  if(v.id === "projects"){ loadTickets(); loadReady(); }
+  if(v.id === "overview" && !atPlace) loadTimeline("24h");
   if(v.id === "fleet") loadFleet();
   if(v.id === "connections") loadConnections();
   if(v.id === "settings") loadSettings();
@@ -4928,7 +5036,6 @@ const ACTIONS = {
   briefNote: v => { briefUi.note = v; },
   tlClear: () => { tlUi.duty = tlUi.verdict = ""; tlSave(); render(); },
   selectBy: (pid, project, mode) => selectWhere(pid, project, mode === "serious" ? r => ["critical", "major"].includes(r.severity) : mode === "all" ? () => true : () => false),
-  openEvent: i => openEvent(tlEvents[i]),
   cycleProject: v => { cycleDlg.project = v; cycleDlg.est = null; paintCycleFacts(); loadCycleEstimate(); },
   cycleIssue: v => { cycleDlg.issue = v; paintCycleFacts(); },
   caseStepBy: d => caseStepTo(caseStep + d),
@@ -4950,7 +5057,7 @@ const ACTIONS = {
   selectAddon, selectPlace, selectProject, setBilling, setBrainMode, setCapSave, setFleetView, setHandsFree, setKeyRemove, setKeySave, setLens, setSizeBy, setTheme, sgSpeakToggle, showGuardrails, showLog, showPrivacy,
   startCycle, startMissionPanel, stopRun, talkSubmit, thinkToggle, tlClick, tlHover, tlSet, toggleCalm, toggleDemo, toggleLedger,
   toggleMissionForm, toggleMobileMenu, toggleOld, toggleReplay, toggleSched, toggleSel, toggleShowcaseForm, unpublishShowcase, unqueue, workOn,
-  trajToggle, tkRequest, tkDraft, tkFile, tkDiscard, tkRepoName, tkRepoSave, tkRepoCreate, tkMission,
+  openProject, openProjects, addonNeeds, homeDay, finToggle, trajToggle, tkRequest, tkDraft, tkFile, tkDiscard, tkRepoName, tkRepoSave, tkRepoCreate, tkMission,
   rdShow, rdToggle, rdNext, rdDraft, rdApply, rdTurnOn, rdCycle,
   ...EXT.actions,                                   // an add-on's own (assets/ext-*.js), by name
 };

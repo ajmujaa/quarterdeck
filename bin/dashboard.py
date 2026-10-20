@@ -3545,12 +3545,12 @@ def attach_api(b):
         if b.get("edits") is not None:
             prop = _attach.edit(prop, b["edits"])
         sv = _survey.survey(path, prop["name"])           # the survey (bin/survey.py): files only; it is kept only by the confirmed apply below
-        ready = None
+        applied = False
         if b.get("apply"):
             if b.get("confirm") is not True:
                 return 400, {"error": "confirm is required: this adds the project to your registry"}
             _attach.apply(prop, prof, PROJECTS_FILE, proposed, "owner, reviewed in the dashboard" if b.get("edits") is not None else "owner, with --apply", sv=sv)
-            ready = _ready.view(prop["name"])
+            applied = True
             if b.get("agents_md") is True:                  # opt-in, and only inside the confirmed apply
                 try:
                     agents = _attach.write_agents_md(prop, path)
@@ -3562,9 +3562,10 @@ def attach_api(b):
                     f.write(f"{iso(now_utc())} registered {log_field(prop['name'])}\n")
             except OSError:
                 pass                                   # a note that could not be written never undoes the registration
-        if ready is None:                                   # not registered yet: the checklist as it would be right after attaching
-            items = _attach.preview_items(prop, sv, str(path))
-            ready = {"project": prop["name"], "items": items, "next": {"kind": "attach", "text": "Add this project, then run the verify command once to prove it.", "command": ""}, "ready": False, "preview": True}
+        # the checklist, built from the entry that was (or would be) registered: as it is right after adding, or as it would be
+        items = _ready.build(prop["name"], prop["entry"], sv, {"duty_reasons": prop.get("duty_reasons", {})}, None, None, path=str(path), preview=not applied)
+        ready = {"project": prop["name"], "items": items, "ready": False, "preview": not applied,
+                 "next": _ready.next_action(prop["name"], prop["entry"], items, {"tickets": []}, str(path)) if applied else {"kind": "attach", "text": "Add this project, then run the verify command once to prove it.", "command": ""}}
         ready["docs_line"] = _attach.docs_line(sv).replace("<name>", prop["name"])
     except ValueError as e:
         return 400, {"error": str(e)}

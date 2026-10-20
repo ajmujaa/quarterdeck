@@ -45,4 +45,4 @@ log "prove $PROJECT: verify exit $rc in ${secs}s"
 if [ "$rc" = 0 ]; then say "  passed: exit 0 in ${secs}s [sandbox: ${RUN_SANDBOX:-none}]"
 else say "  failed: exit $rc in ${secs}s [sandbox: ${RUN_SANDBOX:-none}]"; fi
 say ""
-exec python3 "$QUARTERDECK_DIR/bin/ready.py" show "$PROJECT"
+python3 "$QUARTERDECK_DIR/bin/ready.py" show "$PROJECT"          # not exec: the trap above must still remove the worktree and the lock

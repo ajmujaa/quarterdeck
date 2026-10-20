@@ -176,7 +176,7 @@ def _docs_item(name, sv, draft, branch=None, entry=None):
     if branch:
         where = branch["url"] if branch.get("url") else f"the branch {branch['branch']}"
         review = f"git -C {expand((entry or {}).get('path', ''))} diff {(entry or {}).get('default_branch') or 'main'}...{branch['branch']}"
-        return {"key": "docs", "label": "Docs", "state": "todo", "detail": f"Drafted docs are waiting for your review in {where}. Read them and merge them yourself.", "action": review,
+        return {"key": "docs", "label": "Docs", "state": "todo", "detail": f"Drafted docs are waiting for your review in {where}. Read them and merge them yourself, then run qtdeck attach {expand((entry or {}).get('path', ''))} so the survey sees them.", "action": review,
                 "branch": branch["branch"], "missing": sorted(miss)}
     return {"key": "docs", "label": "Docs", "state": "todo",
             "detail": "Missing: " + " and ".join(names[k] for k in ("readme", "architecture") if k in miss) + ". The scribe can draft " + ("it" if len(miss) == 1 else "them")
@@ -187,7 +187,14 @@ def _docs_item(name, sv, draft, branch=None, entry=None):
 def _agents_item(name, entry, record):
     reasons = (record or {}).get("duty_reasons") or {}
     on = [d for d in entry.get("duties", [])]
-    on_rows = [{"duty": d, "why": _clip((reasons.get(d) or {}).get("why") or "turned on in the registry", 200)} for d in on]
+    def why_on(d):
+        r = reasons.get(d)
+        if isinstance(r, dict) and r.get("on") and r.get("why"):
+            return _clip(r["why"], 200)
+        if d in ("purser", "panel") and entry.get("cycle") is True:
+            return "a cycle goes through it"
+        return "turned on by you since the project was attached"
+    on_rows = [{"duty": d, "why": why_on(d)} for d in on]
     sugg = [{"duty": d, "why": _clip(v.get("why", ""), 200), "command": f"qtdeck enable {name} {d}"} for d, v in sorted(reasons.items())
             if isinstance(v, dict) and v.get("suggested") and d not in on]
     detail = f"{len(on)} on: " + ", ".join(on) + "." + (f" {len(sugg)} more fit this project and are off: {', '.join(s['duty'] for s in sugg[:6])}{'...' if len(sugg) > 6 else ''}." if sugg else "")
@@ -228,7 +235,7 @@ def next_action(name, entry, items, tk=None, path=None):
         cmd = f"qtdeck ready {name} --prove"
         return {"kind": "prove", "text": f"Run it once to prove it: {cmd}", "command": cmd}
     if v.get("failed"):
-        return {"kind": "fix-verify", "text": f"Fix the verify command ({_clip(v['hint'], 150)}), then prove it again: qtdeck ready {name} --prove", "command": f"qtdeck ready {name} --prove"}
+        return {"kind": "fix-verify", "text": f"Fix the verify command ({_clip(v['hint'], 260)}), then prove it again: qtdeck ready {name} --prove", "command": f"qtdeck ready {name} --prove"}
     open_t = sorted((t for t in (tk or {}).get("tickets", []) if t.get("status") == "open"), key=lambda t: t.get("id", 0))
     if open_t:
         t = open_t[0]

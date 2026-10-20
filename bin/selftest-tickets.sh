@@ -15,7 +15,7 @@
 ST_PROVIDER=fake
 source "$(dirname "${BASH_SOURCE[0]}")/selftest-lib.sh"
 st_init planner purser panel shipwright
-cp "$REAL"/bin/{tickets.py,repo.py,attach.py,scan.py,packs.py,qtdeck,cycle} "$T/bin/"
+cp "$REAL"/bin/{tickets.py,repo.py,attach.py,scan.py,packs.py,qtdeck,cycle,survey.py,ready.py,docs.py,prove} "$T/bin/"
 cp -R "$REAL/packs" "$T/packs"
 mkdir -p "$T/home" && export HOME="$T/home" XDG_CONFIG_HOME="$T/home/.config"
 export QUARTERDECK_HOME="$T" REAL; touch "$T/.quarterdeck-home"

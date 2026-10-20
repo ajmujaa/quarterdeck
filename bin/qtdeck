@@ -334,8 +334,8 @@ case "$cmd" in
       echo "  no projects yet. Run 'qtdeck add' inside a repository, or copy config/projects.example.json to $QUARTERDECK_HOME/config/projects.json and edit it."
     else
       # printf, not column: a bare Linux has no column, and the list came out empty
-      jq -r 'to_entries[] | "\(.key)\t\(.value.repo // "" | if . == "" then "(no GitHub repo)" else . end)\t\(.value.summary // "")\t\(.value.verify // "")\t\(.value.build // "")\t\(.value.lint // "")"' "$PROJECTS_FILE" \
-        | while IFS=$'\t' read -r pn pr ps pv pb pl; do
+      jq -r 'to_entries[] | "\(.key)\u001f\(.value.repo // "" | if . == "" then "(no GitHub repo)" else . end)\u001f\(.value.summary // "")\u001f\(.value.verify // "")\u001f\(.value.build // "")\u001f\(.value.lint // "")"' "$PROJECTS_FILE" \
+        | while IFS=$'\x1f' read -r pn pr ps pv pb pl; do
             printf '  %-20s %-34s %s\n' "$pn" "$pr" "$ps"
             printf '  %-20s verify: %s   build: %s   lint: %s\n' "" "${pv:-(none)}" "${pb:-(none)}" "${pl:-(none)}"
           done

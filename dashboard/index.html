@@ -1407,12 +1407,12 @@ function repoOptionsCard(project){
    readyCard(project) and readyItemsHtml(items) each return a string and read their data from RD (GET /api/ready), so a later page can move them whole.
    The writes are POSTs with confirm:true (bin/dashboard.py, "the ready checklist, the scribe's docs and the crew's switches"): /api/ready/prove (the verify
    command, once, in the sandbox), /api/docs/draft, /api/docs/apply (a NEW branch or a pull request, never the default branch), /api/project/duties. */
-const RD = {project: "", data: null, at: 0, loading: false, show: false, busy: "", error: "", how: false};
+const RD = {project: "", data: null, at: 0, loading: false, show: false, busy: "", error: "", how: false, open: {}};
 const RD_OFFER = {repo: 1, docs: 1, agents: 1, cycle: 1};            // offers, said calmly: never a blocker
 const rdData = project => RD.data && RD.data.project === project ? RD.data : null;
 function rdScope(p){        // a different project starts with a clean card
   if(RD.project === p) return;
-  Object.assign(RD, {project: p, data: null, at: 0, show: false, busy: "", error: "", how: false});
+  Object.assign(RD, {project: p, data: null, at: 0, show: false, busy: "", error: "", how: false, open: {}});
 }
 async function loadReady(force){
   const p = sel;
@@ -1445,7 +1445,7 @@ function rdSettle(j){        // something this page started has ended: say how i
     else announce("The verify command ran and failed. " + (v ? v.detail : ""));
   }else if(kind === "draft"){
     RD.error = docsErr;
-    if(docsErr) announce(docsErr); else if(j.draft) announce("The draft is ready to read. Nothing was written to your project.");
+    if(docsErr) announce(docsErr); else if(j.draft){ RD.open.docs = true; announce("The draft is ready to read. Nothing was written to your project."); }
   }else{
     RD.error = docsErr;
     if(docsErr) announce(docsErr); else toast(j.has_repo ? "The docs are on a new branch and a pull request was opened." : "The docs are on a new local branch. Nothing was pushed.");
@@ -1483,7 +1483,7 @@ function rdItemBody(i, d){
   return b;
 }
 function readyItemsHtml(items, d){
-  return `<div class="rd-list" role="list">${items.map(i => `<details class="rd-item" role="listitem"${i.state === "blocked" ? " open" : ""}><summary><span class="rd-label">${esc(i.label)}</span>${rdPill(i)}
+  return `<div class="rd-list" role="list">${items.map(i => `<details class="rd-item" role="listitem"${(RD.open[i.key] === undefined ? i.state === "blocked" : RD.open[i.key]) ? " open" : ""}><summary ${act("rdToggle", i.key)}><span class="rd-label">${esc(i.label)}</span>${rdPill(i)}
     <span class="sub">${esc(rdShort(i.detail))}</span></summary><div class="rd-body">${d ? rdItemBody(i, d) : `<p>${esc(i.detail)}</p>`}</div></details>`).join("")}</div>`;
 }
 function rdNextLabel(n){
@@ -1509,6 +1509,10 @@ function readyLink(project){
   const d = project ? rdData(project) : null;
   if(!d || !d.ready || RD.show) return "";
   return `<p class="note-line">${esc(project)} is ready for a first ticket. <button class="mlink link" ${act("rdShow")}>Ready? Show the checklist</button></p>`;
+}
+function rdToggle(key){        // the page redraws when something finishes: which items were open is kept here, not in the markup
+  const el = ACT_EL && ACT_EL.closest ? ACT_EL.closest("details") : null;
+  RD.open[key] = el ? !el.open : !RD.open[key];        // the click has not toggled the element yet when this runs
 }
 function rdShow(){ rdScope(sel); RD.show = true; render(); focusSoon("#rd-next"); }
 async function rdNext(){
@@ -4770,7 +4774,7 @@ const ACTIONS = {
   startCycle, startMissionPanel, stopRun, talkSubmit, thinkToggle, tlClick, tlHover, tlSet, toggleCalm, toggleDemo, toggleLedger,
   toggleMissionForm, toggleMobileMenu, toggleOld, toggleReplay, toggleSched, toggleSel, toggleShowcaseForm, unpublishShowcase, unqueue, workOn,
   tkRequest, tkDraft, tkFile, tkDiscard, tkRepoName, tkRepoSave, tkRepoCreate, tkMission,
-  rdShow, rdNext, rdDraft, rdApply, rdTurnOn, rdCycle,
+  rdShow, rdToggle, rdNext, rdDraft, rdApply, rdTurnOn, rdCycle,
   ...EXT.actions,                                   // an add-on's own (assets/ext-*.js), by name
 };
 

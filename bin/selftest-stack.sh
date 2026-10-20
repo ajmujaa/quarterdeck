@@ -192,7 +192,8 @@ ck "attach prints the stack line" '[ $r1 = 0 ] && grep -qE "^ +stack +React 18 w
 ck "attach prints verify, build and lint together, each with its reason" 'grep -qE "verify +npm test +\(package.json scripts.test\)" "$T/o1" && grep -qE "build +npm run build +\(package.json scripts.build\)" "$T/o1" && grep -qE "lint +npm run lint +\(package.json scripts.lint\)" "$T/o1"'
 ck "attach prints the duties that are on with a reason in a few words" 'grep -qE "duties +surveyor \(reads pull requests\), foreman \([^)]+\), inspector \([^)]+\), shipwright \(a verify command exists\)" "$T/o1"'
 ck "attach prints the one 'also fit this stack (off)' line" 'grep -qE "^ +also fit this stack \(off\): joiner, lookout, pilot" "$T/o1" && [ "$(grep -c "also fit this stack" "$T/o1")" = 1 ]'
-ck "attach stays compact (16 lines or fewer)" '[ "$(wc -l < "$T/o1")" -le 16 ]'
+# round 2: the dry run is the whole onboarding (docs, the crew with reasons, the ready checklist): longer than the 16 lines it once was, still bounded
+ck "attach stays compact (40 lines or fewer)" '[ "$(wc -l < "$T/o1")" -le 40 ]'
 qtd attach "$T/proj/react-vite" --verbose >"$T/o2" 2>&1
 ck "attach --verbose lists every fact with its file and a reason for every duty" 'grep -q "framework: React 18 \[package.json dependency react\]" "$T/o2" && grep -q "test: Vitest" "$T/o2" && grep -qE "joiner +off \(suggested\)" "$T/o2" && grep -qE "infra +off  no " "$T/o2" && grep -qE "shipwright +on " "$T/o2"'
 qtd attach "$T/proj/react-vite" --build 'npm run build -- --mode x' --lint 'make lint' >"$T/o3" 2>&1; r3=$?

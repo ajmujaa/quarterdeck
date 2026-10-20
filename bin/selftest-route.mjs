@@ -7,7 +7,7 @@ import {parseHash, buildHash, defaultRoute, validMissionId, validLogId, isPairHa
 
 const GROUPS = [
   {id: "home", views: ["overview"]}, {id: "brain", views: ["brain"]},
-  {id: "work", views: ["inbox", "missions", "prs", "board", "timeline", "operations", "ledger", "spend", "log"]},
+  {id: "projects", views: ["projects", "inbox", "missions", "prs", "board", "ledger", "timeline", "operations", "spend", "log"]},
   {id: "agents", views: ["crew", "fleet"]}, {id: "connections", views: ["connections"]},
   {id: "library", views: ["documents", "panels", "notes", "showcase"]}, {id: "settings", views: ["settings"]},
 ];
@@ -29,7 +29,7 @@ for (const g of GROUPS) {
   if (g.id === "brain") { for (const brain of ["map", "rhythm"]) states.push({group: "brain", view: "brain", brain}); continue; }
   for (const view of g.views) states.push({group: g.id, view});
 }
-states.push({group: "work", view: "mission"}, {group: "work", view: "log"});
+states.push({group: "projects", view: "mission"}, {group: "projects", view: "log"});
 ok("every group and view round-trips, with and without a project scope", () => {
   for (const s of states) for (const project of ["", ...known.projects]) {
     const want = {group: s.group, view: s.view, id: "", project, addon: "", brain: s.brain || ""};
@@ -43,17 +43,17 @@ ok("every group and view round-trips, with and without a project scope", () => {
 });
 ok("the table of addresses is the one in the docs", () => {
   const t = {
-    "#/home/overview": ["home", "overview"], "#/brain/map": ["brain", "brain"], "#/brain/rhythm": ["brain", "brain"], "#/work/inbox": ["work", "inbox"],
-    "#/work/missions": ["work", "missions"], "#/work/prs": ["work", "prs"], "#/work/board": ["work", "board"], "#/work/timeline": ["work", "timeline"],
-    "#/work/operations": ["work", "operations"], "#/work/ledger": ["work", "ledger"], "#/work/spend": ["work", "spend"], "#/work/log": ["work", "log"],
-    "#/work/mission": ["work", "mission"], "#/agents/crew": ["agents", "crew"], "#/agents/fleet": ["agents", "fleet"],
+    "#/home/overview": ["home", "overview"], "#/brain/map": ["brain", "brain"], "#/brain/rhythm": ["brain", "brain"], "#/projects/projects": ["projects", "projects"], "#/projects/inbox": ["projects", "inbox"],
+    "#/projects/missions": ["projects", "missions"], "#/projects/prs": ["projects", "prs"], "#/projects/board": ["projects", "board"], "#/projects/timeline": ["projects", "timeline"],
+    "#/projects/operations": ["projects", "operations"], "#/projects/ledger": ["projects", "ledger"], "#/projects/spend": ["projects", "spend"], "#/projects/log": ["projects", "log"],
+    "#/projects/mission": ["projects", "mission"], "#/agents/crew": ["agents", "crew"], "#/agents/fleet": ["agents", "fleet"],
     "#/connections/connections": ["connections", "connections"], "#/library/documents": ["library", "documents"], "#/library/panels": ["library", "panels"],
     "#/library/notes": ["library", "notes"], "#/library/showcase": ["library", "showcase"], "#/settings/settings": ["settings", "settings"],
   };
   for (const [h, [g, v]] of Object.entries(t)) { const r = parseHash(h, known); assert.ok(r.ok && r.group === g && r.view === v, h); }
   assert.equal(parseHash("#/brain/rhythm", known).brain, "rhythm");
-  assert.equal(parseHash("#/work/mission/cycle%3Aabc?project=mastyard", known).id, "cycle:abc");
-  assert.equal(parseHash("#/work/mission/cycle%3Aabc?project=mastyard", known).project, "mastyard");
+  assert.equal(parseHash("#/projects/mission/cycle%3Aabc?project=mastyard", known).id, "cycle:abc");
+  assert.equal(parseHash("#/projects/mission/cycle%3Aabc?project=mastyard", known).project, "mastyard");
 });
 ok("an add-on's place and its pages, and the add-on scope on Needs you", () => {
   assert.deepEqual(fields(parseHash("#/addon/hermes", known)), {group: "addon", view: "hermes", id: "", project: "", addon: "hermes", brain: ""});
@@ -63,12 +63,12 @@ ok("an add-on's place and its pages, and the add-on scope on Needs you", () => {
   assert.equal(parseHash("#/addon/nope", known).ok, false, "an add-on place that is not installed");
   assert.equal(parseHash("#/addon/hermes/other", known).ok, false, "a page the place does not have");
   assert.equal(parseHash("#/addon/hermes?project=mastyard", known).ok, false, "an add-on place has no project scope");
-  const r = parseHash("#/work/inbox?addon=scout", known);
-  assert.deepEqual(fields(r), {group: "work", view: "inbox", id: "", project: "", addon: "scout", brain: ""});
-  assert.equal(buildHash(r), "#/work/inbox?addon=scout");
-  assert.equal(parseHash("#/work/ledger?addon=scout", known).ok, false, "the add-on scope is only for Needs you");
-  assert.equal(parseHash("#/work/inbox?addon=ghost", known).ok, false, "an add-on that is not installed");
-  assert.equal(parseHash("#/work/inbox?project=mastyard&addon=scout", known).ok, false, "one scope at a time");
+  const r = parseHash("#/projects/inbox?addon=scout", known);
+  assert.deepEqual(fields(r), {group: "projects", view: "inbox", id: "", project: "", addon: "scout", brain: ""});
+  assert.equal(buildHash(r), "#/projects/inbox?addon=scout");
+  assert.equal(parseHash("#/projects/ledger?addon=scout", known).ok, false, "the add-on scope is only for Needs you");
+  assert.equal(parseHash("#/projects/inbox?addon=ghost", known).ok, false, "an add-on that is not installed");
+  assert.equal(parseHash("#/projects/inbox?project=mastyard&addon=scout", known).ok, false, "one scope at a time");
 });
 
 // ---- ids: a mission id with colons, a panel id, a ledger run, hostile text ----
@@ -77,7 +77,7 @@ const goodIds = ["cycle:abc", "cycle:cyc-a-7-1", "panel:20261015-090000-dev", "f
 ok("a mission id is encoded once and decoded once, whatever is in it", () => {
   for (const id of goodIds) {
     assert.equal(validMissionId(id), true, id);
-    const h = buildHash({group: "work", view: "mission", id, project: "mastyard"});
+    const h = buildHash({group: "projects", view: "mission", id, project: "mastyard"});
     assert.ok(/^[\x21-\x7e]+$/.test(h), "only printable ASCII in the address: " + h);
     assert.ok(!/[<>" `\\]/.test(h) && h.length <= MAX_HASH, h);
     const r = parseHash(h, known);
@@ -85,14 +85,14 @@ ok("a mission id is encoded once and decoded once, whatever is in it", () => {
     assert.equal(r.id, id, "decoded exactly once: " + h);
     assert.equal(r.project, "mastyard");
   }
-  assert.equal(parseHash("#/work/mission/fix%3Aa%253Ab%2523c", known).id, "fix:a%3Ab%23c", "a %25 in the address stays a literal %3A in the id: it is not decoded twice");
+  assert.equal(parseHash("#/projects/mission/fix%3Aa%253Ab%2523c", known).id, "fix:a%3Ab%23c", "a %25 in the address stays a literal %3A in the id: it is not decoded twice");
 });
 const hostile = ["", "x", ":", "cycle:", "../", "../../etc/passwd", "%00", "cycle:%00", "cycle:a\u0000b", "<script>alert(1)</script>", "cycle:<script>alert(1)</script>", 'cycle:"onmouseover="x',
   "cycle:`x`", "cycle:a\\b", "cycle:a\nb", "cycle:" + "z".repeat(250), "z".repeat(5000), "fix:a#pair=" + "A".repeat(32), "#pair=" + "A".repeat(32), "cycle:\ud800", "cycle:a?project=mastyard",
   "cycle:a&addon=hermes", "cycle:a/b/c", "CYCLE:abc", "cycle:é‮", "__proto__", "constructor", "toString"];
 ok("a hostile id is either kept exactly or left out; the address never holds it raw", () => {
   for (const id of hostile) {
-    const h = buildHash({group: "work", view: "mission", id});
+    const h = buildHash({group: "projects", view: "mission", id});
     assert.ok(h.length <= MAX_HASH, "bounded");
     assert.ok(/^#[\x21-\x7e]*$/.test(h) && !/[<>"`\\ ]/.test(h), "printable ASCII, nothing that closes markup: " + h);
     const r = parseHash(h, known);
@@ -105,34 +105,40 @@ ok("a hostile id is either kept exactly or left out; the address never holds it 
   for (const id of ["<script>alert(1)</script>", "../", "%00", "cycle:%00x".replace("%00", "\u0000"), "x"]) assert.equal(validMissionId(id), false, id);
 });
 ok("a hostile id typed straight into the address is refused, never decoded into the page", () => {
-  for (const h of ["#/work/mission/<script>alert(1)</script>", "#/work/mission/%3Cscript%3Ealert(1)%3C%2Fscript%3E", "#/work/mission/cycle%3A%3Cimg%20src%3Dx%3E", "#/work/mission/cycle%3A%00",
-    "#/work/mission/%00", "#/work/mission/../../x", "#/work/mission/cycle:a#pair=" + "A".repeat(32), "#/work/mission/%E0%A4%A", "#/work/mission/cycle%3Aa/extra",
-    "#/work/mission/cycle:" + "z".repeat(250), "#/work/mission/cycle%3A%5Cx"]) {
+  for (const h of ["#/projects/mission/<script>alert(1)</script>", "#/projects/mission/%3Cscript%3Ealert(1)%3C%2Fscript%3E", "#/projects/mission/cycle%3A%3Cimg%20src%3Dx%3E", "#/projects/mission/cycle%3A%00",
+    "#/projects/mission/%00", "#/projects/mission/../../x", "#/projects/mission/cycle:a#pair=" + "A".repeat(32), "#/projects/mission/%E0%A4%A", "#/projects/mission/cycle%3Aa/extra",
+    "#/projects/mission/cycle:" + "z".repeat(250), "#/projects/mission/cycle%3A%5Cx"]) {
     const r = parseHash(h, known);
     assert.equal(r.ok, false, h);
     assert.deepEqual(fields(r), fields(HOME));
   }
 });
 ok("a log id is <project>~<duty>", () => {
-  const r = parseHash("#/work/log/mastyard~surveyor", known);
+  const r = parseHash("#/projects/log/mastyard~surveyor", known);
   assert.deepEqual([r.view, r.id], ["log", "mastyard~surveyor"]);
-  assert.equal(buildHash(r), "#/work/log/mastyard~surveyor");
-  assert.deepEqual([parseHash("#/work/log/~heartbeat", known).view, parseHash("#/work/log/~heartbeat", known).id], ["log", "~heartbeat"], "a system log has no project");
+  assert.equal(buildHash(r), "#/projects/log/mastyard~surveyor");
+  assert.deepEqual([parseHash("#/projects/log/~heartbeat", known).view, parseHash("#/projects/log/~heartbeat", known).id], ["log", "~heartbeat"], "a system log has no project");
   assert.equal(validLogId("a~b~c"), false);
   assert.equal(validLogId("~"), false);
-  assert.equal(parseHash("#/work/log/nonsense", known).ok, false);
-  assert.equal(parseHash("#/work/inbox/mastyard~surveyor", known).ok, false, "only Mission and Log take an id");
+  assert.equal(parseHash("#/projects/log/nonsense", known).ok, false);
+  assert.equal(parseHash("#/projects/inbox/mastyard~surveyor", known).ok, false, "only Mission and Log take an id");
 });
 
 // ---- anything unknown, malformed, over-long or undecodable is Home, and nothing throws ----
-const bad = [undefined, null, 5, {}, [], "", "#", "#/", "#//", "#/home", "#/home/", "#/home/overview/x", "#/home/nope", "#/nope/overview", "#/work/nope", "#/work", "work/inbox", "#work/inbox",
+const badOld = [undefined, null, 5, {}, [], "", "#", "#/", "#//", "#/home", "#/home/", "#/home/overview/x", "#/home/nope", "#/nope/overview", "#/work/nope", "#/work", "work/inbox", "#work/inbox",
   "#/work/inbox?project=ghost", "#/work/inbox?project=", "#/work/inbox?project", "#/work/inbox?foo=bar", "#/work/inbox?project=mastyard&project=mastyard", "#/work/inbox?project=mastyard&",
   "#/work/inbox?project=%E0%A4%A", "#/work/inbox?project=%00", "#/WORK/INBOX", "#/work/Inbox", "#/work/%69nbox%00", "#/work/inbox%2Fx", "#/brain/other", "#/brain/map/x", "#/brain",
   "#pair=" + "A".repeat(32), "#/work/inbox#pair=" + "A".repeat(32), "#/work/inbox?project=mastyard#x", "#/__proto__/x", "#/work/__proto__", "#/addon/__proto__", "#/addon/constructor",
   "#/work/inbox?project=__proto__", "#/work/<script>", "#/work/inbox?project=<script>", "#/work/in box", "#/work/inbox\n", "#/work/ünï", "javascript:alert(1)", "#/work/inbox?project=mastyard\u0000",
   "#/" + "a".repeat(400), "#/work/inbox?project=" + "x".repeat(300), "#/work/mission/" + "cycle%3A".repeat(60)];
-ok("every bad address is Home and none throws", () => {
-  for (const h of bad) {
+const bad = [undefined, null, 5, {}, [], "", "#", "#/", "#//", "#/home", "#/home/", "#/home/overview/x", "#/home/nope", "#/nope/overview", "#/projects/nope", "#/projects", "work/inbox", "#work/inbox",
+  "#/projects/inbox?project=ghost", "#/projects/inbox?project=", "#/projects/inbox?project", "#/projects/inbox?foo=bar", "#/projects/inbox?project=mastyard&project=mastyard", "#/projects/inbox?project=mastyard&",
+  "#/projects/inbox?project=%E0%A4%A", "#/projects/inbox?project=%00", "#/WORK/INBOX", "#/projects/Inbox", "#/projects/%69nbox%00", "#/projects/inbox%2Fx", "#/brain/other", "#/brain/map/x", "#/brain",
+  "#pair=" + "A".repeat(32), "#/projects/inbox#pair=" + "A".repeat(32), "#/projects/inbox?project=mastyard#x", "#/__proto__/x", "#/projects/__proto__", "#/addon/__proto__", "#/addon/constructor",
+  "#/projects/inbox?project=__proto__", "#/projects/<script>", "#/projects/inbox?project=<script>", "#/projects/in box", "#/projects/inbox\n", "#/projects/ünï", "javascript:alert(1)", "#/projects/inbox?project=mastyard\u0000",
+  "#/" + "a".repeat(400), "#/projects/inbox?project=" + "x".repeat(300), "#/projects/mission/" + "cycle%3A".repeat(60)];
+ok("every bad address is Home and none throws (the old #/work spelling and the new #/projects one)", () => {
+  for (const h of [...badOld, ...bad]) {
     let r;
     assert.doesNotThrow(() => { r = parseHash(h, known); }, String(h));
     assert.deepEqual(fields(r), fields(HOME), String(h).slice(0, 80));
@@ -140,33 +146,33 @@ ok("every bad address is Home and none throws", () => {
   }
 });
 ok("a bad `known` is Home, not an exception", () => {
-  for (const k of [undefined, null, 5, "x", {}, {groups: null}, {groups: [null]}, {groups: [{id: "work"}]}, {groups: GROUPS, places: null, projects: "x"}]) {
-    assert.doesNotThrow(() => parseHash("#/work/inbox", k));
-    assert.doesNotThrow(() => parseHash("#/work/inbox?project=mastyard", k));
+  for (const k of [undefined, null, 5, "x", {}, {groups: null}, {groups: [null]}, {groups: [{id: "projects"}]}, {groups: GROUPS, places: null, projects: "x"}]) {
+    assert.doesNotThrow(() => parseHash("#/projects/inbox", k));
+    assert.doesNotThrow(() => parseHash("#/projects/inbox?project=mastyard", k));
     assert.doesNotThrow(() => parseHash("#/addon/hermes", k));
   }
   assert.equal(parseHash("#/home/overview", {groups: GROUPS}).ok, true, "a known with only groups still opens a plain page");
 });
 ok("the hash is capped at 300 characters", () => {
-  const fits = "#/work/mission/" + "cycle%3A" + "a".repeat(MAX_HASH - 15 - 8);
+  const fits = "#/projects/mission/" + "cycle%3A" + "a".repeat(MAX_HASH - 19 - 8);
   assert.equal(fits.length, MAX_HASH);
   assert.equal(parseHash(fits, {...known}).ok, false, "an id past 200 characters is refused although the address fits");
   assert.equal(parseHash(fits + "a", known).ok, false, "one character over the cap");
-  assert.equal(parseHash("#/work/inbox?project=" + "x".repeat(40), known).ok, true);
-  assert.equal(parseHash("#/work/inbox" + "?".repeat(1) + "project=" + "x".repeat(290), known).ok, false);
-  assert.equal(parseHash("#/work/inbox?project=mastyard" + "&".repeat(300), known).ok, false);
-  assert.equal(buildHash({group: "work", view: "mission", id: "cycle:" + "a".repeat(190), project: "x".repeat(40)}).length <= MAX_HASH, true);
-  assert.equal(buildHash({group: "work", view: "inbox", project: "p".repeat(400)}), "#/home/overview", "a state too long to write gives Home");
+  assert.equal(parseHash("#/projects/inbox?project=" + "x".repeat(40), known).ok, true);
+  assert.equal(parseHash("#/projects/inbox" + "?".repeat(1) + "project=" + "x".repeat(290), known).ok, false);
+  assert.equal(parseHash("#/projects/inbox?project=mastyard" + "&".repeat(300), known).ok, false);
+  assert.equal(buildHash({group: "projects", view: "mission", id: "cycle:" + "a".repeat(190), project: "x".repeat(40)}).length <= MAX_HASH, true);
+  assert.equal(buildHash({group: "projects", view: "inbox", project: "p".repeat(400)}), "#/home/overview", "a state too long to write gives Home");
 });
 ok("buildHash never throws on a hostile state", () => {
-  for (const s of [undefined, null, 5, "x", {}, {group: 5, view: {}}, {group: "work"}, {view: "inbox"}, {group: "work", view: "inbox", project: {toString() { throw new Error("x"); }}}, {group: "work", view: "mission", id: Symbol("x")},
-    {place: 7}, {place: "a b/c", view: "d?e"}, {group: "work", view: "mission", id: "\ud800"}]) {
+  for (const s of [undefined, null, 5, "x", {}, {group: 5, view: {}}, {group: "projects"}, {view: "inbox"}, {group: "projects", view: "inbox", project: {toString() { throw new Error("x"); }}}, {group: "projects", view: "mission", id: Symbol("x")},
+    {place: 7}, {place: "a b/c", view: "d?e"}, {group: "projects", view: "mission", id: "\ud800"}]) {
     let h; assert.doesNotThrow(() => { h = buildHash(s); });
     assert.ok(typeof h === "string" && h.startsWith("#/") && h.length <= MAX_HASH);
     const r = parseHash(h, known);
     assert.deepEqual(r.ok ? fields(parseHash(buildHash(r), known)) : fields(r), r.ok ? fields(r) : fields(HOME), h);   // what parses rebuilds to itself, the rest is Home
   }
-  assert.equal(buildHash({group: "work", view: "inbox", project: "a b"}), "#/work/inbox?project=a%20b");
+  assert.equal(buildHash({group: "projects", view: "inbox", project: "a b"}), "#/projects/inbox?project=a%20b");
 });
 ok("fuzz: random text and random states never throw, and what parses always rebuilds to a route that parses the same", () => {
   let seed = 12345; const rnd = m => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) % m;
@@ -174,16 +180,48 @@ ok("fuzz: random text and random states never throw, and what parses always rebu
   for (let i = 0; i < 4000; i++) {
     let h = rnd(3) ? "#/" : "#";
     for (let j = rnd(40); j > 0; j--) h += alphabet[rnd(alphabet.length)];
-    if (rnd(4) === 0) h = "#/work/mission/" + encodeURIComponent(h.replace(/[\ud800-\udfff]/g, "?")) + (rnd(2) ? "?project=mastyard" : "");
+    if (rnd(4) === 0) h = "#/projects/mission/" + encodeURIComponent(h.replace(/[\ud800-\udfff]/g, "?")) + (rnd(2) ? "?project=mastyard" : "");
     const r = parseHash(h, known);
     if (r.ok) { const again = parseHash(buildHash(r), known); assert.deepEqual(fields(again), fields(r), h); }
   }
 });
 ok("the pairing link is recognised and is never a route", () => {
   assert.equal(isPairHash("#pair=" + "A".repeat(32)), true);
-  assert.equal(isPairHash("#/work/inbox"), false);
+  assert.equal(isPairHash("#/projects/inbox"), false);
   assert.equal(parseHash("#pair=" + "A".repeat(32), known).ok, false);
-  for (const id of goodIds) assert.ok(!buildHash({group: "work", view: "mission", id}).includes("pair="));
+  for (const id of goodIds) assert.ok(!buildHash({group: "projects", view: "mission", id}).includes("pair="));
+});
+ok("the old #/work/... addresses open the same page as the new #/projects/... ones: same view, id, project and add-on", () => {
+  for (const view of ["projects", "inbox", "missions", "prs", "board", "ledger", "timeline", "operations", "spend", "log", "mission"]) for (const q of ["", "?project=mastyard", "?project=a%20b"]) {
+    const o = parseHash("#/work/" + view + q, known), nw = parseHash("#/projects/" + view + q, known);
+    assert.equal(o.ok, true, view + q);
+    assert.deepEqual(fields(o), fields(nw), view + q);
+    assert.equal(buildHash(o), "#/projects/" + view + q, "an old address is rewritten to the new name");
+  }
+  const r = parseHash("#/work/missions/cycle%3Aabc?project=mastyard", known);
+  assert.equal(r.ok, false, "missions takes no id (only mission and log do)");
+  const m = parseHash("#/work/mission/cycle%3Aabc?project=mastyard", known);
+  assert.deepEqual(fields(m), {group: "projects", view: "mission", id: "cycle:abc", project: "mastyard", addon: "", brain: ""});
+  assert.deepEqual(fields(parseHash("#/work/inbox?addon=scout", known)), {group: "projects", view: "inbox", id: "", project: "", addon: "scout", brain: ""});
+  assert.deepEqual(fields(parseHash("#/work/log/mastyard~surveyor", known)), fields(parseHash("#/projects/log/mastyard~surveyor", known)));
+});
+ok("Work is only an alias: a page that still has a group of that name keeps it, and the other groups have no alias", () => {
+  const old = {...known, groups: [{id: "work", views: ["inbox"]}, ...GROUPS.filter(g => g.id !== "projects")]};
+  assert.equal(parseHash("#/work/inbox", old).group, "work");
+  assert.equal(parseHash("#/work/inbox", known).group, "projects");
+  assert.equal(parseHash("#/work/projects", known).view, "projects");
+  assert.equal(parseHash("#/projects/overview", known).ok, false, "the overview is the view named projects");
+  assert.equal(parseHash("#/work/overview", known).ok, false, "a Home page does not become a Projects page");
+  assert.equal(parseHash("#/work/crew", known).ok, false, "an Agents page does not become a Projects page");
+  assert.equal(parseHash("#/WORK/inbox", known).ok, false, "case counts");
+});
+ok("hostile text after the old name is Home too", () => {
+  for (const h of ["#/work/mission/%3Cimg%20src%3Dx%20onerror%3Dwindow.__pwn%3D1%3E", "#/work/projects?project=%3Cimg%3E", "#/work/projects?project=__proto__", "#/work/__proto__/x", "#/work/projects/x",
+    "#/work/projects?addon=hermes", "#/work/projects?project=mastyard&addon=scout", "#/work/projects#pair=" + "A".repeat(32), "#/work%2Fprojects", "#/work/log/x~y~z"]) {
+    const r = parseHash(h, known);
+    assert.equal(r.ok, false, h);
+    assert.deepEqual(fields(r), fields(HOME), h);
+  }
 });
 ok("the module is pure: no DOM, no globals, no network, no storage, and no dash characters in it", () => {
   const src = fs.readFileSync(fileURLToPath(new URL("../dashboard/assets/route.js", import.meta.url)), "utf8");

@@ -4,13 +4,16 @@
 //
 //   #/home/overview                      Home
 //   #/brain/map   #/brain/rhythm         the Brain, in either mode
-//   #/work/<view>                        inbox missions prs board timeline operations ledger spend log
-//   #/work/mission[/<id>]                one mission (the id is encodeURIComponent encoded: cycle%3Aabc)
-//   #/work/log[/<project>~<duty>]        the open log (a system log: /~<name>)
+//   #/projects/<view>                    projects inbox missions prs board ledger timeline operations spend log
+//   #/projects/projects                  the overview of every project, or (with ?project=) the one project's page
+//   #/projects/mission[/<id>]            one mission (the id is encodeURIComponent encoded: cycle%3Aabc)
+//   #/projects/log[/<project>~<duty>]    the open log (a system log: /~<name>)
 //   #/agents/<view>  #/connections/connections  #/library/<view>  #/settings/settings
 //   #/addon/<place>[/<view>]             an add-on's place and its pages
-//   ...?project=<name>                   the project scope (absent: All projects)
-//   #/work/inbox?addon=<name>            the add-on scope (Needs you shows only that add-on's items)
+//   ...?project=<name>                   the project scope (absent: all projects)
+//   #/projects/inbox?addon=<name>        the add-on scope (Needs you shows only that add-on's items)
+//   #/work/...                           the old name of the Projects place: every address made before it was renamed opens the same page
+//                                        (the page rewrites it to #/projects/... with replaceState)
 //
 // The hash is untrusted input: anyone can paste anything after the #. parseHash checks every part against `known`, the names the
 // page actually has, and gives the default route (Home) for anything else. It never throws, and it never returns text that did not
@@ -28,8 +31,9 @@ const RAW = /^#[A-Za-z0-9\-._~!$&'()*+,;=:@/?%]*$/;          // what encodeURICo
 const BAD_CHAR = /[\u0000-\u001f\u007f<>"`\\]|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;   // a decoded value never holds a control character, a character that closes markup or half of a surrogate pair
 const MISSION_ID = /^[a-z]{2,12}:[^]{1,190}$/;                 // fix:<panel>#<n>  panel:<id>  run:<at>|<project>|<duty>  attn:<id>  cycle:<id>  brief:<id>  plan:<id>
 const LOG_ID = /^[^~]{0,80}~[^~]{1,80}$/;                       // <project>~<duty>; a system log has no project: ~<name>
-const VIRTUAL = {work: ["mission", "log"]};                    // pages of a group that are not in its tab list, or that take an id
+const VIRTUAL = {projects: ["mission", "log"]};                    // pages of a group that are not in its tab list, or that take an id
 const WITH_ID = {mission: validMissionId, log: validLogId};
+const GROUP_ALIAS = {work: "projects"};                         // the place that was called Work; an alias only when the page has no group of that name
 
 export const defaultRoute = () => ({ok: false, group: "home", view: "overview", id: "", project: "", addon: "", brain: ""});
 
@@ -63,7 +67,8 @@ export function parseHash(hash, known) {
     if (q === null || (q.project && q.addon)) return defaultRoute();
     const segs = path.split("/").map(dec);
     if (segs.length < 2 || segs.length > 3 || segs.some(s => s === null || s === "")) return defaultRoute();
-    const [g, v, id] = segs;
+    let [g, v, id] = segs;
+    if (Object.hasOwn(GROUP_ALIAS, g) && !(known.groups || []).some(x => x && x.id === g)) g = GROUP_ALIAS[g];
     const r = defaultRoute(); r.ok = true;
     if (g === "addon") {                                       // an add-on's own place: it has no project scope
       const views = known.places && Object.hasOwn(known.places, v) ? known.places[v] : null;

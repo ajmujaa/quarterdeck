@@ -7,6 +7,10 @@
 # command itself rather than believing a claim, refuses a diff that touches a
 # forbidden path, and only then commits, pushes and opens the PR.
 #
+# A LOCAL ticket (qtdeck ticket; the project needs no GitHub repo) is built the same way and ends differently: --ticket <n> commits on a local branch
+# ticket/<n>-<slug> in the project's own checkout and STOPS. Nothing is pushed, no pull request is opened or looked up, and gh is not called. The
+# ticket becomes "review", with the branch, and the message says how to read the change and how to throw it away.
+#
 # Contract:
 #   RESULT: FIXED <one-line summary> | NEEDS_HUMAN <reason> | NO_CHANGE <reason>
 set -uo pipefail
@@ -27,18 +31,22 @@ GH="${QUARTERDECK_GH:-gh}"   # a seam for the self-tests and for a stand-in; lib
 BASE=$(project_get "$PROJECT" default_branch main)
 PLAN_TEXT=""
 
-APPLY=0 ISSUE="" PLAN=""
+APPLY=0 ISSUE="" PLAN="" TICKET=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --apply) APPLY=1 ;;
     --issue) ISSUE="${2:-}"; need_num "--issue" "$ISSUE"; shift ;;
+    --ticket) TICKET="${2:-}"; need_num "--ticket" "$TICKET"; shift ;;
     --plan)  PLAN="${2:-}"; shift ;;
     *) die "shipwright: unknown argument '$1'" ;;
   esac
   shift
 done
 [ "${QUARTERDECK_DRY_RUN:-1}" = 0 ] && APPLY=1
-[ -n "$ISSUE" ] || die "shipwright needs an issue: --issue <number>"
+[ -z "$ISSUE" ] || [ -z "$TICKET" ] || die "shipwright: --issue and --ticket are two different jobs; give one"
+[ -n "$ISSUE$TICKET" ] || die "shipwright needs an issue: --issue <number> (or --ticket <number> for a local ticket)"
+REF="#$ISSUE"; KEY="$ISSUE"
+[ -z "$TICKET" ] || { REF="ticket #$TICKET"; KEY="t$TICKET"; }
 # A plan is a dev panel's ruling: three seats argued the approach and the
 # dockmaster settled it. Handed one, the builder implements that decision rather
 # than re-deciding it alone — which is the whole point of having held the panel.
@@ -50,7 +58,14 @@ fi
 # Keyed by the issue, not just the project — matching the worktree below,
 # which already isolates the build per issue. Two different issues on the
 # same project build side by side; the same issue twice still waits.
-acquire_lock "shipwright-$PROJECT-$ISSUE"
+acquire_lock "shipwright-$PROJECT-$KEY"
+if [ -n "$TICKET" ]; then
+  # a local ticket: its text is in the data folder, nothing is read from GitHub
+  ticket_load "$PROJECT" "$TICKET"
+  export QUARTERDECK_RUN_ID="$(tr '/' '_' <<<"$PROJECT")-ship-$KEY"
+  meta=$(jq -c '{number: .id, title: .title, body: .body, state: "OPEN"}' <<<"$TK_JSON")
+  TAKEN=""
+else
 export QUARTERDECK_RUN_ID="$(tr '/' '_' <<<"$REPO")-ship-$ISSUE"
 
 meta=$(guard 60 "$GH" issue view "$ISSUE" -R "$REPO" --json number,title,body,state 2>>"$LOG_FILE") \
@@ -69,26 +84,46 @@ if [ -n "$TAKEN" ]; then
   record_run "$PROJECT" shipwright TAKEN "#$ISSUE already has $TAKEN"
   exit 0
 fi
+fi
 title=$(jq -r .title <<<"$meta")
 body=$(jq -r .body <<<"$meta")
+[ -z "$TICKET" ] || body="$TK_TEXT"
 
 slug=$(tr '[:upper:]' '[:lower:]' <<<"$title" | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g' | cut -c1-40)
 BRANCH="fix/${ISSUE}-${slug}"
-WT="$QUARTERDECK_HOME/workspace/wt-${PROJECT}-${ISSUE}"
+[ -z "$TICKET" ] || BRANCH="ticket/${TICKET}-${slug:-ticket}"
+WT="$QUARTERDECK_HOME/workspace/wt-${PROJECT}-${KEY}"
+BASE_REF="origin/$BASE"
 
 cleanup_wt() { safe_git -C "$SOURCE_REPO_DIR" worktree remove --force "$WT" >/dev/null 2>&1 || true; }
 trap 'cleanup_wt' EXIT
 
-working_on "issue #$ISSUE — $title"
-say "quarterdeck: shipwright on $REPO#$ISSUE — $title"
+if [ -n "$TICKET" ]; then
+  working_on "ticket #$TICKET — $title"
+  say "quarterdeck: shipwright on $PROJECT, local ticket #$TICKET — $title"
+else
+  working_on "issue #$ISSUE — $title"
+  say "quarterdeck: shipwright on $REPO#$ISSUE — $title"
+fi
+
+# A branch that already holds a build of this ticket is the owner's to review or throw away; building again would reset it.
+if [ -n "$TICKET" ] && safe_git -C "$SOURCE_REPO_DIR" rev-parse --verify -q "refs/heads/$BRANCH" >/dev/null 2>&1; then
+  ahead=$(safe_git -C "$SOURCE_REPO_DIR" rev-list --count "$BASE..$BRANCH" 2>/dev/null || echo 0)
+  if [ "${ahead:-0}" != 0 ]; then
+    record_run "$PROJECT" shipwright REFUSED "$REF: the branch $BRANCH already holds a build"
+    die "refused: the branch $BRANCH already holds an earlier build of this ticket. Review it (git -C $SOURCE_REPO_DIR diff $BASE...$BRANCH) or throw it away (git -C $SOURCE_REPO_DIR branch -D $BRANCH), then run this again"
+  fi
+fi
 
 # Always branch from the freshest base, never from whatever the working copy
 # happens to be sitting on.
 guard 120 "${SAFE_GIT[@]}" -C "$SOURCE_REPO_DIR" fetch -q origin "$BASE" 2>>"$LOG_FILE" || log "fetch failed; using local $BASE"
 cleanup_wt
-safe_git -C "$SOURCE_REPO_DIR" worktree add -q --detach "$WT" "origin/$BASE" 2>>"$LOG_FILE" \
-  || safe_git -C "$SOURCE_REPO_DIR" worktree add -q --detach "$WT" "$BASE" 2>>"$LOG_FILE" \
-  || die "could not create a worktree at $WT"
+if ! safe_git -C "$SOURCE_REPO_DIR" worktree add -q --detach "$WT" "origin/$BASE" 2>>"$LOG_FILE"; then
+  BASE_REF="$BASE"
+  safe_git -C "$SOURCE_REPO_DIR" worktree add -q --detach "$WT" "$BASE" 2>>"$LOG_FILE" \
+    || die "could not create a worktree at $WT"
+fi
 worktree_pin "$WT" || die "could not pin the worktree's .git file"
 # -B, not -b: a previous dry run on this issue leaves the branch behind, and a
 # re-run should start again from base rather than refuse to run at all.
@@ -107,7 +142,7 @@ if [ -n "$PLAN" ]; then
   tf_named=$(python3 "$QUARTERDECK_DIR/bin/protect.py" folders --plan "$PLAN") || die "shipwright: could not read the plan's Where fields"
   TF_FOLDERS=$(python3 "$QUARTERDECK_DIR/bin/protect.py" folders --plan "$PLAN" --root "$WT") || die "shipwright: could not check the plan's folders"
   if [ "$tf_named" != "$TF_FOLDERS" ]; then
-    record_run "$PROJECT" shipwright REFUSED "#$ISSUE: the plan names a folder that is not a plain folder in the checkout: $(tr '\n' ' ' <<<"$tf_named")"
+    record_run "$PROJECT" shipwright REFUSED "$REF: the plan names a folder that is not a plain folder in the checkout: $(tr '\n' ' ' <<<"$tf_named")"
     die "refused: the plan names a folder ($(tr '\n' ' ' <<<"$tf_named" | sed 's/ $//')) that is not a plain folder in the checkout; a folder Where must already exist, inside the project, with no link in it"
   fi
   TF_PLUGINS=$(project_get "$PROJECT" terraform_plugin_dir)
@@ -137,14 +172,23 @@ $where_files
   checks below pass. Do not keep exploring, polishing, or re-running what passed."
 fi
 
+if [ -n "$TICKET" ]; then
+  WHAT_TO_DO="Build this one ticket. You are in a throwaway worktree on branch $BRANCH; edit
+files here freely. Do not commit, push, or open anything — the harness does that
+after it has checked your work (and only on a local branch)."
+  SUBJECT_HEAD="ticket #$TICKET of $PROJECT"; SUBJECT_KIND="ticket text"
+else
+  WHAT_TO_DO="Fix this one issue. You are in a throwaway worktree on branch $BRANCH; edit
+files here freely. Do not commit, push, or open anything — the harness does that
+after it has checked your work."
+  SUBJECT_HEAD="$REPO#$ISSUE"; SUBJECT_KIND="issue text"
+fi
 prompt="$(preamble "$PROJECT")
 
-Fix this one issue. You are in a throwaway worktree on branch $BRANCH; edit
-files here freely. Do not commit, push, or open anything — the harness does that
-after it has checked your work.
+$WHAT_TO_DO
 
-=== $REPO#$ISSUE ===
-$(printf '%s\n\n%s\n' "$title" "$body" | untrusted "issue text")
+=== $SUBJECT_HEAD ===
+$(printf '%s\n\n%s\n' "$title" "$body" | untrusted "$SUBJECT_KIND")
 === END ===
 
 ${PLAN_TEXT:+=== THE RULING OF THE DEV PANEL — IMPLEMENT THIS ===
@@ -180,7 +224,7 @@ $CHECK_LIST
   That is their state on an untouched tree, so any failure already there is not
   yours. The harness runs all of them again after you stop and refuses the
   change if any gets worse — finding that out yourself now is cheaper.")
-- If the issue is unclear, wrong, or needs a product decision, make no change
+- If the $([ -n "$TICKET" ] && echo ticket || echo issue) is unclear, wrong, or needs a product decision, make no change
   and say so. That is a good outcome, not a failure.
 
 End your reply with exactly one line:
@@ -201,16 +245,16 @@ rc=$?
 if [ $rc = 4 ]; then
   say "quarterdeck: NEEDS_HUMAN: ran out of turns — nothing committed; partial work kept in $WT"
   trap - EXIT
-  notify "quarterdeck/$PROJECT #$ISSUE" "ran out of turns"
-  record_run "$PROJECT" shipwright NEEDS_HUMAN "#$ISSUE ran out of turns (cap ${QUARTERDECK_MAX_TURNS_SHIPWRIGHT:-${QUARTERDECK_MAX_TURNS:-}}); partial work kept in $WT, nothing committed"
+  notify "quarterdeck/$PROJECT $REF" "ran out of turns"
+  record_run "$PROJECT" shipwright NEEDS_HUMAN "$REF ran out of turns (cap ${QUARTERDECK_MAX_TURNS_SHIPWRIGHT:-${QUARTERDECK_MAX_TURNS:-}}); partial work kept in $WT, nothing committed"
   exit 0
 fi
-[ $rc = 0 ] && [ -n "$result" ] || { record_run "$PROJECT" shipwright ERROR "#$ISSUE run failed"; die "run failed"; }
+[ $rc = 0 ] && [ -n "$result" ] || { record_run "$PROJECT" shipwright ERROR "$REF run failed"; die "run failed"; }
 
 verdict=$(grep -Eo '^RESULT: (FIXED|NEEDS_HUMAN|NO_CHANGE).*' <<<"$result" | tail -1)
 [ -n "$verdict" ] || {
-  log "#$ISSUE: contract did not parse — logs/runs/$QUARTERDECK_RUN_ID.json"
-  record_run "$PROJECT" shipwright ERROR "#$ISSUE unparseable contract"
+  log "$REF: contract did not parse — logs/runs/$QUARTERDECK_RUN_ID.json"
+  record_run "$PROJECT" shipwright ERROR "$REF unparseable contract"
   die "contract did not parse — nothing pushed"
 }
 summary="${verdict#RESULT: }"
@@ -218,8 +262,8 @@ summary="${verdict#RESULT: }"
 case "$verdict" in
   "RESULT: NEEDS_HUMAN"*|"RESULT: NO_CHANGE"*)
     say ""; say "  $summary"
-    notify "quarterdeck/$PROJECT #$ISSUE" "$summary"
-    record_run "$PROJECT" shipwright "${verdict#RESULT: }" "#$ISSUE"
+    notify "quarterdeck/$PROJECT $REF" "$summary"
+    record_run "$PROJECT" shipwright "${verdict#RESULT: }" "$REF"
     exit 0 ;;
 esac
 
@@ -228,10 +272,10 @@ esac
 # Final paths of everything changed, one per line. Not `status --porcelain`:
 # its second field is a rename's OLD name, so a file moved into a forbidden
 # path was checked under the name it left.
-changed=$(wt_changed "$WT") || { record_run "$PROJECT" shipwright REFUSED "#$ISSUE — the worktree's .git file was changed"; die "refused: the worktree's .git file was changed"; }
+changed=$(wt_changed "$WT") || { record_run "$PROJECT" shipwright REFUSED "$REF — the worktree's .git file was changed"; die "refused: the worktree's .git file was changed"; }
 [ -n "$changed" ] || {
   say "  claimed FIXED but changed nothing"
-  record_run "$PROJECT" shipwright ERROR "#$ISSUE claimed FIXED with an empty diff"
+  record_run "$PROJECT" shipwright ERROR "$REF claimed FIXED with an empty diff"
   die "empty diff"
 }
 
@@ -243,7 +287,7 @@ while read -r forbidden; do
   hit=""; while IFS= read -r f; do [ -n "$f" ] && fp_hit "$f" "$forbidden" && { hit=1; break; }; done <<<"$changed"
   if [ -n "$hit" ]; then
     say "  REFUSED: touched a forbidden path ($forbidden)"
-    record_run "$PROJECT" shipwright REFUSED "#$ISSUE touched $forbidden"
+    record_run "$PROJECT" shipwright REFUSED "$REF touched $forbidden"
     die "refused: the change touches $forbidden"
   fi
 done < <(jq -r --arg p "$PROJECT" '(.[$p].forbidden_paths // [])[]' "$PROJECTS_FILE")
@@ -252,7 +296,7 @@ done < <(jq -r --arg p "$PROJECT" '(.[$p].forbidden_paths // [])[]' "$PROJECTS_F
 # are the next thing the harness executes, and what they run is exactly what such a change would control.
 if ! why=$(printf '%s\n' "$changed" | model_diff_gate "$PROJECT" "$WT" "$INPUTS_BEFORE" "$PLAN"); then
   say "  REFUSED: $why"
-  record_run "$PROJECT" shipwright REFUSED "#$ISSUE — $why"
+  record_run "$PROJECT" shipwright REFUSED "$REF — $why"
   die "refused: $why"
 fi
 
@@ -263,7 +307,7 @@ AFTER_CHECKS="$(run_checks "$PROJECT" "$WT")"
 # The checks ran project code that may write in the worktree: the gate again, on what is there now (S1), before anything can be committed.
 if ! why=$(post_checks_gate "$PROJECT" "$WT" "$INPUTS_BEFORE" "$changed" "$PLAN"); then
   say "  REFUSED: $why"
-  record_run "$PROJECT" shipwright REFUSED "#$ISSUE — $why"
+  record_run "$PROJECT" shipwright REFUSED "$REF — $why"
   die "refused: $why"
 fi
 REGRESSIONS="$(check_regressions "$BASE_CHECKS" "$AFTER_CHECKS")"
@@ -275,7 +319,7 @@ if [ "$(jq length <<<"$REGRESSIONS")" != 0 ]; then
   say ""
   say "  worktree kept for inspection: $WT"
   trap - EXIT
-  record_run "$PROJECT" shipwright REFUSED "#$ISSUE — $(jq -r '[.[].name] | join(", ")' <<<"$REGRESSIONS") got worse"
+  record_run "$PROJECT" shipwright REFUSED "$REF — $(jq -r '[.[].name] | join(", ")' <<<"$REGRESSIONS") got worse"
   die "refused: nothing is committed when a local check regresses"
 fi
 
@@ -285,7 +329,7 @@ INFRA_REPORT=""
 if [ -n "$TF_FOLDERS" ]; then
   say "  infrastructure review (experimental)"
   tf_base=$(safe_git -C "$WT" rev-parse HEAD) && tf_tree=$(safe_git -C "$WT" write-tree) \
-    && tf_head=$(safe_git -C "$WT" -c user.name=quarterdeck -c user.email=quarterdeck@example.com commit-tree "$tf_tree" -p "$tf_base" -m "shipwright review of #$ISSUE") \
+    && tf_head=$(safe_git -C "$WT" -c user.name=quarterdeck -c user.email=quarterdeck@example.com commit-tree "$tf_tree" -p "$tf_base" -m "shipwright review of $REF") \
     || tf_head=""
   tf_rep=$(mktemp "$QUARTERDECK_HOME/workspace/infra-review.XXXXXX")
   if [ -n "$tf_head" ] && QUARTERDECK_PROJECT="$PROJECT" QUARTERDECK_WORKDIR="$SOURCE_REPO_DIR" bash "$QUARTERDECK_DIR/duties/infra.sh" --diff "$tf_base" --head "$tf_head" --report-to "$tf_rep" >>"$LOG_FILE" 2>&1 && [ -s "$tf_rep" ]; then
@@ -298,15 +342,38 @@ if [ -n "$TF_FOLDERS" ]; then
 fi
 
 say ""
-say "── $REPO#$ISSUE — $summary ──"
+if [ -n "$TICKET" ]; then say "── $PROJECT ticket #$TICKET — $summary ──"; else say "── $REPO#$ISSUE — $summary ──"; fi
 safe_git -C "$WT" --no-pager diff --cached --stat | sed 's/^/  /' >&2
 
 if [ "$APPLY" != 1 ]; then
   say ""
-  say "  (report only — re-run with --apply to push and open a PR)"
+  if [ -n "$TICKET" ]; then say "  (report only — re-run with --apply to commit it on the local branch $BRANCH)"
+  else say "  (report only — re-run with --apply to push and open a PR)"; fi
   say "  worktree kept for inspection: $WT"
   trap - EXIT   # leave it so the diff can be read
-  record_run "$PROJECT" shipwright "DRY-RUN" "#$ISSUE $summary"
+  record_run "$PROJECT" shipwright "DRY-RUN" "$REF $summary"
+  exit 0
+fi
+
+# ---- a local ticket ends here: one commit on a local branch, nothing pushed, no pull request -----------------------------------------------
+if [ -n "$TICKET" ]; then
+  # Whoever this checkout is configured as; GitHub is not asked (a local ticket never calls gh). A checkout with no identity gets a plain local one.
+  COMMIT_ID=()
+  tk_email=$(project_get "$PROJECT" git.email); tk_name=$(project_get "$PROJECT" git.name)
+  if [ -n "$tk_email" ]; then COMMIT_ID=(-c "user.name=${tk_name:-$tk_email}" -c "user.email=$tk_email")
+  elif [ -z "$(safe_git -C "$WT" config user.email || true)" ]; then COMMIT_ID=(-c user.name=Quarterdeck -c user.email=quarterdeck@localhost); fi
+  safe_git -C "$WT" ${COMMIT_ID[@]+"${COMMIT_ID[@]}"} commit -q -m "$(printf 'build: %s\n\nTicket #%s\n\nBuilt by the Quarterdeck shipwright for a local ticket.\n' "$title" "$TICKET")" \
+    || die "commit failed"
+  checks_line=$(jq -rs 'map(.name + " exit " + (.rc|tostring)) | join(", ")' <<<"$AFTER_CHECKS")
+  python3 "$TICKETS_PY" set "$PROJECT" "$TICKET" status=review "branch=$BRANCH" 2>>"$LOG_FILE" || log "could not mark ticket $TICKET as in review"
+  say "  committed on the local branch $BRANCH (nothing was pushed, no pull request was opened)"
+  say ""
+  say "  review it:   git -C $SOURCE_REPO_DIR diff $BASE_REF...$BRANCH"
+  say "  keep it:     git -C $SOURCE_REPO_DIR merge $BRANCH        (when you are happy with it)"
+  say "  discard it:  git -C $SOURCE_REPO_DIR branch -D $BRANCH"
+  say "  checks run:  ${checks_line:-none set}"
+  say "  to open a pull request for it later: connect a repo with  qtdeck repo $PROJECT"
+  record_run "$PROJECT" shipwright BRANCH "$REF → $BRANCH; checks: ${checks_line:-none set}"
   exit 0
 fi
 

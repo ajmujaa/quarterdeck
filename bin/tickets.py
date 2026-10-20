@@ -81,7 +81,7 @@ def _now():
 
 
 # ---- text: plain, bounded, and nothing that forges one of our marks -----------------------------------------------------------
-def clean(s, field, limit, multiline=False, mentions=True):
+def clean(s, field, limit, multiline=False, mentions=True, marks=True):
     """The text as it will be stored. Raises TicketError for what is not plain text. @mentions lose their @ so a ticket never pings anyone."""
     if not isinstance(s, str):
         raise TicketError(f"{field} must be text")
@@ -95,12 +95,13 @@ def clean(s, field, limit, multiline=False, mentions=True):
         raise TicketError(f"{field} holds a control character" if multiline else f"{field} must be one line of plain text")
     if len(s) > limit:
         raise TicketError(f"{field} is {len(s)} characters; the limit is {limit}")
-    if "<!--" in s or "-->" in s:
-        raise TicketError(f"{field} holds an HTML comment, which could forge one of Quarterdeck's marks")
-    if "quarterdeck:" in s.lower():
-        raise TicketError(f"{field} holds a Quarterdeck mark")
-    if _FORGED_HEADING.search(s):
-        raise TicketError(f"{field} has a heading that would pass for one Quarterdeck writes")
+    if marks:        # the purser's own requirements (marks=False) are Quarterdeck's text and carry a Requirements heading; its comment marks are cut off before they get here
+        if "<!--" in s or "-->" in s:
+            raise TicketError(f"{field} holds an HTML comment, which could forge one of Quarterdeck's marks")
+        if "quarterdeck:" in s.lower():
+            raise TicketError(f"{field} holds a Quarterdeck mark")
+        if _FORGED_HEADING.search(s):
+            raise TicketError(f"{field} has a heading that would pass for one Quarterdeck writes")
     if mentions:
         s = _MENTION.sub("", s)
     return s
@@ -353,7 +354,7 @@ def update(project, n, **fields):
             if k in ("title", "body", "acceptance"):
                 t[k] = validate_ticket({"title": t["title"], "body": t["body"], "acceptance": t["acceptance"], k: v})[k]
             elif k == "requirements":
-                t[k] = "" if v in ("", None) else clean(v, "the requirements", REQ_MAX, multiline=True, mentions=False).replace("<!--", "").replace("-->", "")
+                t[k] = "" if v in ("", None) else clean(str(v).replace("<!--", "").replace("-->", ""), "the requirements", REQ_MAX, multiline=True, mentions=False, marks=False)
             elif k == "status":
                 if v not in STATUSES:
                     raise TicketError("status is " + ", ".join(STATUSES))

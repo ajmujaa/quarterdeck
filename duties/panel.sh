@@ -38,7 +38,7 @@ WORKDIR="${QUARTERDECK_WORKDIR:?}"
 LOG_FILE="$QUARTERDECK_HOME/logs/panel-$PROJECT.log"
 GH="${QUARTERDECK_GH:-gh}"   # a seam for the self-tests and for a stand-in; lib.sh puts the real gh first on PATH
 
-PANEL="" TARGET="" ISSUE="" IDEA="" FROM="" SEATS="" SEATS_GIVEN="" BRIEF_EXTRA="" RESUME=""
+PANEL="" TARGET="" ISSUE="" TICKET="" IDEA="" FROM="" SEATS="" SEATS_GIVEN="" BRIEF_EXTRA="" RESUME=""
 ROUNDS="${QUARTERDECK_PANEL_ROUNDS:-2}"
 PER_SEAT="${QUARTERDECK_PANEL_MAX:-10}"
 while [ $# -gt 0 ]; do
@@ -46,6 +46,7 @@ while [ $# -gt 0 ]; do
     --panel)  PANEL="${2:-}"; shift ;;
     --target|--path) TARGET="${2:-}"; shift ;;
     --issue)  ISSUE="${2:-}"; need_num "--issue" "$ISSUE"; shift ;;
+    --ticket) TICKET="${2:-}"; need_num "--ticket" "$TICKET"; shift ;;   # a LOCAL ticket (qtdeck ticket): the dev panel plans it with no GitHub
     --idea|--question) IDEA="${2:-}"; shift ;;
     --from)   FROM="${2:-}"; shift ;;
     --seats)  SEATS="$(tr ',' ' ' <<<"${2:-}")"; SEATS_GIVEN=1; shift ;;
@@ -71,11 +72,16 @@ if [ -n "$RESUME" ]; then
   SEATS="$(jq -r '[.seats[].name] | join(" ")' "$RTX")"
   case "$(jq -r .mode "$RTX")" in
     findings) ;;
-    plan) ISSUE="${TARGET#issue #}"; need_num "the resumed issue" "$ISSUE" ;;
+    plan) case "$TARGET" in
+            "ticket #"*) TICKET="${TARGET#ticket #}"; need_num "the resumed ticket" "$TICKET" ;;
+            *) ISSUE="${TARGET#issue #}"; need_num "the resumed issue" "$ISSUE" ;;
+          esac ;;
     *) die "panel: only a findings or plan panel can be resumed" ;;
   esac
 fi
 [ -n "$PANEL" ] || die "panel: which panel? --panel design|dev|spec|qa"
+[ -z "$ISSUE" ] || [ -z "$TICKET" ] || die "panel: --issue and --ticket are two different jobs; give one"
+[ -z "$TICKET" ] || [ "$PANEL" = dev ] || die "panel: --ticket is for the dev panel (--panel dev)"
 
 # A panel's discipline decides what it produces. Three shapes cover the
 # lifecycle: findings on something that exists, a plan for something about to be
@@ -124,7 +130,7 @@ crew_exists dockmaster || die "panel: crew/dockmaster.md is missing — nobody c
 # someone's dev panel do not block each other either. A dev panel's plan file
 # is named after $ISSUE, so this also happens to be exactly the scope in which
 # two writers really would collide.
-acquire_lock "panel-$PROJECT-${ISSUE:-$PANEL}"
+acquire_lock "panel-$PROJECT-${ISSUE:-$([ -n "$TICKET" ] && echo "ticket$TICKET" || echo "$PANEL")}"
 STAMP="$(date +%Y-%m-%d)"
 PANEL_ID="${RESUME:-${PROJECT}-${PANEL}-$(date +%s)}"
 TX="$QUARTERDECK_HOME/state/panels/$PANEL_ID.json"
@@ -137,12 +143,20 @@ TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 REPO="$(project_get "$PROJECT" repo)"
 case "$MODE" in
   plan)
-    [ -n "$ISSUE" ] || die "panel --panel dev: which issue? --issue <number>"
-    BRIEF="$(guard 60 "$GH" issue view "$ISSUE" -R "$REPO" --json number,title,body,labels \
-             --template '#{{.number}} {{.title}}{{"\n\n"}}{{.body}}' 2>/dev/null)" \
-      || die "panel: could not read issue #$ISSUE in $REPO"
-    SUBJECT="issue #$ISSUE"
-    OUT="$QUARTERDECK_HOME/workspace/${PROJECT}-plan-${ISSUE}.md"
+    [ -n "$ISSUE$TICKET" ] || die "panel --panel dev: which issue? --issue <number> (or --ticket <number> for a local ticket)"
+    if [ -n "$TICKET" ]; then
+      # a local ticket: its text is in the data folder; nothing is read from GitHub
+      ticket_load "$PROJECT" "$TICKET"
+      BRIEF="$TK_TEXT"
+      SUBJECT="ticket #$TICKET"
+      OUT="$QUARTERDECK_HOME/workspace/${PROJECT}-plan-ticket${TICKET}.md"
+    else
+      BRIEF="$(guard 60 "$GH" issue view "$ISSUE" -R "$REPO" --json number,title,body,labels \
+               --template '#{{.number}} {{.title}}{{"\n\n"}}{{.body}}' 2>/dev/null)" \
+        || die "panel: could not read issue #$ISSUE in $REPO"
+      SUBJECT="issue #$ISSUE"
+      OUT="$QUARTERDECK_HOME/workspace/${PROJECT}-plan-${ISSUE}.md"
+    fi
     ;;
   decision)
     if [ -n "$FROM" ]; then
@@ -229,8 +243,8 @@ plainly when something needs a device to confirm rather than asserting it." ;;
 argue the approach. Read enough of the codebase to be concrete about which
 files and which existing helpers are involved.
 
-THE ISSUE
-$(printf '%s\n' "$BRIEF" | untrusted "issue text")" ;;
+THE $([ -n "$TICKET" ] && echo TICKET || echo ISSUE)
+$(printf '%s\n' "$BRIEF" | untrusted "$([ -n "$TICKET" ] && echo 'ticket text' || echo 'issue text')")" ;;
   backlog)  ASK="Decide what this project should do next, and say what it is not doing.
 
 You are not inventing work: rank what already exists, merge what is duplicated,
@@ -555,7 +569,7 @@ KEPT="$(jq 'length' <<<"$RULING")"
 {
   case "$MODE" in
     findings) echo "# ${PROJECT} — ${PANEL} panel, ${STAMP}" ;;
-    plan)     echo "# ${PROJECT} — implementation plan for issue #${ISSUE}" ;;
+    plan)     if [ -n "$TICKET" ]; then echo "# ${PROJECT} — implementation plan for ticket #${TICKET}"; else echo "# ${PROJECT} — implementation plan for issue #${ISSUE}"; fi ;;
     spec)     echo "# ${PROJECT} — specification: ${SUBJECT}" ;;
     backlog)  echo "# ${PROJECT} — what to do next, ${STAMP}" ;;
     decision) echo "# ${PROJECT} — decision: ${SUBJECT}" ;;
@@ -602,7 +616,9 @@ say "  $OUT"
 say ""
 case "$MODE" in
   findings) say "  file them with:"; say "  qtdeck run $PROJECT foreman --from \"$OUT\" --apply" ;;
-  plan)     say "  build it with:";  say "  qtdeck run $PROJECT shipwright --issue $ISSUE --plan \"$OUT\" --apply" ;;
+  plan)     say "  build it with:"
+            if [ -n "$TICKET" ]; then say "  qtdeck run $PROJECT shipwright --ticket $TICKET --plan \"$OUT\" --apply"
+            else say "  qtdeck run $PROJECT shipwright --issue $ISSUE --plan \"$OUT\" --apply"; fi ;;
   spec)     say "  turn it into issues with:"; say "  qtdeck run $PROJECT foreman --from \"$OUT\" --apply" ;;
   backlog)  say "  the board keeps itself honest separately:"; say "  qtdeck run $PROJECT harbourmaster --apply" ;;
   decision) say "  build it with:"; say "  qtdeck run $PROJECT panel --panel spec --from \"$OUT\"" ;;

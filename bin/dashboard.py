@@ -797,13 +797,19 @@ def fix_index(locks):
 # The records are read only. The one thing the dashboard can do is start a cycle, and only through POST /api/cycle/start
 # (start_cycle below), on a project that opted in with "cycle": true. It cannot resume or stop one. A record that still says
 # "running" with no live lock behind it was killed, and is shown as failed, like a fix record in the same position.
+def cycle_lock_name(r):
+    """The lock `qtdeck cycle` holds while a cycle runs: cycle-<project>-<issue>, or cycle-<project>-t<ticket> for a local ticket (record field "ticket")."""
+    key = f"t{r['ticket']}" if isinstance(r.get("ticket"), int) and not isinstance(r.get("ticket"), bool) else r.get("issue")
+    return f"cycle-{r.get('project')}-{key}"
+
+
 def cycle_record(cid, locks):
     if not valid_id(cid):
         return None
     r = read_json(CYCLES / f"{cid}.json", None)
     if not isinstance(r, dict) or r.get("kind") != "cycle":
         return None
-    if r.get("status") == "running" and f"cycle-{r.get('project')}-{r.get('issue')}" not in locks:
+    if r.get("status") == "running" and cycle_lock_name(r) not in locks:
         r = {**r, "status": "failed",
              "final": r.get("final") or f"stopped before it finished; resume with: qtdeck cycle --resume {cid}"}
     return r
@@ -816,7 +822,7 @@ def cycles_summary(locks, limit=12):
         for f in sorted(CYCLES.glob("cyc-*.json"), key=lambda x: x.stat().st_mtime, reverse=True)[:limit]:
             r = cycle_record(f.stem, locks)
             if r:
-                out.append({"id": r.get("id"), "project": r.get("project"), "issue": r.get("issue"), "title": r.get("title") or "",
+                out.append({"id": r.get("id"), "project": r.get("project"), "issue": r.get("issue"), "ticket": r.get("ticket"), "branch": r.get("branch"), "title": r.get("title") or "",
                             "status": r.get("status"), "apply": bool(r.get("apply")), "started": r.get("started"),
                             "finished": r.get("finished"), "cost": round(float(r.get("cost") or 0), 4), "pr": r.get("pr")})
     return out
@@ -1721,7 +1727,8 @@ def cycle_mission(r, out):
     status = r.get("status") or "running"
     stages = [x for x in r.get("stages") or [] if isinstance(x, dict)]
     cost = float(r.get("cost") or 0)
-    out.update(project=r.get("project"), title=f"Cycle · #{r.get('issue')} {r.get('title') or ''}".strip(),
+    what = f"ticket #{r.get('ticket')}" if isinstance(r.get("ticket"), int) else f"#{r.get('issue')}"
+    out.update(project=r.get("project"), title=f"Cycle · {what} {r.get('title') or ''}".strip(),
                mission_ref=f"cycle {r.get('id')}", pipeline=cycle_nodes(r), issue=r.get("issue") if isinstance(r.get("issue"), int) else None,
                state={"running": "running", "awaiting-review": "awaiting"}.get(status, "blocked" if status in CYCLE_BAD else "done"))
     running = next((x for x in stages if x.get("state") == "running"), None)

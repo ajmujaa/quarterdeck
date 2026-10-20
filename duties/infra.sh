@@ -36,6 +36,10 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)/lib.sh"
 
 # No credentials, ever: whatever the owner's shell holds for a cloud is dropped before any model or git command starts.
 for v in $(env | cut -d= -f1 | grep -E '^(AWS_|TF_|ARM_|VERCEL_|SUPABASE_|CDK_|SAM_|SERVERLESS_|PULUMI_|GOOGLE_|AZURE_|CLOUDFLARE_|CF_|WRANGLER_|FLY_|CLOUDSDK_|GCLOUD_|GCP_|ARM_|AZD_)[A-Za-z0-9_]*$'); do unset "$v"; done
+# review r9 T5: and anything else shaped like a credential (a database URL, a registry or hosting token, a password), whatever its prefix. The sign-in of
+# the model (ANTHROPIC_*, CLAUDE_*: claude_run decides what a call gets), gh's own token and the harness's settings stay.
+for v in $(compgen -e | grep -E '^(DATABASE_|NPM_|HCLOUD_|DIGITALOCEAN_|DO_|LINODE_|HEROKU_|NETLIFY_|RENDER_|RAILWAY_|OP_|PG|MYSQL_|REDIS_|MONGO|VAULT_|DOCKER_|TWINE_|NODE_AUTH_)|(TOKEN|SECRET|PASSWORD|PASSWD|PASSPHRASE|_PASS|_PWD|_KEY|_KEY_ID|CREDENTIAL|CREDENTIALS|_DSN|_URL|_URI)$|(TOKEN|SECRET|PASSWORD|CREDENTIAL)_' \
+         | grep -vE '^(GH_TOKEN|GITHUB_TOKEN|QUARTERDECK_[A-Za-z0-9_]*|ANTHROPIC_[A-Za-z0-9_]*|CLAUDE_[A-Za-z0-9_]*)$'); do unset "$v"; done
 
 PROJECT="${QUARTERDECK_PROJECT:?run me through: qtdeck run <project> infra --pr <n>}"
 SOURCE_REPO_DIR="${QUARTERDECK_WORKDIR:?}"
@@ -281,6 +285,9 @@ $CUTNOTE}
 $(jq -r '.[] | "\n### \(.risk | ascii_upcase): \(.resource)\(if .needs_human then "  (needs a person)" else "" end)\n**Change:** \(.change)\n\n**Why:** \(.why)\n\n**Blast radius:** \(.blast_radius)\n\n**Rollback:** \(.rollback)"' <<<"$items")
 
 <sub>Quarterdeck rigger. Files only: the harness found the files and wrote the verdict; the rigger judged. Nothing was run, posted or changed.${PACKNOTICE:+ Experimental: $PACKNOTICE}${DHEAD:+ Experimental: Terraform authoring is a first slice; this change was written by a model and reviewed by a model against the AWS pack, which is experimental too.}${DHEAD:+ No plan was run by Quarterdeck. A person reads the plan from the project CI and applies.}</sub>"
+# review r9 T4: a finding that quotes a credential (a hardcoded secret in a .tf the model read) keeps its words, not the value, in the output, the log,
+# --report-to and workspace/. Fail closed: a scan that cannot run writes nothing.
+report=$(printf '%s' "$report" | python3 "$QUARTERDECK_DIR/bin/outscan.py" --redact) || { record_run "$PROJECT" infra ERROR "$KEY the report could not be scanned"; die "infra: the report could not be scanned for credentials — nothing written"; }
 say ""; say "$report" >&2; say ""
 [ -z "$REPORT_TO" ] || printf '%s\n' "$report" > "$REPORT_TO" || die "infra: could not write the report to $REPORT_TO"
 

@@ -46,7 +46,7 @@ ck "an unknown command: a short error and the usage on stderr, exit 2, nothing w
 # ---- the first real command makes the data folder, never writes into the program ----
 qd "$H" "$P" status >"$T/s1" 2>"$T/s1e"; rs=$?
 ck "the first run makes ~/.quarterdeck (0700, the marker, an empty registry) and says what to do next" \
-  '[ "$rs" = 0 ] && [ -f "$H/.quarterdeck/.quarterdeck-home" ] && [ "$(stat -f %Lp "$H/.quarterdeck" 2>/dev/null || stat -c %a "$H/.quarterdeck")" = 700 ] && [ "$(cat "$H/.quarterdeck/config/projects.json")" = "{}" ] && grep -q "made your data folder" "$T/s1e" && grep -q "next: qtdeck" "$T/s1e"'
+  '[ "$rs" = 0 ] && [ -f "$H/.quarterdeck/.quarterdeck-home" ] && [ "$(stat -c %a "$H/.quarterdeck" 2>/dev/null || stat -f %Lp "$H/.quarterdeck")" = 700 ] && [ "$(cat "$H/.quarterdeck/config/projects.json")" = "{}" ] && grep -q "made your data folder" "$T/s1e" && grep -q "next: qtdeck" "$T/s1e"'
 ck "nothing is written into the program folder (no registry, state, logs or workspace)" '[ -z "$(changed "$P")" ] && [ ! -e "$P/config/projects.json" ] && [ ! -e "$P/state" ]'
 qd "$H" "$P" status >/dev/null 2>"$T/s2e"
 ck "the second run says nothing about it" '! grep -q "made your data folder" "$T/s2e"'

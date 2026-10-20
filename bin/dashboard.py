@@ -1251,19 +1251,7 @@ SPEND = STATE / "spend.jsonl"
 
 
 def spend_rows():
-    rows = []
-    try:
-        with open(SPEND, errors="replace") as fh:
-            for line in fh:
-                try:
-                    row = json.loads(line)
-                except Exception:
-                    continue
-                if isinstance(row, dict):
-                    rows.append(row)
-    except FileNotFoundError:
-        pass
-    return rows
+    return _spend.rows(SPEND)       # review r9 D4: the same reader as `qtdeck spend`, which drops a name field that is not text
 
 
 def local_midnight_utc(days_ago=0):
@@ -1273,7 +1261,7 @@ def local_midnight_utc(days_ago=0):
 
 def spent_today(rows=None):
     since = local_midnight_utc()
-    return sum(r.get("cost") or 0 for r in (rows if rows is not None else spend_rows())
+    return sum(_spend._num(r.get("cost")) for r in (rows if rows is not None else spend_rows())
                if (r.get("at") or "") >= since)
 
 
@@ -1300,7 +1288,10 @@ def spend_summary():
         return _spend.group(src, lambda r: r.get(key) or "unknown")
     by_day = {}
     for r in wk:
-        day = datetime.fromisoformat(r["at"].replace("Z", "+00:00")).astimezone().strftime("%Y-%m-%d")
+        try:
+            day = datetime.fromisoformat(r["at"].replace("Z", "+00:00")).astimezone().strftime("%Y-%m-%d")
+        except ValueError:
+            continue
         by_day[day] = by_day.get(day, 0) + (r.get("cost") or 0)
     fixes = {}
     for r in rows:
@@ -1316,7 +1307,7 @@ def spend_summary():
     return {
         "today": spent_today(rows), "week": sum(r.get("cost") or 0 for r in wk),
         "all": sum(r.get("cost") or 0 for r in rows), "calls": len(rows),
-        "since": min((r.get("at") for r in rows), default=None),
+        "since": min((r["at"] for r in rows if r.get("at")), default=None),
         "daily_budget": daily_budget(), "over_budget": over_budget(),
         "call_budget": env_flag("QUARTERDECK_CALL_BUDGET", "") or None,
         "planning": env_flag("QUARTERDECK_FIX_PLANNING", "tiered"),

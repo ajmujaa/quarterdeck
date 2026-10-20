@@ -4,13 +4,19 @@
 Read-only. Only the front matter fields name, description, tools and model are read; the prompt body is never returned.
 Everything in a file is untrusted text: lengths are capped, control characters and angle brackets are dropped, YAML tags, anchors and aliases
 are not interpreted. The folders are never followed through a link. A file that is a link is read only when its real target is a regular .md file inside the same project
-(and not under .git); any other link is ignored. At most 50 files of 64 KB each. Standard library only.
+(and not under .git); any other link is ignored. At most 50 files of 64 KB each. Credential-shaped text is redacted (bin/outscan.py); otherwise standard library only.
 """
 import fcntl
 import os
 import re
 import stat
+import sys
 import time
+import unicodedata
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import outscan as _outscan                                     # noqa: E402
 
 MAX_FILES, MAX_READ = 50, 64 * 1024
 CAP = {"name": 60, "description": 240, "model": 40, "tool": 40}
@@ -38,7 +44,10 @@ def _clean(v, n):
         return ""
     if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
         v = v[1:-1]
-    return re.sub(r"\s+", " ", _CTRL.sub(" ", v)).strip()[:n]
+    # review r9 Q1: every invisible format character goes (word joiner, soft hyphen, the Arabic letter mark, the tag block), not only the listed
+    # ones, and credential-shaped text is replaced the way a quoted pull request title is (bin/outscan.py redact)
+    v = "".join(c for c in v if unicodedata.category(c) != "Cf")
+    return _outscan.redact(re.sub(r"\s+", " ", _CTRL.sub(" ", v)).strip())[:n]
 
 
 def parse(text, stem):

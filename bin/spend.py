@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 FIELDS = ("cost", "turns", "out", "in", "cache_read", "cache_write")
+TEXT = ("at", "project", "duty", "seat", "model", "run", "fix", "effort", "billing", "provider", "key")
 
 
 def rows(path):
@@ -22,8 +23,10 @@ def rows(path):
                     r = json.loads(line)
                 except ValueError:
                     continue
+                # review r9 D4: one malformed row cannot break the view of the rest: a time or name field
+                # that is not text is dropped, a figure that is not a number counts 0
                 if isinstance(r, dict):
-                    out.append(r)
+                    out.append({k: (None if k in TEXT and not isinstance(v, str) else _num(v) if k in FIELDS else v) for k, v in r.items()})
     except FileNotFoundError:
         pass
     return out

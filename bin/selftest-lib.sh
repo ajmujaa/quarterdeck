@@ -159,4 +159,9 @@ st_have_browser() {
   [ "$_ST_BROWSER" = yes ]
 }
 st_skip() { printf '  skip  %s\n' "$1"; }
+# st_http_up <url>... — 0 once every url answers 200 OUTSIDE any sandbox (a test server just started may take a while on a slow machine), 1 when
+# one still does not after ten seconds: then this machine cannot do it at all, and a check that needs it is skipped, saying so.
+st_http_up() { local i u ok; for i in $(seq 1 50); do ok=1; for u in "$@"; do [ "$(curl -s -m 2 -o /dev/null -w '%{http_code}' "$u")" = 200 ] || ok=""; done; [ -n "$ok" ] && return 0; sleep 0.2; done; return 1; }
+# st_doc <name> — the path of a document written for strangers: docs/public/<name> here, <name> at the top of the public tree (bin/publish.py moves it)
+st_doc() { if [ -f "$REAL/docs/public/$1" ]; then printf '%s' "$REAL/docs/public/$1"; else printf '%s' "$REAL/$1"; fi; }
 st_skip_browser() { st_skip "skipped: no usable browser (playwright or Chromium cannot start here): $1"; }

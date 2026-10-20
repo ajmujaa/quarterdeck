@@ -50,6 +50,8 @@ DEFAULT = [
     ".pnpmfile.*", "pnpm-workspace.yaml", "bunfig.toml",
     # ticket #101: Terraform state, the provider and module cache at any depth, the CLI config and its credentials, and the provider lock file
     "*.tfstate", "*.tfstate.backup", "**/.terraform/**", ".terraformrc", "terraform.rc", "credentials.tfrc.json", ".terraform.lock.hcl",
+    # review r9 (T1): the JSON variable files (*.auto.tfvars.json among them) and the backend settings Terraform loads as much as *.tfvars
+    "*.tfvars.json", "*.tfbackend",
     # round 8 (M3): the lockfiles and task manifests of uv, PDM, Bundler, Composer, Deno and Mix
     "uv.lock", "pdm.lock", "Gemfile.lock", "composer.json", "composer.lock", "deno.json", "deno.jsonc", "deno.lock", "mix.lock",
     # round 8 (M4): editor tasks and settings and dev containers (they run commands when a person opens the branch), the instruction files that steer
@@ -73,6 +75,8 @@ PLAN_NEVER = [
     # ticket #101: state holds live values and secrets, the cache holds provider code that runs, the CLI config and credentials reach a registry
     # or a backend, and the lock file chooses which provider code CI downloads. A person changes these.
     "*.tfstate", "*.tfstate.backup", ".terraform/**", "**/.terraform/**", ".terraformrc", "terraform.rc", "credentials.tfrc.json", ".terraform.lock.hcl",
+    # review r9 (T1): variable files in JSON are not read by the secret check a *.tfvars gets, and a backend file says where state lives
+    "*.tfvars.json", "*.tfbackend",
     # round 8 (M3, M4): the other ecosystems' lockfiles; the other CI systems; the files that steer the next agent; and what runs when a person
     # opens the branch (a dev container's commands, an editor's tasks, a cloud workspace's tasks)
     "uv.lock", "pdm.lock", "Gemfile.lock", "composer.lock", "deno.lock", "mix.lock",
@@ -191,7 +195,14 @@ def tf_folders(plan_text, root):
 
 
 SECRET_NAME = re.compile(r"(?i)(passw|secret|token|api_?key|private_?key|access_?key|credential|auth|cert|\bkey\b|_key\b|pem\b|connection_?string|dsn)")
-ASSIGN = re.compile(r"^\s*\"?([A-Za-z0-9_.-]+)\"?\s*=\s*(.*)$")
+# review r9 (T3): whole words of a name (db_pass, dbPass, pwd, jwt_salt) that make it a secret name though no pattern above is in it
+SECRET_WORDS = {"pass", "pwd", "passwd", "passphrase", "salt", "seed", "bearer", "jwt", "webhook", "signing"}
+ASSIGN = re.compile(r"^\s*\"?([A-Za-z0-9_.-]+)\"?\s*[=:]\s*(.*)$")         # = in HCL, and the : of an object written "key": value
+
+
+def _secret_name(name):
+    words = re.split(r"[^a-z0-9]+", re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name).lower())
+    return bool(SECRET_NAME.search(name)) or any(w in SECRET_WORDS for w in words)
 
 
 def tfvars_secret(text):
@@ -209,7 +220,7 @@ def tfvars_secret(text):
         return hits[0]
     for line in text.splitlines():
         m = ASSIGN.match(line)
-        if m and SECRET_NAME.search(m.group(1)) and m.group(2).strip().rstrip(",") not in ('""', "null", "''"):
+        if m and _secret_name(m.group(1)) and m.group(2).strip().rstrip(",") not in ('""', "null", "''"):
             return "a value for " + m.group(1)
     return ""
 
@@ -221,9 +232,21 @@ def tf_allowed(path, raw, plan_text, root):
         return False
     if ".." in path.split("/"):
         return False
-    if not any(path.startswith(norm(f)) for f in tf_folders(plan_text, root)):
+    if not any(_under(raw, f, root) for f in tf_folders(plan_text, root)):
         return False
     return tfvars_clean(raw, root) if matches(path, ["*.tfvars"]) else True
+
+
+def _under(raw, folder, root):
+    """`raw` (the spelling on disk) is under the folder the plan names, as checked by folder_ok: its leading parts name that folder, compared the way
+    the volume compares names (review r9 T2: on a case-sensitive volume Infra/Net/ and infra/net/ are two folders, and only the named one is unlocked)."""
+    parts, rp = folder.rstrip("/").split("/"), raw.split("/")
+    if len(rp) <= len(parts) or norm("/".join(rp[:len(parts)])) != norm("/".join(parts)):
+        return False
+    try:
+        return os.path.samefile(os.path.join(root, *rp[:len(parts)]), os.path.join(root, *parts))
+    except OSError:
+        return False
 
 
 def tfvars_clean(path, root):

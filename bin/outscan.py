@@ -16,6 +16,7 @@ import re
 import subprocess
 import sys
 import unicodedata
+import urllib.parse
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -59,9 +60,10 @@ def scan_text(text):
     """[kind] for each credential pattern that matches somewhere in the text (the value is never returned). The text is scanned as written, then as read
     (normalise), then with every quote, plus, comma, bar and space taken out (a key split over lines or string pieces), and its base64 runs decoded."""
     seen = normalise(text)
+    pct = urllib.parse.unquote(seen)                 # review r9 A8: percent-encoded text is read as decoded too
     squashed = re.sub(r"[\s\"'`+,;|\\]+", "", seen)
     # round 8 (L4): base64 wrapped over lines (76 columns, as encoders write it) is also decoded with only the white space taken out
-    views = [(text, PATTERNS), (seen, PATTERNS), (squashed, _guard.SECRETS)] + [(d, PATTERNS) for d in _decoded(seen)] \
+    views = [(text, PATTERNS), (seen, PATTERNS), (pct, PATTERNS), (squashed, _guard.SECRETS)] + [(d, PATTERNS) for d in _decoded(seen)] \
         + [(d, PATTERNS) for d in _decoded(re.sub(r"\s+", "", seen))]
     out = []
     for body, pats in views:
@@ -82,7 +84,9 @@ def _env_values(path):
         for line in Path(path).read_text(errors="replace").splitlines():
             m = re.match(r"\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=\s*(.*)$", line)
             if m:
-                out.append(m.group(1).strip().strip("'\""))
+                v = m.group(1).strip()
+                q = re.match(r"""(["'])(.*?)\1""", v)            # review r9 A7: a quoted value is what is inside the quotes, a # included;
+                out.append(q.group(2) if q else re.sub(r"\s+#.*$", "", v).strip("'\""))   # an unquoted one ends at " #"
     except OSError:
         pass
     return out
@@ -100,9 +104,9 @@ def known_values():
     try:                                            # the Anthropic API key duties may be billed to (bin/billing.py), in whichever store holds it
         sys.path.insert(0, str(Path(__file__).resolve().parent))
         import billing
-        vals.append(billing.get_key() or "")
-    except Exception:
-        pass
+        vals.append(billing.get_key(strict=True) or "")
+    except Exception:                               # review r9 A7: said, not swallowed: the scan below runs without the key
+        print("outscan: warning: the Anthropic API key store could not be read; this scan does not compare against the key", file=sys.stderr)
     if not os.environ.get("QUARTERDECK_GH"):        # a stand-in gh (the tests) is not asked, and must not see a call it was not meant to see
         try:
             vals.append(subprocess.run(["gh", "auth", "token"], capture_output=True, text=True, timeout=5).stdout.strip())
@@ -115,11 +119,15 @@ def known_value_hit(text, values=None):
     """True when the text carries one of the machine's own secrets in any shape that survives stripping everything but letters and digits and ignoring case:
     as it is, reversed, hex-encoded, base64 or base32-encoded. Only a transformation that changes the letters themselves (rot13, a cipher) gets past,
     and that needs the model to have been shown the value at all."""
-    flat = _alnum(normalise(text))                   # round 8 (L5): fullwidth letters are folded, not dropped
+    seen = normalise(text)
+    # round 8 (L5): fullwidth letters are folded, not dropped; review r9 A8: percent-encoded text decoded, and every base64 run decoded wherever it
+    # starts (base64 of "xx" + value shares no letters with base64 of the value)
+    pct = urllib.parse.unquote(seen)
+    flats = [_alnum(t) for t in [seen, pct] + list(_decoded(seen)) + list(_decoded(pct))]
     for v in (known_values() if values is None else values):
         for form in (v, v[::-1], v.encode().hex(), base64.b64encode(v.encode()).decode(), base64.urlsafe_b64encode(v.encode()).decode(), base64.b32encode(v.encode()).decode()):
             f = _alnum(form)
-            if len(f) >= 10 and f in flat:
+            if len(f) >= 10 and any(f in flat for flat in flats):
                 return True
     return False
 

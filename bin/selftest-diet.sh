@@ -43,6 +43,15 @@ rm -f "$T/claude-hook"; git -C "$T/work" worktree remove --force "$WT" 2>/dev/nu
 st_noreplies; st_reply default 'RESULT: NO_CHANGE nothing'
 st_duty shipwright --issue 7
 ck "no cap set: no --max-turns is passed" '! argv_has --max-turns'
+# review r9 D3: a turn cap that is not a number does not silently mean "no cap": the call is refused and the variable named
+for bad in abc 0 08 "20 "; do
+  st_noreplies; st_reply default 'RESULT: NO_CHANGE nothing'
+  QUARTERDECK_MAX_TURNS_SHIPWRIGHT="$bad" st_duty shipwright --issue 7
+  ck "a turn cap of '$bad' refuses the call and names QUARTERDECK_MAX_TURNS_SHIPWRIGHT" '[ ! -s "$T/claude-calls" ] && [ "$RC" != 0 ] && grep -rq "QUARTERDECK_MAX_TURNS_SHIPWRIGHT is" "$T/logs"'
+done
+st_noreplies; st_reply default 'RESULT: NO_CHANGE nothing'
+QUARTERDECK_CALL_BUDGET="5; x" st_duty shipwright --issue 7
+ck "  and so does a per-call budget that is not dollars (QUARTERDECK_CALL_BUDGET), which never reaches the CLI" '[ ! -s "$T/claude-calls" ] && [ "$RC" != 0 ] && grep -rq "QUARTERDECK_CALL_BUDGET is" "$T/logs"'
 
 # ---- 2. the prompt switches -----------------------------------------------------------------------------------------------------
 printf '# plan\n\n## 1. Multiply\n\n**Where.** `src/cart.js:1`\n\n## 2. Receipt\n\n**Where.** `src/receipt.js`\n' > "$T/plan.md"
@@ -81,6 +90,16 @@ st_duty inspector --pr 2
 ck "a changed input (the pull request text) is a new key: the model is asked" '[ "$(calls)" = 4 ]'
 QUARTERDECK_MODEL_INSPECTOR=claude-other st_duty inspector --pr 2
 ck "  so is another model" '[ "$(calls)" = 5 ]'
+# review r9 D1: an answer is reused only under the same billing, and a duty billed to the key never gets one past a billing stop
+python3 "$T/bin/billing.py" set inspector api >/dev/null; n=$(calls); rows=$(wc -l < "$T/state/spend.jsonl")
+QUARTERDECK_MODEL_INSPECTOR=claude-other st_duty inspector --pr 2
+ck "an answer made on the plan is not replayed to the duty now billed to the key with no key stored: it stops with NEEDS_HUMAN" \
+   '[ "$(calls)" = "$n" ] && [ "$(last_verdict)" = NEEDS_HUMAN ] && grep -qi "no API key" <<<"$(last_detail)" && ! tail -n +$((rows + 1)) "$T/state/spend.jsonl" | jq -e "select(.billing == \"api\")" >/dev/null'
+printf 'sk-ant-api03-%s\n' "$(printf 'd%.0s' $(seq 1 40))" | python3 "$T/bin/billing.py" set-key >/dev/null
+QUARTERDECK_MODEL_INSPECTOR=claude-other st_duty inspector --pr 2
+ck "  with a key stored the model is asked (the billing is part of the reuse key), and booked to the key" \
+   '[ "$(calls)" = $((n + 1)) ] && ! grep -q "reused" <<<"$(last_detail)" && tail -1 "$T/state/spend.jsonl" | jq -e ".billing == \"api\" and (.reused | not)" >/dev/null'
+python3 "$T/bin/billing.py" set inspector plan >/dev/null; python3 "$T/bin/billing.py" remove-key >/dev/null; st_noreplies; st_reply default "$INSPECT_OK"
 st_noreplies; st_reply default 'nonsense with no contract'
 QUARTERDECK_MODEL_INSPECTOR=claude-third st_duty inspector --pr 2
 QUARTERDECK_MODEL_INSPECTOR=claude-third st_duty inspector --pr 2
@@ -97,6 +116,20 @@ st_duty panel --panel design --seats shipwright,inspector 2>/dev/null; n1=$(call
 st_duty panel --panel design --seats shipwright,inspector 2>/dev/null
 ck "a working folder with a tracked change is never reused" '[ "$(calls)" -gt "$n1" ]'
 git -C "$T/work" checkout -q README.md
+# review r9 D2: what the model can read or is told is in the key: the content of an untracked file, and a count in a command's output
+st_noreplies; st_reply default "$INSPECT_OK"; echo "first" > "$T/work/notes.txt"
+st_duty panel --panel design --seats shipwright,inspector 2>/dev/null; n1=$(calls); st_duty panel --panel design --seats shipwright,inspector 2>/dev/null; n2=$(calls)
+echo "second" > "$T/work/notes.txt"; st_duty panel --panel design --seats shipwright,inspector 2>/dev/null
+ck "an untracked file in the working folder whose content changed is a new key: the model is asked" '[ "$n1" -gt 0 ] && [ "$n2" = "$n1" ] && [ "$(calls)" -gt "$n2" ]'
+# the output file sits in a folder on PATH outside $T: bubblewrap mounts neither the program folder ($T) nor /tmp, but PATH folders read-only
+VB=$(mktemp -d); trap 'rm -rf "$T" "$VB"' EXIT; mkdir -p "$VB/bin"; export PATH="$VB/bin:$PATH"
+rm -f "$T/work/notes.txt"; echo "Tests: 2 failed, 10 passed (took 812 ms)" > "$VB/bin/vout"
+st_registry '["shipwright","inspector","panel"]' "{\"verify\":\"cat $VB/bin/vout\"}"
+st_noreplies; st_reply default "$INSPECT_OK"
+QUARTERDECK_MODEL_INSPECTOR=claude-d2 st_duty inspector --pr 2; echo "Tests: 2 failed, 10 passed (took 95 ms)" > "$VB/bin/vout"; QUARTERDECK_MODEL_INSPECTOR=claude-d2 st_duty inspector --pr 2
+n=$(calls); echo "Tests: 0 failed, 12 passed (took 95 ms)" > "$VB/bin/vout"; QUARTERDECK_MODEL_INSPECTOR=claude-d2 st_duty inspector --pr 2
+ck "a timing in the output is not a new key, but '2 failed' becoming '0 failed' is" '[ "$n" = 1 ] && [ "$(calls)" = 2 ]'
+st_registry '["shipwright","inspector","panel"]'
 export QUARTERDECK_REUSE=""   # empty, not unset: unset means the shipped default
 
 # ---- 4. panels: round 2 only where seats disagree; fewer seats for a small subject; a model per seat -------------------------------
@@ -140,4 +173,8 @@ ck "a model per seat: QUARTERDECK_MODEL_SEAT_NAVAL_ARCHITECT reaches that seat's
 ck "  every panel call is booked under its seat, the chair included" '[ "$(jq -sr "map(.seat) | sort | join(\",\")" "$T/state/spend.jsonl")" = "dockmaster,inspector,naval-architect,shipwright" ]'
 ck "  and qtdeck spend shows the cost per seat and the top sinks" 'o=$(python3 "$T/bin/spend.py" "$T"); grep -q "by panel seat" <<<"$o" && grep -q "naval-architect" <<<"$o" && grep -q "top sinks" <<<"$o" && grep -q "tp/panel" <<<"$o"'
 
+# review r9 D4: one malformed ledger row never hides the rest
+printf '{"at":5,"duty":["x"],"seat":{"a":1},"model":7,"project":[],"cost":"1"}\n{"at":"2999-01-01T00:00:00Z","duty":{"x":1},"cost":2}\n' >> "$T/state/spend.jsonl"
+o=$(python3 "$T/bin/spend.py" "$T" 2>&1); src=$?
+ck "qtdeck spend with a row whose fields are not strings: exit 0 and the normal rows still listed" '[ "$src" = 0 ] && grep -q "naval-architect" <<<"$o" && grep -q "by duty" <<<"$o"'
 st_done

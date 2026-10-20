@@ -582,19 +582,26 @@ claude_sandbox_json() { # claude_sandbox_json <workdir> [extra paths to deny, on
 # other credential that could win over it (CLAUDE_CODE_OAUTH_TOKEN, the auth token, a cloud provider switch).
 # QUARTERDECK_CLAUDE_ENV=inherit passes the whole environment (the self-tests' stand-in model needs its fixtures), with the same billing rule.
 # Only the claude adapter (provider_call_claude) calls these: the key and the sign-in are that adapter's business and no other's.
-_QD_PLAN_DROP="ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN"
-_QD_API_DROP="ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_FOUNDRY"
+# Review r9 (A1): a name that could bill anything but the claude sign-in, or send the call (and an api call's key) anywhere but Anthropic's own
+# endpoint, never reaches a call, plan or api: every ANTHROPIC_* name but the model choices (the key and auth token, ANTHROPIC_BASE_URL,
+# ANTHROPIC_CUSTOM_HEADERS, the Foundry, Bedrock and Vertex settings), the cloud switches CLAUDE_CODE_USE_* and CLAUDE_CODE_SKIP_*, and every
+# cloud credential. An owner who signs claude in through a cloud account cannot have Quarterdeck bill it: the ledger would say "plan".
+_qd_foreign_env() { # _qd_foreign_env <NAME>: 0 when the name must not reach a model call
+  case "$1" in
+    ANTHROPIC_MODEL|ANTHROPIC_SMALL_FAST_MODEL|ANTHROPIC_DEFAULT_OPUS_MODEL|ANTHROPIC_DEFAULT_SONNET_MODEL|ANTHROPIC_DEFAULT_HAIKU_MODEL) return 1 ;;
+    ANTHROPIC_*|CLAUDE_CODE_USE_*|CLAUDE_CODE_SKIP_*|AWS_*|GOOGLE_*|CLOUD_ML_REGION|VERTEX_*|GCLOUD_*|AZURE_*) return 0 ;;
+  esac
+  return 1
+}
 _qd_claude_env() { # _qd_claude_env [plan|api]: fills the array CLAUDE_ENV with NAME=value pairs for env -i (never with the API key)
   CLAUDE_ENV=("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1")
-  local k cloud="" drop=" $_QD_PLAN_DROP "
-  [ "${1:-plan}" = api ] && drop=" $_QD_API_DROP "
-  [ "${1:-plan}" != api ] && [ -n "${CLAUDE_CODE_USE_BEDROCK:-}${CLAUDE_CODE_USE_VERTEX:-}${CLAUDE_CODE_USE_FOUNDRY:-}" ] && cloud=1
+  local k
   while IFS= read -r k; do
-    case "$drop" in *" $k "*) continue ;; esac
+    _qd_foreign_env "$k" && continue
+    [ "${1:-plan}" = api ] && [ "$k" = CLAUDE_CODE_OAUTH_TOKEN ] && continue      # the plan's sign-in token would win over the key
     case "$k" in
       TMPDIR) CLAUDE_ENV+=("TMPDIR=$_QD_SYSTMP"); continue ;;
       HOME|PATH|USER|LOGNAME|SHELL|LANG|LC_*|TERM|TZ|ANTHROPIC_*|CLAUDE_CONFIG_DIR|CLAUDE_CODE_*|HTTP_PROXY|HTTPS_PROXY|NO_PROXY|http_proxy|https_proxy|no_proxy|NODE_EXTRA_CA_CERTS|SSL_CERT_FILE|SSL_CERT_DIR) ;;
-      AWS_*|GOOGLE_*|CLOUD_ML_REGION|VERTEX_*|GCLOUD_*|ANTHROPIC_FOUNDRY_*) [ -n "$cloud" ] || continue ;;
       *) continue ;;
     esac
     [ "$k" = CLAUDE_CODE_SUBPROCESS_ENV_SCRUB ] && continue
@@ -614,7 +621,8 @@ _qd_call_env() {
     while read -r _ _ k; do export -nf "$k"; done < <(declare -Fx)
     for k in "${CLAUDE_ENV[@]}"; do export "$k"; done
   else
-    for k in $([ "$1" = api ] && echo "$_QD_API_DROP" || echo "$_QD_PLAN_DROP"); do unset "$k"; done
+    while IFS= read -r k; do _qd_foreign_env "$k" && unset "$k"; done < <(compgen -e)
+    [ "$1" = api ] && unset CLAUDE_CODE_OAUTH_TOKEN
   fi
   if [ "$1" = api ]; then export ANTHROPIC_API_KEY="$_QD_API_KEY"; fi
   _QD_API_KEY=""
@@ -623,10 +631,20 @@ _qd_call_env() {
 # _qd_billing_stop <duty> <reason>: an api call that cannot go ahead (no key stored, a spend cap reached): the duty stops with NEEDS_HUMAN and
 # says why, and the duty's own "run failed" row for the same run is not added on top (record_run looks for the mark).
 _qd_billing_stop() {
-  log "billing: $1 is billed to the API key and was not started: $2"
+  log "billing: $1 was not started: $2"
   notify "quarterdeck/${QUARTERDECK_PROJECT:-quarterdeck}" "$1 stopped: $2"
   record_run "${QUARTERDECK_PROJECT:-}" "$1" NEEDS_HUMAN "$2"
-  [ -z "${QUARTERDECK_RUN_ID:-}" ] || : > "$TMPDIR/qd-billing-stop.$QUARTERDECK_RUN_ID"     # only a run with its own id can be told apart
+  # only a run with its own id can be told apart; the duty process ($$) too, as run ids repeat (inspect-<PR>, review r9 A6)
+  [ -z "${QUARTERDECK_RUN_ID:-}" ] || : > "$TMPDIR/qd-billing-stop.$QUARTERDECK_RUN_ID.$$"
+}
+
+_qd_settle() { # _qd_settle <hold id or empty>: the call that held it is booked (bin/billing.py, review r9 A5)
+  [ -z "$1" ] || python3 "$QUARTERDECK_DIR/bin/billing.py" settle "$1" >/dev/null 2>&1 \
+    || log "billing: could not settle hold $1; it counts against the API caps until midnight"
+}
+_qd_book_unknown() { # _qd_book_unknown <duty> <effort> <budget> <billing>: a call billed to the key whose cost is not known is booked at its budget
+  [ "$4" = api ] || return 0
+  record_spend_neutral "$(jq -nc --argjson c "${3:-0}" '{provider: "claude", cost_usd: $c, cost_known: false, error: true, stop: "error"}')" "$1" "$2" "" api
 }
 
 # ---- the model call ---------------------------------------------------------
@@ -730,32 +748,70 @@ claude_run() { # claude_run <workdir> <prompt> [tools, comma separated] [deny-to
   # A turn cap per role (issue 121): QUARTERDECK_MAX_TURNS_<DUTY>, else QUARTERDECK_MAX_TURNS; a number, or nothing for no cap. A call that
   # reaches it returns 4 and the duty says so; its envelope (subtype error_max_turns) is kept and costed like any other.
   local tvar turns; tvar="QUARTERDECK_MAX_TURNS_$key"; turns="${!tvar:-${QUARTERDECK_MAX_TURNS:-}}"
-  [[ "$turns" =~ ^[1-9][0-9]{0,3}$ ]] || turns=""
+  # review r9 D3: a cap that is not a number is refused by name; read as "no cap" it would drop the default of 20 for the panel and the inspector
+  if [ -n "$turns" ] && ! [[ "$turns" =~ ^[1-9][0-9]{0,3}$ ]]; then
+    [ -n "${!tvar:-}" ] || tvar=QUARTERDECK_MAX_TURNS
+    log "claude_run: refusing: $tvar is '$turns', not a whole number from 1 to 9999 (empty is no cap)"; say "quarterdeck: $tvar is not a whole number of turns"; return 1
+  fi
 
   # Who pays (bin/billing.py, ticket #38): the plan unless the duty (or this crew seat) is set to the API key. Only the claude adapter signs
   # in to Anthropic, so only its calls are billed to either; another provider's calls are booked as billing "none" and never see the key.
   local bmode=none cbudget="${QUARTERDECK_CALL_BUDGET:-}" left=""
+  # review r9 D3: the per-call budget is dollars or nothing; anything else is refused by name, never handed to the CLI or the caps as it is
+  [[ -z "$cbudget" || "$cbudget" =~ ^[0-9]{1,6}(\.[0-9]{1,6})?$ ]] \
+    || { log "claude_run: refusing: QUARTERDECK_CALL_BUDGET is '$cbudget', not a number of dollars"; say "quarterdeck: QUARTERDECK_CALL_BUDGET is not a number of dollars"; return 1; }
   if [ "$QD_PROVIDER" = claude ]; then
-    bmode=plan
-    [ -f "$QUARTERDECK_DIR/bin/billing.py" ] && bmode=$(python3 "$QUARTERDECK_DIR/bin/billing.py" mode "$duty" "${QUARTERDECK_SEAT:-}" 2>/dev/null)
-    [ "$bmode" = api ] || bmode=plan
+    # Fail closed (review r9 A2): a setting that cannot be read, or a billing.py that cannot answer, stops the call; it never becomes the plan.
+    if [ -f "$QUARTERDECK_DIR/bin/billing.py" ]; then
+      bmode=$(python3 "$QUARTERDECK_DIR/bin/billing.py" mode "$duty" "${QUARTERDECK_SEAT:-}" 2>/dev/null) \
+        || { _qd_billing_stop "$duty" "${bmode:-bin/billing.py could not read the billing setting}"; return 5; }
+      case "$bmode" in plan|api) ;; *) _qd_billing_stop "$duty" "bin/billing.py answered something that is not plan or api"; return 5 ;; esac
+    elif [ -e "$QUARTERDECK_HOME/config/billing.json" ]; then
+      _qd_billing_stop "$duty" "bin/billing.py is missing, so config/billing.json cannot be read"; return 5
+    else bmode=plan; fi
+  fi
+
+  # An api call needs the key and room under its caps, or it does not start: falling back to the plan would bill an account the owner did
+  # not choose. Its own return code, 5 (4 is the turn cap). Only whether a key is stored is asked here; the claude adapter reads it.
+  # Before the reuse check (review r9 D1): an answer replayed to a duty billed to the key never gets past a stop. The gate holds what this call
+  # may spend until the call is booked (review r9 A5), so calls running at once share what is left; every way out below settles the hold.
+  local hold=""
+  if [ "$bmode" = api ]; then
+    python3 "$QUARTERDECK_DIR/bin/billing.py" has-key >/dev/null 2>&1 \
+      || { _qd_billing_stop "$duty" "no API key is stored (qtdeck keys set anthropic, or the Settings page); it was not billed to your plan instead"; return 5; }
+    hold="$(tr -c 'A-Za-z0-9._-' '_' <<<"${QUARTERDECK_RUN_ID:-run}" | cut -c1-60).$$.$RANDOM$RANDOM"
+    left=$(python3 "$QUARTERDECK_DIR/bin/billing.py" gate "$duty" --hold "$hold" ${cbudget:+--budget "$cbudget"} 2>/dev/null) \
+      || { _qd_billing_stop "$duty" "${left:-the API spend caps could not be read}"; return 5; }
+    # the call may spend at most what is left under the caps (billing.py has taken the smaller of that and the per-call budget)
+    if [ -n "$left" ]; then cbudget=$left; else hold=""; fi
   fi
 
   # Skip when nothing changed (issue 121): a read-only call of a duty listed in QUARTERDECK_REUSE, whose inputs are byte for byte those of an
   # earlier answered call, gets that answer back without a model call. The inputs are everything that decides the answer: the prompt (the
-  # random UNTRUSTED nonces aside), the model, effort, tools and rules, the turn cap, and the working folder's commit, which must be clean.
+  # random UNTRUSTED nonces aside), the provider and who pays (review r9 D1), the model, effort, tools and rules, the turn cap, and the working
+  # folder's commit, which must be clean.
   # QUARTERDECK_FRESH=1 (qtdeck run ... --fresh) asks the model again and stores the new answer.
   local rkey="" rfile="" hit=""
   case " ${QUARTERDECK_REUSE:-} " in *" $duty "*)
     case ",$names," in *,Edit,*|*,Write,*|*,Bash,*) ;; *)
       local head
-      # ponytail: an untracked file counts by name only (a borrowed node_modules link is untracked); a tracked change turns reuse off for the call.
+      # A tracked change turns reuse off for the call. An untracked file counts by name and content (review r9 D2; a link, a borrowed node_modules,
+      # by where it points). ponytail: ignored files are not in the key (hashing a node_modules on every call costs more than the call saves).
       if head=$(safe_git -C "$wdir" rev-parse HEAD 2>/dev/null) && [ -z "$(safe_git -C "$wdir" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
-        rkey=$( { printf '%s\n' "$duty" "$QD_PROVIDER" "$model" "$effort" "$names" "$allow" "$deny" "$turns" "$head" "$wdir"
+        rkey=$( { printf '%s\n' "$duty" "$QD_PROVIDER" "billing=$bmode" "$model" "$effort" "$names" "$allow" "$deny" "$turns" "$head" "$wdir"
                   safe_git -C "$wdir" status --porcelain 2>/dev/null
-                  # the nonces go, and the numbers inside a command's output (test timings): the commit above already pins what ran
-                  printf '%s\n' "$prompt" | awk '{ if ($0 ~ /^(BEGIN|END) UNTRUSTED /) { sub(/ [0-9a-f]+$/, ""); o = ($0 ~ /^BEGIN UNTRUSTED output of /) }
-                                                   else if (o) gsub(/[0-9]+/, "N"); print }'; } | shasum -a 256 | cut -c1-32)
+                  safe_git -C "$wdir" ls-files -o --exclude-standard -z 2>/dev/null | (cd "$wdir" && python3 -c '
+import hashlib, os, sys
+for p in sys.stdin.buffer.read().split(b"\0"):
+    try:
+        print(p, os.readlink(p) if os.path.islink(p) else hashlib.sha256(open(p, "rb").read()).hexdigest() if os.path.isfile(p) else "")
+    except OSError:
+        print(p, "unreadable")')
+                  # the nonces go, and the timings inside a command's output (812 ms, 0.53s, 12:04:31): the commit above pins what ran, and a count
+                  # ("2 failed") is kept (review r9 D2)
+                  printf '%s\n' "$prompt" | perl -pe 'if (/^(BEGIN|END) UNTRUSTED /) { s/ [0-9a-f]+$//; $o = /^BEGIN UNTRUSTED output of / }
+                    elsif ($o) { s/\b\d+(?:\.\d+)?\s?(?:ms|s|sec|secs|seconds|m|min|mins|minutes)\b/N/g; s/\b\d{1,2}:\d{2}(?::\d{2})?(?:\.\d+)?\b/N/g }'; } \
+                | shasum -a 256 | cut -c1-32)
         rfile="$QUARTERDECK_HOME/state/reuse/$rkey.json"
         if [ "${QUARTERDECK_FRESH:-0}" != 1 ] && [ -f "$rfile" ] \
            && [ -n "$(find "$rfile" -mtime -"${QUARTERDECK_REUSE_DAYS:-7}" 2>/dev/null)" ]; then hit=1; fi
@@ -769,7 +825,7 @@ claude_run() { # claude_run <workdir> <prompt> [tools, comma separated] [deny-to
       log "reused $rkey for ${QUARTERDECK_RUN_ID:-run} (no model call)"
       printf '%s\n' "${QUARTERDECK_RUN_ID:-run}" >> "$QUARTERDECK_HOME/state/tmp/reused.$$"
       printf '%s' "$out" > "$QUARTERDECK_HOME/logs/runs/${QUARTERDECK_RUN_ID:-run}.json"
-      record_spend_neutral "$out" "$duty" "$effort" "$rkey" "$bmode"
+      record_spend_neutral "$out" "$duty" "$effort" "$rkey" "$bmode"; _qd_settle "$hold"
       jq -r '.text // empty' <<<"$out"
       return 0
     fi
@@ -778,16 +834,6 @@ claude_run() { # claude_run <workdir> <prompt> [tools, comma separated] [deny-to
   # Cache hygiene (issue 121): the CLI's per-machine system-prompt sections (the working folder, git status) move into the first user message,
   # so the long system prompt is byte-identical across worktrees and is read from the prompt cache instead of written again.
   local stable=""; [ "${QUARTERDECK_STABLE_PROMPT:-off}" = on ] && stable=--exclude-dynamic-system-prompt-sections
-
-  # An api call needs the key and room under its caps, or it does not start: falling back to the plan would bill an account the owner did
-  # not choose. Its own return code, 5 (4 is the turn cap). Only whether a key is stored is asked here; the claude adapter reads it.
-  if [ "$bmode" = api ]; then
-    left=$(python3 "$QUARTERDECK_DIR/bin/billing.py" gate "$duty" 2>/dev/null) || { _qd_billing_stop "$duty" "${left:-the API spend caps could not be read}"; return 5; }
-    python3 "$QUARTERDECK_DIR/bin/billing.py" has-key >/dev/null 2>&1 \
-      || { _qd_billing_stop "$duty" "no API key is stored (qtdeck keys set anthropic, or the Settings page); it was not billed to your plan instead"; return 5; }
-    # the call may spend at most what is left under the caps
-    [ -n "$left" ] && cbudget=$(awk -v a="$cbudget" -v b="$left" 'BEGIN { printf "%.4f", (a == "" || b + 0 < a + 0) ? b : a }')
-  fi
 
   # Captured with ||, not a following $?: under set -e a failing substitution
   # would end the script before its cost was recorded.
@@ -805,19 +851,25 @@ claude_run() { # claude_run <workdir> <prompt> [tools, comma separated] [deny-to
         QD_CALL_SANDBOX=$sandbox QD_CALL_TURNS=$turns QD_CALL_STABLE=$stable QD_CALL_ENVELOPE="$QUARTERDECK_HOME/logs/runs/${QUARTERDECK_RUN_ID:-run}.json"
   rc=0
   out=$(printf '%s' "$prompt" | "provider_call_$QD_PROVIDER") || rc=$?
-  [ -n "$out" ] || { log "$QD_PROVIDER returned nothing (exit $rc, workdir=$wdir)"; return 1; }
+  # Review r9 A4: a call billed to the key that was killed at the timeout, crashed, printed nothing or no cost may still have been billed. It is
+  # booked at its budget (the most it could have spent), so the caps count it, and its hold is settled.
+  [ -n "$out" ] || { log "$QD_PROVIDER returned nothing (exit $rc, workdir=$wdir)"; _qd_book_unknown "$duty" "$effort" "$cbudget" "$bmode"; _qd_settle "$hold"; return 1; }
   if ! jq -e 'type == "object"' >/dev/null 2>&1 <<<"$out"; then
-    log "claude_run: the $QD_PROVIDER adapter printed something that is not a reply envelope (exit $rc, workdir=$wdir)"; return 1
+    log "claude_run: the $QD_PROVIDER adapter printed something that is not a reply envelope (exit $rc, workdir=$wdir)"
+    _qd_book_unknown "$duty" "$effort" "$cbudget" "$bmode"; _qd_settle "$hold"; return 1
   fi
 
   # What it cost, before deciding whether it succeeded. A call that fails
   # or is stopped at its cap has still been paid for, and a spend ledger that
   # only counts successes is wrong in exactly the cases worth looking at.
   if [ "$(jq -r '.unparsed // false' <<<"$out")" = true ]; then
-    log "record_spend: could not record a ${duty} call — the daily budget will undercount it"
+    if [ "$bmode" = api ]; then _qd_book_unknown "$duty" "$effort" "$cbudget" "$bmode"
+    else log "record_spend: could not record a ${duty} call — the daily budget will undercount it"; fi
   else
+    [ "$bmode" = api ] && out=$(jq -c --argjson b "${cbudget:-0}" 'if .cost_known == false then .cost_usd = ([.cost_usd // 0, $b] | max) else . end' <<<"$out")
     record_spend_neutral "$out" "$duty" "$effort" "$rkey" "$bmode"
   fi
+  _qd_settle "$hold"
 
   case "$(jq -r '.stop // empty' <<<"$out")" in
     cap)   log "stopped at the per-call cap of \$${cbudget}, nothing written"; return 3 ;;
@@ -867,8 +919,15 @@ provider_pick() { # provider_pick <duty>: sets QD_PROVIDER and QD_PROVIDER_FROM;
   # QUARTERDECK_PROVIDER, then claude. "default" at any level means claude.
   local key pvar reg=""
   key=$(tr '[:lower:]-' '[:upper:]_' <<<"$1"); pvar="QUARTERDECK_PROVIDER_$key"
-  if [ -n "${QUARTERDECK_PROJECT:-}" ] && [ -r "$PROJECTS_FILE" ]; then
-    reg=$(jq -r --arg p "$QUARTERDECK_PROJECT" --arg d "$1" '.[$p].providers[$d] // empty | strings' "$PROJECTS_FILE" 2>/dev/null)
+  # Fail closed (review r9 P1): a registry that cannot be read, or whose providers entry is not a name, refuses the call. Read as "nothing set",
+  # it would send the prompt and the repository to claude for a duty the owner routed away from Anthropic.
+  if [ -n "${QUARTERDECK_PROJECT:-}" ] && [ -e "$PROJECTS_FILE" ]; then
+    reg=$(jq -r --arg p "$QUARTERDECK_PROJECT" --arg d "$1" 'if type != "object" then error("x") else . end | (.[$p] // {})
+          | if type != "object" then error("x") else (.providers // {}) end | if type != "object" then error("x") else (.[$d] // empty) end
+          | if type == "string" then . else error("x") end' "$PROJECTS_FILE" 2>/dev/null) || {
+      log "claude_run: refusing: the provider setting of $1 cannot be read from $PROJECTS_FILE (not readable, not JSON, or \"providers\" is not {\"<duty>\": \"<name>\"})"
+      say "quarterdeck: the provider setting of $1 cannot be read from $PROJECTS_FILE; nothing was sent to any model"
+      return 1; }
   fi
   if [ -n "${QUARTERDECK_PROVIDER_OVERRIDE:-}" ]; then QD_PROVIDER=$QUARTERDECK_PROVIDER_OVERRIDE; QD_PROVIDER_FROM=QUARTERDECK_PROVIDER_OVERRIDE
   elif [ -n "${QUARTERDECK_PROVIDER_PERSONA:-}" ]; then QD_PROVIDER=$QUARTERDECK_PROVIDER_PERSONA; QD_PROVIDER_FROM="the crew seat's provider: line (QUARTERDECK_PROVIDER_PERSONA)"
@@ -1049,7 +1108,8 @@ record_run() { # record_run <project> <duty> <verdict> [detail] [url]
   [ -n "$rest" ] && detail="$rest${detail:+ — $detail}"
   # A model call this run could not start for billing (no API key, a spend cap) already wrote its NEEDS_HUMAN row and why: the duty's own
   # "run failed" that follows is the same event, not a second one.
-  if [ "$verdict" = ERROR ] && [ -n "${QUARTERDECK_RUN_ID:-}" ] && [ -e "$TMPDIR/qd-billing-stop.$QUARTERDECK_RUN_ID" ]; then
+  if [ "$verdict" = ERROR ] && [ -n "${QUARTERDECK_RUN_ID:-}" ] && [ -e "$TMPDIR/qd-billing-stop.$QUARTERDECK_RUN_ID.$$" ]; then
+    rm -f "$TMPDIR/qd-billing-stop.$QUARTERDECK_RUN_ID.$$"
     log "record_run: $duty ERROR not recorded: this run already stopped with NEEDS_HUMAN for billing"; return 0
   fi
   # A run whose model answers were reused (claude_run, QUARTERDECK_REUSE) says so on its row.
@@ -1750,6 +1810,12 @@ tf_checks() {
   for f in "$@"; do
     case "$f" in */|*/*/) ;; *) continue ;; esac
     [[ "$f" =~ ^[A-Za-z0-9._@+/-]+$ ]] && [[ "$f" != /* ]] && [[ "/$f" != */../* ]] || continue
+    # review r9 T6: folder_ok proves the folder itself is no link; fmt -recursive and validate read everything under it, so a link anywhere
+    # inside (which could lead out of the worktree) means terraform does not run there at all
+    if [ -n "$(find "$wt/$f" -type l -print -quit 2>/dev/null)" ]; then
+      _tf_not_run "terraform fmt $f" "terraform fmt" "a link under $f"
+      _tf_not_run "terraform validate $f" "terraform validate" "a link under $f"; continue
+    fi
     name="terraform fmt $f"; cmd="$pre $tf -chdir='$f' fmt -check -recursive -no-color"
     if ! command -v "$tf" >/dev/null 2>&1; then
       _tf_not_run "$name" "$cmd" "terraform is not installed"

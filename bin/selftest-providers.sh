@@ -156,22 +156,39 @@ case "$MODE" in
     echo; [ "$fails" = 0 ] && echo "  all checks passed" || { echo "  $fails check(s) failed"; exit 1; }; exit 0 ;;
 esac
 normalise "$R/qd" "$R/now.jsonl" > "$R/now.golden"
+# The record was made on a Mac: the order of the exported environment is the shell's (bash 3.2 there, another bash elsewhere) and macOS adds
+# __CF_USER_TEXT_ENCODING to every process. Elsewhere both sides are compared with each environment sorted and that one variable left out;
+# every name and value, and everything else in the record, must still be the same.
+if [ "$(uname -s)" != Darwin ]; then
+  canon() { python3 - "$1" <<'PY'
+import json, sys
+t, i, dec = open(sys.argv[1]).read(), 0, json.JSONDecoder()
+while True:
+    while i < len(t) and t[i].isspace(): i += 1
+    if i >= len(t): break
+    o, i = dec.raw_decode(t, i)
+    for c in o.get("calls", []):
+        if isinstance(c.get("env"), list): c["env"] = sorted(e for e in c["env"] if not e.startswith("__CF_USER_TEXT_ENCODING="))
+    print(json.dumps(o, indent=1, sort_keys=True))
+PY
+  }
+  canon "$GOLD" > "$R/gold.canon"; canon "$R/now.golden" > "$R/now.canon"; GOLD_CMP="$R/gold.canon"; NOW_CMP="$R/now.canon"
+else GOLD_CMP="$GOLD"; NOW_CMP="$R/now.golden"; fi
 ck "the golden record exists (fixtures/providers/claude-call.golden)" '[ -s "$GOLD" ]'
 ck "argv, environment, folder, stdin, settings file, return code, output, spend, run log and log lines match the golden record for: $CASES" \
-   'cmp -s "$GOLD" "$R/now.golden" || { diff "$GOLD" "$R/now.golden" | head -60; false; }'
+   'cmp -s "$GOLD_CMP" "$NOW_CMP" || { diff "$GOLD_CMP" "$NOW_CMP" | head -60; false; }'
 ck "the record proves something: the review call got the prompt on stdin and no shell, and the builder's sandbox file was 0600" \
    'grep -q "\"stdin\": \"Review this. BEGIN UNTRUSTED x\\\\nline two\"" "$GOLD" && grep -q "\"smode\": \"0o600\"" "$GOLD"'
-ck "the clean environment carries no decoy (GH_TOKEN, QUARTERDECK_*, AWS only for the cloud case); no call, the inherited one included, gets the shell's ANTHROPIC_API_KEY (every call here is billed to the plan, bin/billing.py)" \
+ck "the clean environment carries no decoy (GH_TOKEN, QUARTERDECK_*); no call, the inherited one included, gets the shell's ANTHROPIC_API_KEY or a cloud credential, the cloud case's switch included (review r9 A1: every call here is billed to the plan, bin/billing.py)" \
    'python3 -c "
 import json,sys
 cs=[json.loads(l) for l in open(\"$R/now.jsonl\")]
 for c in cs:
     for call in c[\"calls\"]:
         env=\"\n\".join(call[\"env\"])
-        assert \"decoy-anthropic-key\" not in env, c[\"case\"]
+        assert \"decoy-anthropic-key\" not in env and \"decoy-aws\" not in env and \"CLAUDE_CODE_USE_BEDROCK\" not in env, c[\"case\"]
         if c[\"case\"]==\"inherit\": continue
         assert \"decoy-gh-token\" not in env and \"decoy-quarterdeck\" not in env, c[\"case\"]
-        assert (\"decoy-aws\" in env)==(c[\"case\"]==\"cloud\"), c[\"case\"]
 "'
 
 ck "the spend ledger names the provider of every call and whether its cost was reported" \
@@ -215,6 +232,18 @@ ck "QUARTERDECK_PROVIDER_OVERRIDE beats everything (a decision panel can put eve
 printf '{"tp":{"repo":"x/tp","path":"%s","providers":{"surveyor":"llama-cloud"}}}' "$R/wd" > "$QD/config/projects.json"
 rm -f "$R/calls.jsonl" "$R/fake-calls.jsonl"; call "$QD" surveyor QUARTERDECK_PROJECT=tp -- "$R/wd" "Review."
 ck "an unknown provider in the registry is refused too, and the message says it came from the registry" '[ "$(used)" = none ] && grep -q "unknown provider .llama-cloud." <<<"$(lastlog)" && grep -q "projects.json" <<<"$(lastlog)"'
+# review r9 P1: a registry that cannot be read is not "no provider set": the call is refused, it never falls through to claude
+for bad in 'invalid JSON:{"tp": {"providers": {"surveyor": "fake"}' 'a provider that is not a string:{"tp": {"providers": {"surveyor": ["fake"]}}}' \
+           'providers that are not an object:{"tp": {"providers": "fake"}}' 'a project that is not an object:{"tp": "fake"}'; do
+  printf '%s' "${bad#*:}" > "$QD/config/projects.json"; rm -f "$R/calls.jsonl" "$R/fake-calls.jsonl" "$QD/logs/quarterdeck.log"
+  call "$QD" surveyor QUARTERDECK_PROJECT=tp "${FK[@]}" -- "$R/wd" "Review."
+  ck "a registry with ${bad%%:*} refuses the call (no model runs, claude least of all) and the log names the registry" \
+     '[ "$(used)" = none ] && [ "$(cat "$R/rc")" != 0 ] && grep -q "projects.json" <<<"$(lastlog)"'
+done
+printf '{"tp":{"providers":{"surveyor":"fake"}}}' > "$QD/config/projects.json"; chmod 000 "$QD/config/projects.json"; rm -f "$R/calls.jsonl" "$R/fake-calls.jsonl" "$QD/logs/quarterdeck.log"
+call "$QD" surveyor QUARTERDECK_PROJECT=tp "${FK[@]}" -- "$R/wd" "Review."
+ck "  and so does a registry that cannot be read" '[ "$(used)" = none ] && [ "$(cat "$R/rc")" != 0 ] && grep -q "projects.json" <<<"$(lastlog)"'
+chmod 600 "$QD/config/projects.json"
 mkdir -p "$QD/crew"; printf -- '---\nname: seatx\ndiscipline: dev\nseat: a seat\nbias: b\nmodel:\nprovider: fake\n---\nA seat.\n' > "$QD/crew/seatx.md"
 ck "the panel duties export a crew seat's provider: line the way they export its model: line" \
    '(n=$(grep -c "crew_meta \"\$seat\" model" "$REAL/duties/marshal.sh"); m=$(grep -c "crew_meta \"\$seat\" provider)" "$REAL/duties/marshal.sh"); [ "$n" = "$m" ]) && grep -q "crew_meta \"\$1\" provider)" "$REAL/duties/panel.sh" && grep -q "crew_meta modelmaker provider" "$REAL/duties/mockup.sh"'
@@ -234,6 +263,9 @@ ck "... and the names in its environment, which hold no decoy, no QUARTERDECK_* 
 ck "its reply is the text it was scripted with, and the raw envelope is kept in the run log" '[ "$(cat "$R/stdout")" = "VERDICT: FAKE" ] && jq -e ".provider == \"fake\" and .text == \"VERDICT: FAKE\"" "$QD/logs/runs/f-1.json" >/dev/null'
 ck "the spend ledger books its scripted cost, tokens, turns and model under provider fake" \
    'jq -e "select(.provider == \"fake\" and .cost == 0.25 and .read == 11 and .out == 7 and .turns == 2 and .model == \"fake-1\" and .stopped == null and .cost_known == true)" "$QD/state/spend.jsonl" >/dev/null'
+fresh; call "$QD" shipwright "${FAKE[@]}" QUARTERDECK_MAX_TURNS_SHIPWRIGHT=7 -- "$R/wd" "Fix it." "Read,Edit"
+ck "review r9 P2: ... the turn cap and who pays (none: only the claude adapter signs in to Anthropic), so the seam shows both reach every provider" \
+   '[ "$(FR .turns)" = 7 ] && [ "$(FR .billing)" = none ]'
 fresh; call "$QD" surveyor "${FAKE[@]}" -- "$R/wd" "Prompt one. BEGIN UNTRUSTED z"; A=$(cat "$R/stdout"); call "$QD" surveyor "${FAKE[@]}" -- "$R/wd" "Prompt one. BEGIN UNTRUSTED z"
 ck "it is deterministic: the same prompt gives the same reply" '[ "$A" = "$(cat "$R/stdout")" ] && [ "$(wc -l < "$R/fake-calls.jsonl" | tr -d " ")" = 2 ]'
 fake_script '[{"match":"second","text":"B"},{"match":"first|second","text":"A"},{"text":"C"}]'

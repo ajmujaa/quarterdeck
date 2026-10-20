@@ -40,7 +40,7 @@ provider_call_fake() {
   local out
   out=$(cd "$QD_CALL_WORKDIR" && guard "$QD_CALL_TIMEOUT" env -i "${fenv[@]}" python3 "$QUARTERDECK_DIR/providers/fake.py" \
         --workdir="$QD_CALL_WORKDIR" --tools="$QD_CALL_TOOLS" --allow="$QD_CALL_ALLOW" --deny="$QD_CALL_DENY" \
-        --model="$QD_CALL_MODEL" --effort="$QD_CALL_EFFORT" --budget="$QD_CALL_BUDGET" --sources="$QD_CALL_SOURCES" --settings="$sfile" \
+        --model="$QD_CALL_MODEL" --effort="$QD_CALL_EFFORT" --budget="$QD_CALL_BUDGET" --turns="$QD_CALL_TURNS" --billing="$QD_CALL_BILLING" --sources="$QD_CALL_SOURCES" --settings="$sfile" \
         --record="${QUARTERDECK_FAKE_RECORD:-$QUARTERDECK_HOME/state/fake-calls.jsonl}" --script="${QUARTERDECK_FAKE_SCRIPT:-}" \
         --replies="${QUARTERDECK_FAKE_REPLIES:-}" --cost="${QUARTERDECK_FAKE_COST:-0.05}" --hook="${QUARTERDECK_FAKE_HOOK:-}" \
         2>>"${LOG_FILE:-$QUARTERDECK_HOME/logs/quarterdeck.log}") || rc=$?

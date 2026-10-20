@@ -275,6 +275,18 @@ jq -n --arg s "$(git -C "$T/origin.git" rev-parse refs/pull/41/head)" '{number:4
 st_duty infra --pr 41
 ck "M1 a changed infrastructure file under a folder that became a link out of the checkout is read from git (deleted), never from the linked folder" '! grep -q "R6-OTHER-REPO-DECOY" "$T/claude-calls"'
 
+# ---- review r9 T4, T5: a finding never echoes a secret into the log, a run record or a file; the duty holds no credential it does not need --------------
+T4KEY="gh""p_$(printf 'T4%.0s' $(seq 1 18))"
+st_noreplies; st_reply default "INFRA_JSON: [{\"resource\":\"aws_db_instance.main\",\"change\":\"c\",\"risk\":\"medium\",\"why\":\"the provider block hardcodes $T4KEY\",\"blast_radius\":\"b\",\"rollback\":\"r\",\"needs_human\":true}]
+VERDICT: REVIEWED 1"; : > "$T/claude-calls"; rm -f "$T"/workspace/*infra*.md "$T/t4-report.md"
+printf '#!/bin/bash\nenv >> %q\nexec %q "$@"\n' "$T/gh-env" "$T/path/gh" > "$T/path/gh-env"; chmod +x "$T/path/gh-env"; : > "$T/gh-env"
+DATABASE_URL="postgres://u:decoy-db@h/x" NPM_TOKEN=decoy-npm HCLOUD_TOKEN=decoy-hcloud DIGITALOCEAN_ACCESS_TOKEN=decoy-do PGPASSWORD=decoy-pg OP_SESSION_x=decoy-op \
+  MY_SERVICE_SECRET=decoy-secret QUARTERDECK_GH="$T/path/gh-env" st_duty infra --pr 2 --apply --report-to "$T/t4-report.md"
+ck "T4 a key-shaped value a model quoted in a finding is in neither the log, the workspace report, the --report-to file, the run ledger nor the output" \
+   '[ -n "$(docs)" ] && [ -s "$T/t4-report.md" ] && ! grep -rqF "$T4KEY" --exclude-dir=runs "$T/logs" "$T/workspace" "$T/t4-report.md" "$T/state/runs.json" && ! grep -qF "$T4KEY" <<<"$OUT" && grep -q "redacted" "$T/t4-report.md"'
+ck "T5 the duty's own commands (gh here) get no DATABASE_URL, NPM_TOKEN, HCLOUD_, DIGITALOCEAN_, PG*, OP_ or *_SECRET credential" \
+   '[ -s "$T/gh-env" ] && ! grep -q "decoy-" "$T/gh-env"'
+
 # ---- the duty itself ---------------------------------------------------------------------------------------------------------------------------
 ck "no line of the duty runs a cloud tool, and it names no credential folder" '! grep -v "^[[:space:]]*#" "$REAL/duties/infra.sh" | grep -qE "(^|[;&|(\`]|[$][(])[[:space:]]*(aws|terraform|tofu|cdk|sam|sls|serverless|vercel|supabase|pulumi|gcloud)[[:space:]]" && ! grep -v "^[[:space:]]*#" "$REAL/duties/infra.sh" | grep -qE "[.]aws"'
 ck "the duty hands the model the read-only tool list and no other" '[ "$(grep -c "claude_run" "$REAL/duties/infra.sh")" -ge 1 ] && grep -q "claude_run \"\$WT\" \"\$prompt\" \"Read,Grep,Glob\"" "$REAL/duties/infra.sh" && ! grep -E "claude_run" "$REAL/duties/infra.sh" | grep -q "Bash(gh\|Write\|Edit"'

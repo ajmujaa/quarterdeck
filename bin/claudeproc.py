@@ -29,20 +29,21 @@ THINKING_ENV = {"MAX_THINKING_TOKENS": "0"}     # a voice answer does not need a
 _ENV_KEEP = ("HOME", "PATH", "TMPDIR", "USER", "LOGNAME", "SHELL", "LANG", "TERM", "TZ", "CLAUDE_CONFIG_DIR", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy",
              "no_proxy", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "SSL_CERT_DIR", "CLAUDE_BIN")
 _ENV_PREFIX = ("LC_", "ANTHROPIC_", "CLAUDE_CODE_")
-_ENV_CLOUD = ("AWS_", "GOOGLE_", "CLOUD_ML_REGION", "VERTEX_", "GCLOUD_")
-_ENV_DROP = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")   # Helm is billed to the plan: a key in the dashboard's environment must not silently pay for it (ticket #38)
+# Helm is billed to the plan (ticket #38): nothing that bills another account or sends the turn to another endpoint passes (review r9 A1, the same rule as
+# _qd_foreign_env in bin/lib.sh): every ANTHROPIC_* name but the model choices, the cloud switches and every cloud credential, a cloud switch or not.
+_ENV_MODELS = ("ANTHROPIC_MODEL", "ANTHROPIC_SMALL_FAST_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL")
+_ENV_FOREIGN = ("ANTHROPIC_", "CLAUDE_CODE_USE_", "CLAUDE_CODE_SKIP_", "AWS_", "GOOGLE_", "CLOUD_ML_REGION", "VERTEX_", "GCLOUD_", "AZURE_")
 
 
 def clean_env(environ=None):
-    """The environment for a claude process the dashboard starts: no GH_TOKEN, no QUARTERDECK_*, no tokens from the owner's env file, no cloud keys unless a
-    cloud provider is the one in use. CLAUDE_CODE_SUBPROCESS_ENV_SCRUB keeps the process's own children from inheriting even this."""
+    """The environment for a claude process the dashboard starts: no GH_TOKEN, no QUARTERDECK_*, no tokens from the owner's env file, no API key, no cloud
+    switch or credential, no gateway. CLAUDE_CODE_SUBPROCESS_ENV_SCRUB keeps the process's own children from inheriting even this."""
     environ = os.environ if environ is None else environ
-    cloud = any(environ.get(k) for k in ("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"))
     out = {}
     for k, v in environ.items():
-        if k in _ENV_DROP:
+        if k.startswith(_ENV_FOREIGN) and k not in _ENV_MODELS:
             continue
-        if k in _ENV_KEEP or k.startswith(_ENV_PREFIX) or (cloud and k.startswith(_ENV_CLOUD)):
+        if k in _ENV_KEEP or k.startswith(_ENV_PREFIX):
             out[k] = v
     out["CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"] = "1"
     return out

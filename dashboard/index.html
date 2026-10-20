@@ -3036,7 +3036,7 @@ async function warmClaude(){
 }
 function setDeep(c){
   if(!c.on){ if(mem) mem.deep = false; paintClaude(); return "Back to normal."; }
-  if(!claudeOn()) return "Thinking with Claude is switched off. It is off by default: set QUARTERDECK_HELM_CLAUDE=on in config/quarterdeck.env and restart the dashboard.";
+  if(!claudeOn()) return "Thinking with Claude is switched off in this install: set QUARTERDECK_HELM_CLAUDE=on in config/quarterdeck.env and restart the dashboard.";
   mem.deep = true; claudeCost = 0; paintClaude(); warmClaude();
   return "Okay, thinking with Claude. Our conversation goes to Claude, not your agenda or notes. Say back to normal to stop.";
 }

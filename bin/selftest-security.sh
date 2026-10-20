@@ -533,11 +533,12 @@ if [ "$(uname -s)" = Darwin ] && /usr/bin/sandbox-exec -p '(version 1)(allow def
   else st_skip "S2 the live lookup (this machine cannot resolve example.com even outside the sandbox: offline); the profile-text check above still ran"; fi
   S2P=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
   python3 -m http.server "$S2P" --bind 127.0.0.1 --directory "$S5W" >/dev/null 2>&1 & S2SRV=$!
-  sleep 1
-  s2a=$(s5 "$T/s5c.sb" curl -s -m 6 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$S2P/file.txt"); s2b=$(s5 "$T/s5c.sb" curl -s -m 6 -o /dev/null -w '%{http_code}' "http://localhost:$S2P/file.txt")
-  s2c=$(s5 "$T/s5c.sb" python3 -c "import urllib.request as u; print(u.urlopen('http://localhost:$S2P/file.txt', timeout=5).status)" 2>&1 | tail -1)
+  if st_http_up "http://127.0.0.1:$S2P/file.txt" "http://localhost:$S2P/file.txt"; then
+    s2a=$(s5 "$T/s5c.sb" curl -s -m 6 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$S2P/file.txt"); s2b=$(s5 "$T/s5c.sb" curl -s -m 6 -o /dev/null -w '%{http_code}' "http://localhost:$S2P/file.txt")
+    s2c=$(s5 "$T/s5c.sb" python3 -c "import urllib.request as u; print(u.urlopen('http://localhost:$S2P/file.txt', timeout=5).status)" 2>&1 | tail -1)
+    ck "S2 and a local server is still reached by address and by the name localhost (curl, python: got $s2a, $s2b, $s2c)" '[ "$s2a" = 200 ] && [ "$s2b" = 200 ] && [ "$s2c" = 200 ]'
+  else st_skip "skipped: this runner cannot reach a local server even outside the sandbox (curl to 127.0.0.1 and localhost:$S2P got no 200 in 10s), so S2's loopback check proves nothing here"; fi
   kill "$S2SRV" 2>/dev/null; wait "$S2SRV" 2>/dev/null
-  ck "S2 and a local server is still reached by address and by the name localhost (curl, python)" '[ "$s2a" = 200 ] && [ "$s2b" = 200 ] && [ "$s2c" = 200 ]'
 
   # S3: the clipboard
   ML="$REAL/bin/selftest-machlookup.py"

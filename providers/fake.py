@@ -10,7 +10,7 @@ import sys
 import time
 
 ap = argparse.ArgumentParser()
-for a in ("workdir", "tools", "allow", "deny", "model", "effort", "budget", "sources", "settings", "record", "script", "replies", "cost", "hook"):
+for a in ("workdir", "tools", "allow", "deny", "model", "effort", "budget", "turns", "billing", "sources", "settings", "record", "script", "replies", "cost", "hook"):
     ap.add_argument("--" + a, default="")
 o = ap.parse_args()
 prompt = sys.stdin.read()
@@ -41,7 +41,7 @@ if o.settings:
 rec = {"provider": "fake", "argv": sys.argv[1:], "prompt": prompt, "stdin": True,
        "prompt_in_argv": bool(prompt) and any(prompt in a for a in sys.argv[1:]),
        "tools": o.tools, "allow": o.allow, "deny": o.deny, "workdir": o.workdir, "cwd": os.getcwd(), "model": o.model, "effort": o.effort,
-       "budget": o.budget, "sources": o.sources, "settings": settings, "settings_path": o.settings, "smode": smode, "env": sorted(os.environ)}
+       "budget": o.budget, "turns": o.turns, "billing": o.billing, "sources": o.sources, "settings": settings, "settings_path": o.settings, "smode": smode, "env": sorted(os.environ)}
 with open(o.record, "a") as f:
     fcntl.flock(f, fcntl.LOCK_EX)     # panel seats call at the same time
     f.write(json.dumps(rec) + "\n")

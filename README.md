@@ -221,7 +221,7 @@ Each service has a help icon that says what it reads and never reads, how to get
 
 Helm is an assistant you can talk to and listen to. It is off until you set it up, and the rest of Quarterdeck works without it. Speech recognition (whisper.cpp), the voice (Kokoro) and the small language model that answers (llama.cpp) all run on your machine. You choose the voice and speed with `QUARTERDECK_HELM_VOICE` and `QUARTERDECK_HELM_SPEED` in `config/quarterdeck.env`.
 
-Helm can optionally think with Claude for open questions. That is off by default, capped per day, never on in demo mode, and when you switch it on you choose what it may be told. By default no calendar title, reminder, mail subject or note text goes with the question.
+Helm can think with Claude for open questions, only when you say "think with me". This is on by default so Helm can answer open questions well. It is capped at 5 cents a turn and 1 dollar a day, has no tools, is never on in demo mode, and you choose what it may be told: by default no calendar title, reminder, mail subject, note text or agenda goes with the question. To turn it off, set `QUARTERDECK_HELM_CLAUDE=off` in `~/.config/quarterdeck/env`.
 
 ### Vendored files are hash-checked
 

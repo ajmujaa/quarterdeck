@@ -268,11 +268,11 @@ try {
   await sleep(10500);
   const p1 = await page.evaluate(() => ({len: history.length, hash: location.hash, state: JSON.stringify(history.state), ticks: window.__ticks}));
   ok("polling for 10 seconds adds no history entry and does not touch the address (at least three polls ran)", p1.len === p0.len && p1.hash === p0.hash && p1.state === p0.state && p1.ticks >= 3, JSON.stringify([p0, p1]));
-  await page.locator("sl-switch.js-calm").first().click().catch(() => null); await sleep(500);
+  await page.evaluate(() => toggleCalm(!document.documentElement.classList.contains("calm"))); await sleep(500);
   await page.evaluate(() => { document.dispatchEvent(new Event("visibilitychange")); window.dispatchEvent(new Event("resize")); render(); render(); }); await sleep(300);
   s = await snap();
   ok("a re-render (Calm, resize, render() called twice) adds no history entry", s.len === p0.len && s.hash === p0.hash, JSON.stringify(s));
-  await page.locator("sl-switch.js-calm").first().click().catch(() => null); await sleep(300);
+  await page.evaluate(() => toggleCalm(!document.documentElement.classList.contains("calm"))); await sleep(300);
 
   // ---- one user action, one entry: a click that sets three things is still one ----
   const q0 = (await snap()).qd;

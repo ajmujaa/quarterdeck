@@ -134,7 +134,7 @@ cat > "$T/path/gh2" <<'GH'
 D="$QUARTERDECK_DIR"
 case "$1 $2" in
   "auth status") echo "gh $*" >> "$D/gh-calls"; [ -f "$D/gh-signedout" ] && { echo "You are not logged into any GitHub hosts." >&2; exit 1; }; echo "Logged in"; exit 0 ;;
-  "api user")    echo "gh $*" >> "$D/gh-calls"; printf '%s\n' "${GH_LOGIN:-octo-cat}"; exit 0 ;;
+  "api user")    echo "gh $*" >> "$D/gh-calls"; printf '%s\n' "${GH_LOGIN-octo-cat}"; exit 0 ;;
   "repo create") echo "gh $*" >> "$D/gh-calls"
                  src=""; prev=""; for a in "$@"; do [ "$prev" = --source ] && src="$a"; prev="$a"; done
                  git init -q --bare -b main "$D/created-origin.git" 2>/dev/null; git -C "$src" remote add origin "$D/created-origin.git"; exit 0 ;;
@@ -270,5 +270,94 @@ OUT=$($QD ticket file tp d1 --apply 2>&1); RC=$?
 ck "qtdeck ticket file --apply on a project WITH a repo files GitHub issues (the same filing as ticket new --apply)" '[ "$RC" = 0 ] && [ "$(creates)" = 2 ] && [ "$(store ".tickets | map(select(.source == \"github\")) | length")" = 2 ]'
 OUT=$($QD run tp planner --request "from run" 2>&1); RC=$?
 ck "qtdeck run <p> planner --request works through the normal gates (the planner must be enabled for the project)" '[ "$RC" = 0 ] && grep -q "saved; nothing was filed" <<<"$OUT"'
+
+
+# ---- 5. qtdeck repo: the options for a project with no repo, and repo create --------------------------------------------------------------------
+reg_add() { # reg_add <name> <path> — a registered project with no repo
+  jq --arg n "$1" --arg p "$2" '. + {($n): {repo:"", path:$p, summary:"", default_branch:"main", duties:["planner","purser","panel","shipwright"], guardrails:[], verify:"", cycle:true}}' "$T/config/projects.json" > "$T/c.t" && mv "$T/c.t" "$T/config/projects.json"
+}
+mkgit() { # mkgit <dir> — a git checkout with one commit on main and no remote
+  mkdir -p "$1"; git init -q -b main "$1" 2>/dev/null || { git init -q "$1"; git -C "$1" checkout -q -b main; }
+  printf 'hello\n' > "$1/README.md"; git -C "$1" add -A; git -C "$1" commit -q -m init
+}
+st_registry '["planner","purser","panel","shipwright"]' '{"cycle":true,"repo":""}'
+rm -f "$T/gh-calls"
+OUT=$($QD repo tp 2>&1); RC=$?
+S1="tp has no GitHub repo, so the crew cannot open pull requests yet; local tickets still work."
+ck "qtdeck repo <project> prints ONE sentence first" '[ "$RC" = 0 ] && [ "$(head -1 <<<"$OUT" | sed "s/^ *//")" = "$S1" ]'
+ln() { grep -nF -- "$1" <<<"$OUT" | head -1 | cut -d: -f1; }
+ck "  then the four options in order (a) (b) (c) (d), each with the exact command" '[ "$(ln "(a) I already have a GitHub repo")" -lt "$(ln "(b) I have a GitHub account")" ] && [ "$(ln "(b) I have a GitHub account")" -lt "$(ln "(c) I have no GitHub account")" ] && [ "$(ln "(c) I have no GitHub account")" -lt "$(ln "(d) Not now")" ] && grep -qF "qtdeck repo tp <owner/name>" <<<"$OUT" && grep -qF "qtdeck repo create tp --private" <<<"$OUT" && grep -qF "qtdeck ticket new tp \"<what you want>\"" <<<"$OUT"'
+ck "  (c) gives the plain steps and says a person must do it: no account made, no password touched" 'grep -q "github.com" <<<"$OUT" && grep -q "Sign up" <<<"$OUT" && grep -q "Use your email" <<<"$OUT" && grep -q "Choose a username" <<<"$OUT" && grep -q "Verify your email" <<<"$OUT" && grep -q "Come back here and continue with (b)" <<<"$OUT" && grep -q "A person has to do this" <<<"$OUT" && grep -q "never creates an account and never touches a password" <<<"$OUT"'
+ck "  (b) says it asks for a yes and what happens when gh is not signed in" 'grep -q "asks you to type yes" <<<"$OUT" && grep -q "gh auth login" <<<"$OUT"'
+ck "  it runs no gh and changes nothing" '[ ! -s "$T/gh-calls" ] && [ "$(jq -r .tp.repo "$T/config/projects.json")" = "" ]'
+OUT2=$($QD status 2>&1)
+ck "qtdeck status says the same sentence and points at qtdeck repo tp" 'grep -qF "$S1" <<<"$OUT2" && grep -qF "qtdeck repo tp" <<<"$OUT2"'
+OUT3=$($QD run tp shipwright --issue 3 2>&1); RC=$?
+ck "qtdeck run on a project with no repo prints the sentence and the pointer, exits non-zero" '[ "$RC" != 0 ] && grep -qF "$S1" <<<"$OUT3" && grep -qF "qtdeck repo tp" <<<"$OUT3"'
+AT="$T/home/attached"; mkgit "$AT"
+OUT4=$($QD attach "$AT" --name attached --apply 2>&1)
+ck "qtdeck attach --apply on a folder with no remote prints the sentence and the pointer, and keeps its old next step" 'grep -qF "attached has no GitHub repo, so the crew cannot open pull requests yet; local tickets still work." <<<"$OUT4" && grep -qF "qtdeck repo attached" <<<"$OUT4" && grep -qF "next: qtdeck repo attached <owner/name>" <<<"$OUT4"'
+OUT5=$($QD repo tp octo/tp 2>&1); RC=$?
+ck "qtdeck repo <project> <owner/name> still sets the repo exactly as before" '[ "$RC" = 0 ] && [ "$(jq -r .tp.repo "$T/config/projects.json")" = octo/tp ] && grep -q "GitHub repo set to octo/tp" <<<"$OUT5"'
+ck "  and still refuses what is not owner/name" '! $QD repo tp "x; rm -rf /" >/dev/null 2>&1 && ! $QD repo tp "a/b/c" >/dev/null 2>&1 && [ "$(jq -r .tp.repo "$T/config/projects.json")" = octo/tp ]'
+OUT6=$($QD repo tp 2>&1)
+ck "  a project that has a repo is told which one, not the options" 'grep -q "uses the GitHub repo octo/tp" <<<"$OUT6" && ! grep -q "(c) I have no GitHub account" <<<"$OUT6"'
+ck "repo.py reads no token and never puts a secret on a command line" '! grep -qE "GH_TOKEN|GITHUB_TOKEN|hosts\.yml|auth token|--with-token" "$REAL/bin/repo.py"'
+
+# repo create
+SOLO="$T/solo"; mkgit "$SOLO"; reg_add solo "$SOLO"
+reg_add twoorigin "$T/work"
+nocreate() { ! grep -q '^gh repo create' "$T/gh-calls" 2>/dev/null; }
+rm -f "$T/gh-calls"; touch "$T/gh-signedout"
+OUT=$($QD repo create solo --private --yes 2>&1 </dev/null); RC=$?
+ck "repo create, gh not signed in: it prints gh auth login, exits 3, and creates nothing" '[ "$RC" = 3 ] && grep -q "gh auth login" <<<"$OUT" && grep -q "^gh auth status" "$T/gh-calls" && nocreate && [ "$(jq -r .solo.repo "$T/config/projects.json")" = "" ] && ! git -C "$SOLO" remote get-url origin >/dev/null 2>&1'
+rm -f "$T/gh-signedout" "$T/gh-calls"
+OUT=$($QD repo create solo --private 2>&1 </dev/null); RC=$?
+ck "signed in but no yes (no terminal, no --yes): it refuses, says what it would do, and creates nothing" '[ "$RC" = 2 ] && grep -qF "create a PRIVATE repository octo-cat/solo" <<<"$OUT" && grep -q "no terminal" <<<"$OUT" && nocreate'
+cr() { python3 -c "
+import sys; sys.path.insert(0, sys.argv[1] + '/bin'); import repo
+answers = iter(sys.argv[3:])
+sys.exit(repo.create(sys.argv[2], ask=lambda p: next(answers, ''), tty=True))" "$T" "$@"; }
+rm -f "$T/gh-calls"; OUT=$(cr solo no 2>&1); RC=$?
+ck "a typed answer that is not yes creates nothing" '[ "$RC" = 1 ] && nocreate && grep -q "Nothing was created" <<<"$OUT"'
+rm -f "$T/gh-calls"
+OUT=$(cr solo yes no 2>&1); RC=$?
+ck "a typed yes creates it: gh repo create <login>/<name> --private --source <path> --remote origin, and the registry is updated" '[ "$RC" = 0 ] && grep -qF "gh repo create octo-cat/solo --private --source $SOLO --remote origin" "$T/gh-calls" && [ "$(jq -r .solo.repo "$T/config/projects.json")" = octo-cat/solo ] && git -C "$SOLO" remote get-url origin >/dev/null 2>&1'
+ck "  the push is a SECOND yes: the first yes pushes nothing" '[ -z "$(git -C "$T/created-origin.git" for-each-ref 2>/dev/null)" ] && grep -q "Not pushed" <<<"$OUT" && grep -q "never pushes anything else" <<<"$OUT"'
+ck "  and it says what comes next" 'grep -q "next: qtdeck ticket new solo" <<<"$OUT"'
+mkgit "$T/solo2"; reg_add solo2 "$T/solo2"; rm -rf "$T/created-origin.git"
+OUT=$(cr solo2 yes yes 2>&1); RC=$?
+ck "a second typed yes pushes the default branch once, with git push -u origin <branch>" '[ "$RC" = 0 ] && git -C "$T/created-origin.git" rev-parse refs/heads/main >/dev/null 2>&1 && [ "$(git -C "$T/created-origin.git" for-each-ref | wc -l | tr -d " ")" = 1 ] && grep -q "pushed main to octo-cat/solo2" <<<"$OUT"'
+mkgit "$T/solo3"; reg_add solo3 "$T/solo3"; rm -rf "$T/created-origin.git"; rm -f "$T/gh-calls"
+OUT=$($QD repo create solo3 --private --yes --push 2>&1 </dev/null); RC=$?
+ck "--yes creates without a terminal; --push is the second yes (and without it nothing is pushed)" '[ "$RC" = 0 ] && grep -qF "gh repo create octo-cat/solo3 --private" "$T/gh-calls" && git -C "$T/created-origin.git" rev-parse refs/heads/main >/dev/null 2>&1'
+mkgit "$T/solo4"; reg_add solo4 "$T/solo4"; rm -rf "$T/created-origin.git"
+OUT=$($QD repo create solo4 --yes 2>&1 </dev/null); RC=$?
+ck "  --yes alone makes the repository and pushes nothing (no terminal for the second yes)" '[ "$RC" = 0 ] && [ -z "$(git -C "$T/created-origin.git" for-each-ref)" ] && grep -q "Not pushed" <<<"$OUT" && grep -q "git -C $T/solo4 push -u origin main" <<<"$OUT"'
+mkgit "$T/solo5"; reg_add solo5 "$T/solo5"; rm -f "$T/gh-calls"
+OUT=$(GH_LOGIN='bad;name' $QD repo create solo5 --yes 2>&1 </dev/null); RC=$?
+OUT2=$(GH_LOGIN='-rf' $QD repo create solo5 --yes 2>&1 </dev/null); RC2=$?
+OUT3=$(GH_LOGIN='' $QD repo create solo5 --yes 2>&1 </dev/null); RC3=$?
+ck "the owner name from gh is validated: a shell character, a leading dash or nothing is refused and nothing is created" '[ "$RC" = 2 ] && [ "$RC2" = 2 ] && [ "$RC3" = 2 ] && nocreate && grep -q "plain GitHub user name" <<<"$OUT"'
+OUT=$($QD repo create solo5 --public --yes 2>&1 </dev/null); RC=$?
+ck "--public alone is refused; it needs the extra word --i-mean-public" '[ "$RC" = 2 ] && grep -q "i-mean-public" <<<"$OUT" && nocreate'
+OUT=$($QD repo create solo5 --public --i-mean-public --yes 2>&1 </dev/null); RC=$?
+ck "  with it, a PUBLIC repository is made and the plan says PUBLIC" '[ "$RC" = 0 ] && grep -qF "create a PUBLIC repository octo-cat/solo5" <<<"$OUT" && grep -qF "gh repo create octo-cat/solo5 --public" "$T/gh-calls"'
+OUT=$($QD repo create solo5 --private --public --yes 2>&1 </dev/null); RC=$?
+ck "  --private with --public, and an unknown option, are refused" '[ "$RC" = 2 ] && ! $QD repo create solo5 --token abc >/dev/null 2>&1 </dev/null'
+rm -f "$T/gh-calls"
+OUT=$($QD repo create twoorigin --yes 2>&1 </dev/null); RC=$?
+ck "a folder that already has an origin is refused, naming the command that connects it" '[ "$RC" = 2 ] && grep -q "already has a remote called origin" <<<"$OUT" && grep -qF "qtdeck repo twoorigin <owner/name>" <<<"$OUT" && nocreate'
+mkdir -p "$T/plain"; reg_add plain "$T/plain"
+OUT=$($QD repo create plain --yes 2>&1 </dev/null); RC=$?
+ck "a folder that is not a git checkout is refused" '[ "$RC" = 2 ] && grep -q "not a git checkout" <<<"$OUT" && nocreate'
+OUT=$($QD repo create tp --yes 2>&1 </dev/null); RC=$?
+ck "a project that already has a repo is refused" '[ "$RC" = 2 ] && grep -q "already uses the GitHub repo" <<<"$OUT" && nocreate'
+OUT=$($QD repo create nosuch --yes 2>&1 </dev/null); RC=$?
+ck "a project that is not registered is refused" '[ "$RC" = 2 ] && grep -q "not registered" <<<"$OUT" && nocreate'
+mkgit "$T/weird"; reg_add weird.git "$T/weird"
+OUT=$($QD repo create weird.git --yes 2>&1 </dev/null); RC=$?
+ck "a project name GitHub cannot use as a repository name is refused (checked with the same rule as qtdeck repo)" '[ "$RC" = 2 ] && grep -q "cannot be a GitHub repository name" <<<"$OUT" && nocreate'
+ck "no account is ever created and no password touched: the only gh calls the program makes are auth status, api user and repo create" '[ "$(grep -o "_gh(\"[a-z]*\", \"[a-z]*\"" "$REAL/bin/repo.py" | sort -u | tr "\n" " ")" = "_gh(\"api\", \"user\" _gh(\"auth\", \"status\" _gh(\"repo\", \"create\" " ]'
 
 st_done

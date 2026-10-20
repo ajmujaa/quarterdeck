@@ -81,7 +81,7 @@ try {
   const eff2 = await effective();
   ok("Save again: What the crew receives changes and the registry file has the change", !eff2.includes("Keep each change small") && eff2 !== eff1 && !reg().includes("Keep each change small and say why") && reg().slice(0, 3).join() === LOCK.join(), eff2);
 
-  await fill("#gr-new", "token ghp_abcdefghijklmnopqrstuvwxyz0123456789"); await page.locator("#gr-add").click(); await sleep(300);
+  await fill("#gr-new", "token ghp_" + "abcdefghijklmnopqrstuvwxyz0123456789"); await page.locator("#gr-add").click(); await sleep(300);
   await page.locator("#gr-save").click(); await sleep(900);
   const err = await page.evaluate(() => (document.querySelector("#guardrails-slot [data-error]") || {}).helpText || "");
   ok("a refused rule shows the server's plain reason under a field, and the registry is unchanged", /password, key or token/.test(err) && reg().length === 4, err);

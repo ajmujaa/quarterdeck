@@ -69,7 +69,7 @@ chk("replace puts the locked rules first whatever the order sent", g.replace("tp
 chk("  and a rule listed twice or already a locked rule in other letters is refused",
     refused(g.replace, "tp", attach.GUARDRAILS[:3] + ["a", "A "], word="already") and refused(g.add, "tp", "NEVER merge a  pull request.", word="already") and refused(g.add, "tp", "Z last", word="already"))
 bad = {"empty": "   ", "a line break": "one\ntwo", "a control character": "a\x07b", "a comment marker": "x <!-- y", "a prompt marker": "see BEGIN UNTRUSTED issue 1234", "an end marker": "end  untrusted body",
-       "a credential": "use ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8", "a private key": "-----BEGIN RSA PRIVATE KEY-----", "301 characters": "x" * 301}
+       "a credential": "use ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8", "a private key": "-----BEGIN RSA " + "PRIVATE KEY-----", "301 characters": "x" * 301}
 for k, v in bad.items(): chk("refused: " + k, refused(g.add, "tp", v))
 chk("  and the credential-shaped text is not in the answer", (lambda r: "a1B2c3D4" not in r.stdout + r.stderr and r.returncode != 0)(__import__("subprocess").run([sys.executable, T + "/bin/guardrails.py", "tp", "add", bad["a credential"]], capture_output=True, text=True)))
 g.add("tp", "y" * 300)
@@ -123,7 +123,8 @@ ck "remove <number>" '[ $RC = 0 ] && [ "$(jq -r ".tp.guardrails | length" "$REG"
 OUT=$($QD guardrail tp remove "Follow the repository's own AGENTS.md or CLAUDE.md where it has one." 2>&1); RC=$?
 ck "remove <text>" '[ $RC = 0 ] && [ "$(jq -r ".tp.guardrails | length" "$REG")" = 3 ]'
 BEFORE=$(cksum < "$REG")
-for a in 'remove "Never merge a pull request."' 'move "Never merge a pull request." down' 'add "Never merge a pull request."' 'add "key ghp_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"' 'remove 9' 'move 1 up' 'add ""' 'frobnicate'; do
+GHP="ghp_""a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"    # built at run time: the secrets scan reads this file
+for a in 'remove "Never merge a pull request."' 'move "Never merge a pull request." down' 'add "Never merge a pull request."' "add \"key $GHP\"" 'remove 9' 'move 1 up' 'add ""' 'frobnicate'; do
   OUT=$(eval "$QD guardrail tp $a" 2>&1); RC=$?
   ck "refused change ($a): non-zero exit, a reason, no registry change" '[ $RC != 0 ] && [ -n "$OUT" ] && [ "$(cksum < "$REG")" = "$BEFORE" ] && ! grep -q a1B2c3D4 <<<"$OUT"'
 done

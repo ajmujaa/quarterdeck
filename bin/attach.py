@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
 """attach: scan a project folder, propose how the crew should work on it, and register it only when you say so.
 
-    bin/attach.py PATH [--name NAME] [--verify "CMD"] [--verbose]   a short summary of the proposal; changes nothing
-    bin/attach.py PATH [--name NAME] [--verify "CMD"] --apply       register it in your registry and keep the profile and a record of what was proposed
+    bin/attach.py PATH [--name NAME] [--verify "CMD"] [--build "CMD"] [--lint "CMD"] [--verbose]   a short summary of the proposal; changes nothing
+    bin/attach.py PATH [--name NAME] [--verify "CMD"] [--build "CMD"] [--lint "CMD"] --apply       register it in your registry and keep the profile and a record of what was proposed
     bin/attach.py set-repo NAME OWNER/REPO                         set the GitHub repo of a registered project
 
---verify sets the command that proves a change works when the scan found none (or found the wrong one). --verbose shows the whole scan and every
+--verify sets the command that proves a change works when the scan found none (or found the wrong one); --build and --lint do the same for the build and
+lint commands, which are proposed next to it. --verbose shows the whole scan (every fact with its file), the reason each duty is on or off, and every
 protected path.
+
+The scan names the stack (for example "React 18 with Vite, tests by Vitest, lint by ESLint, package manager npm"). Duties that fit that stack are
+offered as suggestions, switched off: nothing is on unless it was on before (the read-only duties, and the Shipwright when a verify command exists)
+or you tick it. The registry's "build" is the command the Shipwright's checks already run (bin/lib.sh run_checks); "lint" and "typecheck" are recorded
+for your review and the crew's notes, and nothing runs them by itself.
 
 The proposal is what the scan supports and no more: the read-only duties first, the verify command only if the project has one, the
 paths the crew may not touch taken from the sensitive folders and secret files found. Nothing is written into the project itself.
@@ -79,11 +85,81 @@ def tilde(root):
     return str(root)
 
 
+SUGGESTABLE = ("joiner", "lookout", "pilot", "marshal", "assayer", "caulker", "quartermaster", "infra", "planner", "harbourmaster", "purser", "trials")
+OFF_WHY = {"brief": "turns an idea into a one-page design brief when you ask; it is not tied to the stack",
+           "mockup": "needs an approved design brief first",
+           "panel": "convenes several crew members on a question you put to them; you start it",
+           "bosun": "reports stale branches and drift; it needs the GitHub repo to compare against",
+           "logkeeper": "writes a decision record from a panel's ruling; it needs one first"}
+
+
+def _cmd_reason(prof, key, cmd):
+    """Where a proposed command came from, in a few words."""
+    if not cmd:
+        return "none found"
+    for c in prof["commands"]:
+        if c["name"] == f"{key}: {cmd}":
+            return c["evidence"][0]
+    for f in prof.get("stack", {}).get("facts", []):
+        n = cmd.split(" ", 1)[0]
+        if f["name"].lower().startswith(n.lower()) or f["name"].lower() in cmd.lower():
+            return f["evidence"]
+    return "from the stack scan"
+
+
+def duty_plan(prof, entry, verify):
+    """For every duty: {on, suggested, why}. On is the old rule, untouched; suggested duties stay off until the owner ticks them."""
+    st = prof.get("stack") or {}
+    run = st.get("runnable") or {}
+    ui, app = bool(st.get("ui")), st.get("app", "unknown")
+    names = [f["name"] for f in st.get("facts", []) if f["kind"] == "framework"]
+    uiname = next((n for n in names if n in ("Next.js", "Nuxt", "SvelteKit", "Astro", "Angular", "Vue", "Svelte", "React", "Expo", "React Native")), "")
+    served = run.get("dev") or run.get("start")
+    test = verify or run.get("test")
+    repo = bool(entry["repo"])
+    infra = [i["name"] for i in prof["infrastructure"]] + [d["name"] for d in prof["deploy_targets"] if d["name"] in ("Vercel", "Supabase")]
+    sens = {d["name"] for d in prof["sensitive"]}
+    out = {}
+
+    def put(duty, on, suggested, why):
+        out[duty] = {"on": bool(on), "suggested": bool(suggested) and not on, "why": why}
+
+    put("surveyor", True, False, "reads a pull request and posts findings; it changes nothing")
+    put("foreman", True, False, "turns a findings report into well-formed issues, and files none unless you run it")
+    put("inspector", True, False, "checks that a pull request does what it says; it only reads")
+    put("shipwright", bool(verify), False, f"a verify command exists ({verify}) to prove its work" if verify else "off until a verify command is set: it needs one to prove its work")
+    put("joiner", False, ui, f"{uiname or 'a UI framework'} is a UI framework, and the joiner reviews the interface for accessibility, states and small screens" if ui else "no UI framework was found, and it reviews interface code")
+    pilot_ok = ui and app == "web-ui" and served
+    qa = "; it needs qa settings you must give in the registry (how to start the app and when it is ready)"
+    put("lookout", False, pilot_ok, f"the app can be run ({served}), so it can take screenshots of each screen{qa}" if pilot_ok else "needs a web app with a dev or start script to take screenshots of")
+    put("pilot", False, pilot_ok, f"the app can be run ({served}), so a crew can sail it in a headless browser{qa}" if pilot_ok else "needs a web app with a dev or start script to drive")
+    sec = app in ("web-api", "web-ui") or sens & {"authentication", "payments", "encryption", "secrets"} or st.get("dependencies")
+    why_sec = ("it has a server" if app == "web-api" else "it serves pages and may hold sign-in or data" if app == "web-ui" else
+               "the folder has " + "/".join(sorted(sens & {"authentication", "payments", "encryption", "secrets"})) if sens & {"authentication", "payments", "encryption", "secrets"} else "it pulls dependencies from the network")
+    put("marshal", False, sec, f"{why_sec}, and the marshal reads a pull request for security" if sec else "no server, sign-in or dependencies were found")
+    put("assayer", False, test, f"a test command exists ({test}); it writes tests from an issue's acceptance checks and needs the purser's requirements" if test else "needs a test command to keep a test")
+    put("caulker", False, test, f"a test command exists ({test}) to prove a fix; it fixes exactly what reviewers found on a pull request" if test else "needs a test command to prove a fix")
+    put("quartermaster", False, st.get("dependencies") and st.get("lockfile"), "a dependency manifest and a lockfile exist, so it can judge version bumps" if st.get("dependencies") and st.get("lockfile") else "needs a dependency manifest and a lockfile, and one was not found")
+    put("infra", False, infra, f"infrastructure or deploy files found ({', '.join(dict.fromkeys(infra[:4]))}); it reads changes to them" if infra else "no Terraform, CDK, CloudFormation, Serverless, Vercel or Supabase files were found")
+    put("planner", False, repo, "it plans a GitHub project board's backlog; it needs the repo and a board, which the scan cannot see" if repo else "needs a GitHub repo and a project board, and no GitHub remote was found")
+    put("harbourmaster", False, repo, "it keeps a GitHub project board honest; it needs the repo and a board, which the scan cannot see" if repo else "needs a GitHub repo and a project board, and no GitHub remote was found")
+    put("purser", False, repo, "it turns a GitHub issue into requirements a stranger could start from" if repo else "needs a GitHub repo to read issues from, and no GitHub remote was found")
+    put("trials", False, test, f"a test command exists ({test}); it writes a failing test for a bug issue and needs GitHub issues to work from" if test else "needs a test command to run a new test with")
+    for d, why in OFF_WHY.items():
+        put(d, False, False, why)
+    for d in sorted(known_duties() - set(out)):                 # a duty added later still gets a line
+        put(d, False, False, "not tied to the stack; start it yourself when you want it")
+    return out
+
+
 def propose(prof, name=None):
-    """The registry entry the scan supports, with a reason for each part. A dict: entry, reasons."""
+    """The registry entry the scan supports, with a reason for each part. A dict: entry, reasons, duty_reasons (per duty), suggested (duties that fit, off)."""
     root = Path(prof["path"])
     tests = [c for c in prof["commands"] if c["name"].startswith("test:")]
     verify = tests[0]["name"].split(": ", 1)[1] if tests else ""
+    run = (prof.get("stack") or {}).get("runnable") or {}
+    cmds = {k: (run.get(k) or "") for k in ("build", "lint", "typecheck")}
+    cmds = {k: (v if VERIFY_OK.fullmatch(v) else "") for k, v in cmds.items()}
     forbidden = [d["evidence"][0] for d in prof["sensitive"] if d["name"] in ("database migrations", "secrets", "encryption", "payments")]
     forbidden += _protect.prefixes()          # CI, manifests, lockfiles, tool configs, scripts: the harness also refuses these on any model-made change
     forbidden += [s["evidence"][0] for s in prof["secret_files"]] + [i["evidence"][0].rsplit("/", 1)[0] + "/" for i in prof["infrastructure"] if "/" in i["evidence"][0] and "prod" in i["evidence"][0].lower()]
@@ -92,14 +168,22 @@ def propose(prof, name=None):
     duties = list(READ_ONLY_DUTIES) + (["shipwright"] if verify else [])
     why = {"duties": "read-only duties first" + ("; the Shipwright too, since there is a command to prove its work" if verify else "; no Shipwright until a verify command is set"),
            "verify": tests[0]["evidence"][0] if tests else "no test command was found",
+           "build": _cmd_reason(prof, "build", cmds["build"]) if cmds["build"] else "no build command was found",
+           "lint": _cmd_reason(prof, "lint", cmds["lint"]) if cmds["lint"] else "no lint command was found",
            "forbidden_paths": "sensitive folders and secret files found by the scan, and the build, CI and dependency files no model-made change may touch (bin/protect.py)"}
+    if cmds["typecheck"]:
+        why["typecheck"] = _cmd_reason(prof, "typecheck", cmds["typecheck"])
     fit = _packs.select(prof)
     why["packs"] = ("stack notes for " + ", ".join(p["label"] for p, _ in fit) + ": " + "; ".join(h[0] for _, h in fit)) if fit else "no stack pack fits this project"
     entry = {"repo": repo_of(prof), "path": tilde(root), "summary": "", "default_branch": default_branch(root, prof),
-             "duties": duties, "guardrails": list(GUARDRAILS), "verify": verify, "forbidden_paths": sorted(dict.fromkeys(forbidden)),
+             "duties": duties, "guardrails": list(GUARDRAILS), "verify": verify, "build": cmds["build"], "lint": cmds["lint"], "forbidden_paths": sorted(dict.fromkeys(forbidden)),
              "packs": [p["id"] for p, _ in fit]}
+    if cmds["typecheck"]:
+        entry["typecheck"] = cmds["typecheck"]
+    plan = duty_plan(prof, entry, verify)
     agent = [f"{c['name']}: {', '.join(c['evidence'][:3])}" for c in prof.get("agent_config", [])]
-    return {"name": (name or prof["name"]).lower(), "entry": entry, "reasons": why, "agent_config": agent,
+    return {"name": (name or prof["name"]).lower(), "entry": entry, "reasons": why, "duty_reasons": plan, "suggested": [d for d, v in plan.items() if v["suggested"]],
+            "stack": (prof.get("stack") or {}).get("summary", ""), "agent_config": agent,
             "warning": WARNING + (" Agent set-up found in the folder: " + "; ".join(agent) + "." if agent else " No agent set-up was found in the folder.")
             + (f" {len(odd)} secret file or folder name holds a control character or line break, so it is not on the protected list: rename it and look again." if odd else "")}
 
@@ -116,13 +200,13 @@ def known_duties():
 
 
 def edit(prop, edits):
-    """A copy of the proposal with the owner's changes, or ValueError saying what is wrong. Only duties, verify, forbidden_paths and guardrails
-    can change. The Shipwright needs a verify command; the harness's own protected paths and the two standing rules about merging and pushing stay."""
+    """A copy of the proposal with the owner's changes, or ValueError saying what is wrong. Only duties, verify, build, lint, typecheck, forbidden_paths
+    and guardrails can change. The Shipwright needs a verify command; the harness's own protected paths and the two standing rules about merging and pushing stay."""
     if not isinstance(edits, dict):
         raise ValueError("edits must be an object")
     out = json.loads(json.dumps(prop))
     e = out["entry"]
-    unknown = set(edits) - {"duties", "verify", "forbidden_paths", "guardrails"}
+    unknown = set(edits) - {"duties", "verify", "build", "lint", "typecheck", "forbidden_paths", "guardrails"}
     if unknown:
         raise ValueError("cannot change: " + ", ".join(sorted(unknown)))
     if "duties" in edits:
@@ -138,6 +222,13 @@ def edit(prop, edits):
         if not isinstance(v, str) or (v.strip() and not VERIFY_OK.fullmatch(v.strip())):
             raise ValueError("the verify command may be one plain command of up to 200 characters, without ; & | $ ` < > ( ) or quotes")
         e["verify"] = v.strip()
+    for key in ("build", "lint", "typecheck"):
+        if key in edits:
+            v = edits[key]
+            if not isinstance(v, str) or (v.strip() and not VERIFY_OK.fullmatch(v.strip())):
+                raise ValueError(f"the {key} command may be one plain command of up to 200 characters, without ; & | $ ` < > ( ) or quotes")
+            if v.strip() or key in e:
+                e[key] = v.strip()
     if "forbidden_paths" in edits:
         f = edits["forbidden_paths"]
         if not isinstance(f, list) or not all(isinstance(x, str) for x in f) or len(f) > MAX_FORBIDDEN:
@@ -231,7 +322,7 @@ def apply(prop, prof, reg=None, proposed=None, by="owner, with --apply"):
     os.replace(tmp, reg)
     _scan.save(prof, name)
     rec = _scan.profile_dir() / f"{name}.attach.json"
-    rec.write_text(json.dumps({"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "proposed": (proposed or prop)["entry"], "reasons": prop["reasons"], "approved": prop["entry"], "approved_by": by}, indent=2) + "\n")
+    rec.write_text(json.dumps({"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "proposed": (proposed or prop)["entry"], "reasons": prop["reasons"], "stack": prop.get("stack", ""), "suggested": prop.get("suggested", []), "duty_reasons": prop.get("duty_reasons", {}), "approved": prop["entry"], "approved_by": by}, indent=2) + "\n")
     os.chmod(rec, 0o600)
     return reg
 
@@ -252,15 +343,28 @@ def set_repo(name, repo, reg=None):
     return reg
 
 
+SHORT_ON = {"surveyor": "reads pull requests", "foreman": "files issues from findings", "inspector": "checks a change does what it says", "shipwright": "a verify command exists"}
+
+
+def cmd_line(e, prop, key, flag):
+    v = e.get(key, "")
+    return v + "   (" + prop["reasons"].get(key, "") + ")" if v else f'none found; set it with --{flag} "<command>"'
+
+
 def summary(prof, prop, path):
     """The short version: what was found, what would run, how a change is proved, and what to do next."""
     e, n = prop["entry"], prop["name"]
     langs = ", ".join(f"{l['name']} ({l['evidence'][0].split(' ', 1)[0]})" for l in prof["languages"][:4]) or "none recognised"
+    plan = prop.get("duty_reasons") or {}
     print(f"  {n}  ({path})")
     print(f"    languages     {langs}")
-    print(f"    duties        {', '.join(e['duties'])}")
-    verify = e['verify'] + '   (' + prop['reasons']['verify'] + ')' if e['verify'] else 'none found; set it with --verify "<command that runs the tests>"'
-    print(f"    verify        {verify}")
+    print(f"    stack         {prop.get('stack') or langs}")
+    print(f"    verify        {cmd_line(e, prop, 'verify', 'verify')}")
+    print(f"    build         {cmd_line(e, prop, 'build', 'build')}")
+    print(f"    lint          {cmd_line(e, prop, 'lint', 'lint')}")
+    print(f"    duties        " + ", ".join(d + (f" ({SHORT_ON[d]})" if d in SHORT_ON else "") for d in e["duties"]))
+    if prop.get("suggested"):
+        print(f"    also fit this stack (off): {', '.join(prop['suggested'])}   (not on until you say so; --verbose says why)")
     print(f"    repo          {e['repo'] or 'none (no GitHub remote); set it after --apply with: qtdeck repo ' + n + ' <owner/name>'}")
     print(f"    protected     {len(e['forbidden_paths'])} paths the crew may not change (--verbose lists them)")
     if prof["secret_files"]:
@@ -272,13 +376,24 @@ def say(prop):
     e = prop["entry"]
     print(f"  proposal for '{prop['name']}'")
     print(f"  WARNING         {prop['warning']}")
+    print(f"    stack           {prop.get('stack') or '(not recognised)'}")
     print(f"    repo            {e['repo'] or '(no GitHub remote found; set it by hand)'}")
     print(f"    default branch  {e['default_branch']}")
     print(f"    duties          {', '.join(e['duties'])}   ({prop['reasons']['duties']})")
     print(f"    verify          {e['verify'] or '(none)'}   ({prop['reasons']['verify']})")
+    print(f"    build           {e.get('build') or '(none)'}   ({prop['reasons'].get('build', '')})")
+    print(f"    lint            {e.get('lint') or '(none)'}   ({prop['reasons'].get('lint', '')})")
+    if e.get("typecheck"):
+        print(f"    typecheck       {e['typecheck']}   ({prop['reasons'].get('typecheck', '')})")
     print(f"    forbidden       {', '.join(e['forbidden_paths']) or '(none)'}   ({prop['reasons']['forbidden_paths']})")
     print(f"    stack notes     {', '.join(e['packs']) or '(none)'}   ({prop['reasons']['packs']})")
     print(f"    guardrails      {len(e['guardrails'])} standing rules, including never merge and never push to the default branch")
+    plan = prop.get("duty_reasons") or {}
+    if plan:
+        print("    every duty, and why it is on or off:")
+        for d, v in plan.items():
+            state = "on " if d in e["duties"] else "off"
+            print(f"      {d:<14}{state}{' (suggested)' if v['suggested'] and d not in e['duties'] else ''}  {v['why']}")
 
 
 def main(argv):
@@ -295,12 +410,15 @@ def main(argv):
         print(f"  next: qtdeck run {argv[1]} surveyor --pr <number>")
         return 0
     args, path, name, do, verify, verbose = list(argv), None, None, False, None, False
+    extra = {}
     while args:
         a = args.pop(0)
         if a == "--name" and args:
             name = args.pop(0)
         elif a == "--verify" and args:
             verify = args.pop(0)
+        elif a in ("--build", "--lint") and args:
+            extra[a[2:]] = args.pop(0)
         elif a == "--verbose":
             verbose = True
         elif a == "--apply":
@@ -322,12 +440,16 @@ def main(argv):
         if verify is not None:
             prop = edit(prop, {"verify": verify})
             prop["reasons"]["verify"] = "set with --verify"
+        if extra:
+            prop = edit(prop, extra)
+            for k in extra:
+                prop["reasons"][k] = f"set with --{k}"
         if verbose:
             _scan.say(prof)
             say(prop)
         else:
             summary(prof, prop, path)
-        again = f"qtdeck attach {shlex.quote(path)}" + (f" --name {shlex.quote(name)}" if name else "") + (f" --verify {shlex.quote(verify)}" if verify else "")
+        again = f"qtdeck attach {shlex.quote(path)}" + (f" --name {shlex.quote(name)}" if name else "") + (f" --verify {shlex.quote(verify)}" if verify else "") + "".join(f" --{k} {shlex.quote(v)}" for k, v in extra.items())
         if do:
             reg = apply(prop, prof)
             print(f"  registered '{prop['name']}'" + (f" in {reg}; the profile and a record of this proposal are in {_scan.profile_dir()}" if verbose else " in your data folder"))

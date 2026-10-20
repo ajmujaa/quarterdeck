@@ -115,7 +115,7 @@ Flags for add:
 
 qtdeck new <name> [--in DIR] [--about "..."]
                         start something new: a folder with git and a README, nothing registered
-  qtdeck attach <dir> [--name N] [--verify "<command>"] [--verbose] [--apply]
+  qtdeck attach <dir> [--name N] [--verify "<command>"] [--build "<command>"] [--lint "<command>"] [--verbose] [--apply]
                         scan a folder and propose the crew set-up; --apply registers it
 
   qtdeck connect list                                    every service and account, its state and last refresh

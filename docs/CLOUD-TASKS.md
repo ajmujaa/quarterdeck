@@ -31,3 +31,15 @@ two Gmail accounts (work and personal), from the Connections page.
 ## 3. Linux check
 CI on GitHub is blocked by billing, so you are the Linux check. Run `python3 bin/check.py`
 on this repo and report every failure with the first error line.
+
+## 0. Do this first: test the whole app on Linux (the repo is going public)
+Goal: find anything broken in what already exists, before the public launch.
+1. `python3 bin/check.py` and `python3 bin/selftest.py`; list every failure with its first error line.
+2. Follow README.md exactly as a stranger would on a fresh Linux box (install, `qtdeck setup`,
+   `qtdeck dashboard`, demo mode). Note every step that fails or confuses.
+3. Walk each dashboard page in demo mode with a headless browser (Home, Brain, Crew, Fleet,
+   Connections, Settings); screenshot problems, check the console for errors.
+4. Try the security claims in SECURITY.md that can be tried on Linux (sandbox, pairing,
+   protected paths) and say which hold.
+5. Fix small real bugs on branch `cloud/test-pass` with a test each; list the bigger ones
+   in `docs/reports/cloud-test-pass.md` ranked by severity. Do not weaken any check.

@@ -28,16 +28,16 @@ SEED = 7
 # ---- the fictional world ------------------------------------------------------
 
 PROJECTS = {
-    "wayfarer-mobile": {"summary": "Trip planner for iOS and Android, offline first", "kind": "mobile app",
+    "wayfarer-mobile": {"stack": "TypeScript with React Native, tests by Jest, lint by ESLint, package manager npm", "summary": "Trip planner for iOS and Android, offline first", "kind": "mobile app",
                         "duties": ["surveyor", "foreman", "joiner", "shipwright", "panel", "inspector", "harbourmaster", "purser", "trials", "planner", "logkeeper", "bosun"],
                         "verify": "npm test"},
-    "wayfarer-web": {"summary": "Web companion to the trip planner", "kind": "web app",
+    "wayfarer-web": {"stack": "TypeScript with React and Vite, tests by Vitest, lint by ESLint, package manager npm", "summary": "Web companion to the trip planner", "kind": "web app",
                      "duties": ["surveyor", "foreman", "shipwright", "panel", "inspector", "trials", "lookout", "pilot", "assayer", "caulker", "brief", "mockup"], "verify": "npm run check"},
-    "wayfarer-api": {"summary": "REST API behind both apps", "kind": "API",
+    "wayfarer-api": {"stack": "Python with FastAPI, tests by pytest, lint by ruff, package manager pip", "summary": "REST API behind both apps", "kind": "API",
                      "duties": ["surveyor", "shipwright", "inspector", "purser", "trials", "marshal", "quartermaster", "infra", "bosun"], "verify": "pytest -q"},
-    "harvest-pipeline": {"summary": "Nightly data pipeline that turns raw bookings into reports", "kind": "data pipeline",
+    "harvest-pipeline": {"stack": "Python with pandas, tests by pytest, package manager pip", "summary": "Nightly data pipeline that turns raw bookings into reports", "kind": "data pipeline",
                          "duties": ["surveyor", "purser", "trials", "infra"], "verify": "make test"},
-    "saltpan-blog": {"summary": "A food blog: recipes, travel notes, a weekly newsletter", "kind": "blog",
+    "saltpan-blog": {"stack": "Markdown, HTML and CSS (no build step)", "summary": "A food blog: recipes, travel notes, a weekly newsletter", "kind": "blog",
                      "duties": ["surveyor", "joiner"], "verify": ""},
 }
 # ---- the board and its cards (invented; the Board view and the card reading panel in Demo mode) ----
@@ -333,10 +333,10 @@ class World:
         for day in range(7):
             for _ in range(rng.randrange(7, 12)):
                 duty = rng.choice(["shipwright", "shipwright", "surveyor", "panel", "inspector", "purser", "joiner"])
-                rows.append({"at": self.ago(days=day, minutes=rng.randrange(30, 900)), "duty": duty,
+                rows.append({"at": self.ago(days=day, minutes=rng.randrange(30, 900)), "duty": duty, "project": list(PROJECTS)[(day * 5 + len(rows)) % len(PROJECTS)],
                              "model": rng.choice(["sonnet", "sonnet", "haiku", "opus"]), "turns": rng.randrange(3, 40),
                              "cost": round(rng.uniform(0.15, 2.1), 2)})
-        rows += [{"at": self.ago(hours=h), "duty": "shipwright", "model": "sonnet", "turns": 22, "cost": 1.4, "fix": k}
+        rows += [{"at": self.ago(hours=h), "duty": "shipwright", "project": next((pp[1] for pp in PANELS if pp[0] == k.split("#")[0]), "wayfarer-web"), "model": "sonnet", "turns": 22, "cost": 1.4, "fix": k}
                  for h, k in ((18, PANELS[1][0] + "#1"), (20, PANELS[1][0] + "#3"))]
         return rows
 
@@ -888,14 +888,23 @@ class World:
                               "at": r["at"], "stale": False, "acknowledged": key in self.acks})
         return items
 
-    def spend(self, t):
+    def spend_ledger(self, t):
+        """The invented spend rows (each names its project), the same list the summary below is counted from."""
         rows = list(self.spend_rows)
         for j in self.timeline(t)[1]:
-            rows.append({"at": self.at(j["end"]), "duty": j["duty"], "model": "sonnet", "turns": 12, "cost": j.get("cost", 0.3),
+            rows.append({"at": self.at(j["end"]), "duty": j["duty"], "project": j["project"], "model": "sonnet", "turns": 12, "cost": j.get("cost", 0.3),
                          **({"fix": f"{PANELS[j['panel']][0]}#{j['item']}"} if j.get("panel") is not None else {})})
+        return rows
+
+    def midnights(self, t):
+        """(local midnight today, local midnight six days ago) as the demo clock sees them."""
         now = datetime.fromtimestamp(self.t0 + t, timezone.utc)
-        midnight = iso(now.astimezone().replace(hour=0, minute=0, second=0, microsecond=0))
-        week = iso(now.astimezone().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=6))
+        m = now.astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
+        return iso(m), iso(m - timedelta(days=6))
+
+    def spend(self, t):
+        rows = self.spend_ledger(t)
+        midnight, week = self.midnights(t)
         wk = [r for r in rows if r["at"] >= week]
         def group(key):
             out = {}

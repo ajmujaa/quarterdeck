@@ -1328,6 +1328,65 @@ def over_budget():
     return b is not None and spent_today() >= b
 
 
+def _stack_sentence(project):
+    """The one-sentence stack the survey found for a project (state/profiles), or nothing when it was never scanned."""
+    import tickets as _tk
+    return _tk.stack_context(project)["stack"]
+
+
+def _mission_state(kind, r):
+    """The state word the page gives a mission (dashboard/index.html recentMissions + MSTATE), so a count here equals the rows there."""
+    st = r.get("status")
+    if kind == "fix":
+        return "running" if st == "running" else "awaiting" if st == "pr" else "blocked" if st in ("failed", "blocked", "abandoned") else "done"
+    if kind == "panel":
+        return "running" if st == "running" else "done" if st == "done" else "blocked"
+    if kind == "cycle":
+        return ("running" if st == "running" else "awaiting" if st == "awaiting-review"
+                else "blocked" if st in ("needs-human", "failed", "stopped-cap", "stopped-ceiling") else "done")
+    if kind == "brief":
+        mk = r.get("mockups")
+        return ("running" if st == "drafting" or mk == "working" else "blocked" if st == "failed" or mk == "failed"
+                else "awaiting" if st in ("proposed", "changes_requested") or mk == "ready" else "done")
+    return "awaiting" if st in ("proposed", "approved") else "done"          # plan
+
+
+def project_overview(projects, agents, runs, inbox, fixes, cycles, panels, briefs, plans, spend_rows, since_today, since_week, stack_of=None):
+    """One small summary per registered project, for the Projects page. Pure: every figure is counted from the lists the state already holds,
+    never estimated. needs/top come from the unacknowledged inbox items of that project (the list Needs you shows, add-on items have no project
+    and are counted on the page); last run from the runs ledger; spend from the spend ledger rows that name the project; the mission counts
+    use the page's own state words. state: blocked (a failed run or blocker waits), needs you, running, or idle."""
+    out = []
+    names = sorted(projects) if isinstance(projects, dict) else sorted(p.get("name") for p in projects)      # the registry (a dict) or the state's list
+    for name in names:
+        mine = [x for x in inbox if x.get("project") == name and not x.get("acknowledged") and not x.get("addon")]
+        mine.sort(key=lambda x: x.get("at") or "", reverse=True)
+        top = mine[0] if mine else None
+        ran = [r for r in runs if r.get("project") == name and r.get("at")]
+        last = max(ran, key=lambda r: r["at"]) if ran else None
+        sp = [r for r in spend_rows if r.get("project") == name]
+        states = ([_mission_state("fix", r) for r in (fixes or {}).values() if r.get("project") == name]
+                  + [_mission_state("cycle", r) for r in cycles if r.get("project") == name]
+                  + [_mission_state("panel", r) for r in panels if r.get("project") == name and not r.get("superseded_by")]
+                  + [_mission_state("brief", r) for r in briefs if r.get("project") == name]
+                  + [_mission_state("plan", r) for r in plans if r.get("project") == name])
+        running = (sum(1 for a in agents if a.get("project") == name and a.get("status") == "running")
+                   + sum(1 for s in states if s == "running"))
+        bad = bool(top) and any((x.get("severity") in ("BLOCKED", "ERROR", "FAILED", "bad") or x.get("blocker") == "config") for x in mine)
+        out.append({
+            "name": name,
+            "state": "blocked" if bad else "needs you" if mine else "running" if running else "idle",
+            "running": running, "needs": len(mine),
+            "top": {"id": top.get("id"), "text": str(top.get("text") or "")[:200], "at": top.get("at")} if top else None,
+            "last_run": {"at": last["at"], "duty": last.get("duty") or "", "verdict": last.get("verdict") or ""} if last else None,
+            "spend_today": round(sum(float(r.get("cost") or 0) for r in sp if (r.get("at") or "") >= since_today), 4),
+            "spend_week": round(sum(float(r.get("cost") or 0) for r in sp if (r.get("at") or "") >= since_week), 4),
+            "missions_open": sum(1 for s in states if s != "done"), "missions_done": sum(1 for s in states if s == "done"),
+            "stack": (stack_of(name) if stack_of else "") or "",
+        })
+    return out
+
+
 def spend_summary():
     rows = spend_rows()
     week = local_midnight_utc(6)
@@ -5025,24 +5084,31 @@ def _build_state():
                                 "pid": info["pid"], "what": info["what"], "lock": lock_name,
                                 "fixrun": info.get("fixrun")})
 
+    inbox = _safe(lambda: inbox_items(last_by_pair), [])
+    fixes = _safe(lambda: fix_index(locks), {})
+    cycles = _safe(lambda: cycles_summary(locks), [])
+    briefs = _safe(briefs_summary, [])
+    plans = _safe(plans_summary, [])
     return {
         "now": iso(now_utc()),
         "agents": agents,
         "crew": crew_list(),
         "missions": _safe(load_missions, []),
         "showcase": _safe(load_showcase, []),
-        "inbox": _safe(lambda: inbox_items(last_by_pair), []),
+        "inbox": inbox,
         "panels": panels,
-        "fixes": _safe(lambda: fix_index(locks), {}),
-        "cycles": _safe(lambda: cycles_summary(locks), []),
-        "briefs": _safe(briefs_summary, []),
-        "plans": _safe(plans_summary, []),
+        "fixes": fixes,
+        "cycles": cycles,
+        "briefs": briefs,
+        "plans": plans,
         "fixqueue": _safe(queue_view, {}),
         "spend": _safe(spend_summary, {}),
         "schedules": _safe(schedules_view, []),
         "docs": _safe(lambda: [{**d, "superseded_by": stale_docs.get(d["name"]),
                                 **classify(d["name"], doc_kind)}
                                for d in doc_list(list(projects), filed)], []),
+        "overview": _safe(lambda: project_overview(projects, agents, runs, inbox, fixes, cycles, panels, briefs, plans, spend_rows(),
+                                                   local_midnight_utc(), local_midnight_utc(6), _stack_sentence), []),
         "projects": [
             {"name": k, "repo": v.get("repo", ""), "summary": v.get("summary", ""),
              "duties": v.get("duties", []), "guardrails": v.get("guardrails", []),
@@ -5291,6 +5357,11 @@ class Handler(BaseHTTPRequestHandler):
                                                "default_branch": "main", "demo": True}))
             if u.path == "/api/mockup":             # a made-up page, still served the strict way
                 return self._mockup_page((q.get("brief") or [""])[0], (q.get("name") or [""])[0])
+            if u.path == "/api/state":              # the made-up state, with the Projects summary counted by the same function the real one uses
+                w = DEMO["world"]; st = w.state(); t = w.elapsed(); today, week = w.midnights(t)
+                st["overview"] = project_overview(st["projects"], st["agents"], st["runs"], st["inbox"], st["fixes"], st["cycles"], st["panels"], st["briefs"],
+                                                  st["plans"], w.spend_ledger(t), today, week, lambda n: demo.PROJECTS.get(n, {}).get("stack", ""))
+                return self._demo_reply((200, st))
             return self._demo_reply(DEMO["world"].get(u.path, q))
 
         if u.path.startswith("/assets/"):

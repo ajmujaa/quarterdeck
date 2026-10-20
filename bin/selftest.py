@@ -4368,6 +4368,40 @@ check("L18 the browser probe of the shell selftests is bin/browse.mjs's own laun
       and "chromiumSandbox: true" in (ROOT / "bin" / "browse.mjs").read_text() and "skipped: no usable browser" in (ROOT / "bin" / "selftest-lib.sh").read_text())
 check("L19 the self-tests leave no config/projects.json in the program folder", _had_projects_json or not (ROOT / "config" / "projects.json").exists())
 
+# ---- the Projects page's per-project summary (project_overview) ----
+_po_t, _po_w = ago(hours=3), ago(days=6)
+_po_projects = {"alpha": {}, "beta": {}, "gamma": {}}
+_po_inbox = [{"id": "local:alpha:shipwright:1", "project": "alpha", "duty": "shipwright", "severity": "ERROR", "text": "verify failed", "at": ago(minutes=30), "acknowledged": False},
+             {"id": "local:alpha:purser:1", "project": "alpha", "duty": "purser", "severity": "NEEDS_HUMAN", "text": "which timezone?", "at": ago(minutes=90), "acknowledged": False},
+             {"id": "local:alpha:old", "project": "alpha", "duty": "x", "severity": "ERROR", "text": "acknowledged one", "at": ago(minutes=5), "acknowledged": True},
+             {"id": "local:beta:purser:1", "project": "beta", "duty": "purser", "severity": "NEEDS_HUMAN", "text": "decide", "at": ago(minutes=10), "acknowledged": False},
+             {"id": "hermes:1", "source": "hermes", "addon": "hermes", "severity": "BLOCKED", "text": "sign in again", "at": ago(minutes=5), "acknowledged": False}]
+_po_runs = [{"at": ago(hours=5), "project": "alpha", "duty": "surveyor", "verdict": "CLEAN"}, {"at": ago(hours=1), "project": "alpha", "duty": "shipwright", "verdict": "ERROR"},
+            {"at": ago(hours=2), "project": "beta", "duty": "trials", "verdict": "DRY-RUN"}]
+_po_spend = [{"at": ago(minutes=20), "project": "alpha", "cost": 1.25}, {"at": ago(days=3), "project": "alpha", "cost": 2.0}, {"at": ago(days=9), "project": "alpha", "cost": 50.0},
+             {"at": ago(minutes=40), "project": "beta", "cost": 0.5}, {"at": ago(minutes=40), "project": "", "cost": 9.0}]
+_po_fixes = {"p#1": {"project": "alpha", "status": "pr"}, "p#2": {"project": "alpha", "status": "failed"}, "p#3": {"project": "beta", "status": "running"}, "p#4": {"project": "beta", "status": "merged"}}
+_po_cycles = [{"project": "alpha", "status": "awaiting-review"}, {"project": "beta", "status": "done"}]
+_po_panels = [{"project": "beta", "status": "done"}, {"project": "beta", "status": "done", "superseded_by": "x"}, {"project": "gamma", "status": "running"}]
+_po_agents = [{"project": "gamma", "status": "running"}, {"project": "gamma", "status": "idle"}]
+_po = {o["name"]: o for o in d.project_overview(_po_projects, _po_agents, _po_runs, _po_inbox, _po_fixes, _po_cycles, _po_panels, [{"project": "beta", "status": "proposed"}],
+                                               [{"project": "alpha", "status": "done"}], _po_spend, ago(hours=1), _po_w, lambda n: "Python with pytest" if n == "alpha" else "")}
+check("overview: one entry per registered project, in name order", list(_po) == ["alpha", "beta", "gamma"])
+check("overview: needs counts the project's own unacknowledged inbox items (not an acknowledged one, not an add-on's) and names the newest as top",
+      _po["alpha"]["needs"] == 2 and _po["alpha"]["top"]["id"] == "local:alpha:shipwright:1" and _po["beta"]["needs"] == 1 and _po["gamma"]["needs"] == 0 and _po["gamma"]["top"] is None, _po["alpha"])
+check("overview: state is blocked for a failed run waiting, needs you for a decision, running for a live agent, and idle otherwise",
+      (_po["alpha"]["state"], _po["beta"]["state"], _po["gamma"]["state"]) == ("blocked", "needs you", "running"), [o["state"] for o in _po.values()])
+check("overview: last run is the newest row of the ledger for the project, with its duty and verdict; none when it never ran",
+      _po["alpha"]["last_run"] == {"at": _po_runs[1]["at"], "duty": "shipwright", "verdict": "ERROR"} and _po["gamma"]["last_run"] is None)
+check("overview: spend is summed from the ledger rows that name the project, today and over seven days (a row from nine days ago and a row with no project do not count)",
+      _po["alpha"]["spend_today"] == 1.25 and _po["alpha"]["spend_week"] == 3.25 and _po["beta"]["spend_week"] == 0.5 and _po["gamma"]["spend_week"] == 0, (_po["alpha"], _po["beta"]))
+check("overview: mission counts use the page's states (a pull request waiting, a cycle awaiting review and a running fix are open; a superseded panel is not counted)",
+      (_po["alpha"]["missions_open"], _po["alpha"]["missions_done"]) == (3, 1) and (_po["beta"]["missions_open"], _po["beta"]["missions_done"]) == (2, 3)
+      and (_po["gamma"]["missions_open"], _po["gamma"]["missions_done"]) == (1, 0), [(o["missions_open"], o["missions_done"]) for o in _po.values()])
+check("overview: the stack sentence comes from the survey's profile, empty when there is none", _po["alpha"]["stack"] == "Python with pytest" and _po["beta"]["stack"] == "")
+check("overview: no registered project gives an empty list", d.project_overview({}, [], [], [], {}, [], [], [], [], [], "", "") == [])
+check("overview: the real state and the Demo state both carry it", '"overview": _safe(lambda: project_overview(' in (ROOT / "bin" / "dashboard.py").read_text() and 'st["overview"] = project_overview(' in (ROOT / "bin" / "dashboard.py").read_text())
+
 print()
 if FAILS:
     print(f"  {len(FAILS)} check(s) failed")

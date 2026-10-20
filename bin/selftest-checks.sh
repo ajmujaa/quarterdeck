@@ -324,7 +324,9 @@ bad=""; for d in pilot lookout inspector; do : > "$R6RAN"; QUARTERDECK_QA_READY_
 ck "R6 and a pull request whose origin cannot be told (the field is missing) is treated as a fork: fail closed${bad:+ — RAN:$bad}" '[ -z "$bad" ]'
 jq '.isCrossRepository = false' "$T/ghdata/pr-5.json" > "$T/pr5.tmp" && cp "$T/pr5.tmp" "$T/ghdata/pr-5.json"
 : > "$R6RAN"; : > "$R6ENV"; rm -f "$REALHOME/.qd-r6-write"
-QUARTERDECK_QA_READY_WAIT=2 st_duty pilot --pr 5; QUARTERDECK_QA_READY_WAIT=2 st_duty lookout --pr 5; st_duty inspector --pr 5 >/dev/null 2>&1
+# on Linux an app start is refused unless the owner opted in (QUARTERDECK_APP_NET=share, see L6 below), so the control opts in; a Mac needs nothing
+APPNET=; [ "$(uname -s)" = Linux ] && APPNET=share
+QUARTERDECK_APP_NET=${APPNET:-} QUARTERDECK_QA_READY_WAIT=2 st_duty pilot --pr 5; QUARTERDECK_APP_NET=${APPNET:-} QUARTERDECK_QA_READY_WAIT=2 st_duty lookout --pr 5; st_duty inspector --pr 5 >/dev/null 2>&1
 ck "R6 control: a pull request from a branch of the repository itself does run its build, start and verify commands" 'grep -qx build "$R6RAN" && grep -qx start "$R6RAN" && grep -qx verify "$R6RAN"'
 ck "R6 and each runs with a scratch HOME, no secrets, and in the sandbox (a Mac's, or bubblewrap on Linux): it cannot write in the owner's home" \
    'grep -q "^build:PATH=" "$R6ENV" && grep -q "^start:PATH=" "$R6ENV" && ! grep -qE "^(build|start|verify):HOME=$REALHOME\$" "$R6ENV" && ! grep -qE "^(build|start):(GH_TOKEN|QUARTERDECK_)" "$R6ENV" && [ ! -e "$REALHOME/.qd-r6-write" ]'

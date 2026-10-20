@@ -106,6 +106,9 @@ ck "the per-duty API cap stops that duty with NEEDS_HUMAN once its own spend rea
    '[ "$r1" = 0 ] && [ "$CRRC" != 0 ] && [ "$(calls)" = "$n0" ] && jq -r ".[-1].detail" "$T/state/runs.json" | grep -q "cap of the shipwright duty"'
 python3 "$T/bin/billing.py" cap duty shipwright off >/dev/null; rm -f "$T/calls.cost"
 
+# root reads a file through chmod 000, so a check that needs an unreadable file would pass or fail by who runs it; a directory cannot be read as a file by anyone
+unreadable() { if [ "$(id -u)" = 0 ]; then rm -f "$1"; mkdir "$1"; else chmod 000 "$1"; fi; }
+readable() { [ -d "$1" ] && rmdir "$1"; chmod 600 "$1" 2>/dev/null; return 0; }
 # ---- review r9 A2, A3: a setting, cap or ledger that cannot be read stops a call billed to the key; it never becomes a plan call or an uncapped one --
 BJ="$T/config/billing.json"; cp "$BJ" "$T/billing.bak"
 stopped() { # stopped <words>: the last call did not start, returned 5, and its NEEDS_HUMAN row says <words>
@@ -127,9 +130,9 @@ cp "$T/billing.bak" "$BJ"
 cp "$T/bin/billing.py" "$T/billing.py.bak"; printf 'import sys\nsys.exit(1)\n' > "$T/bin/billing.py"; n0=$(calls); cr shipwright
 ck "a billing.py that fails stops the call (whatever the duty's setting, it cannot be known); nothing goes to the plan" 'stopped "billing"'
 cp "$T/billing.py.bak" "$T/bin/billing.py"
-python3 "$T/bin/billing.py" cap daily 5 >/dev/null; : > "$T/state/spend.jsonl"; chmod 000 "$T/state/spend.jsonl"; n0=$(calls); cr shipwright
+python3 "$T/bin/billing.py" cap daily 5 >/dev/null; : > "$T/state/spend.jsonl"; unreadable "$T/state/spend.jsonl"; n0=$(calls); cr shipwright
 ck "with a daily cap, a spend ledger that cannot be read stops the api duty (it is not read as no spend)" 'stopped "spend ledger"'
-chmod 600 "$T/state/spend.jsonl"; printf '{"at":"2999-01-01T00:00:00Z","billing":"api","duty":"shipwright","cost":0.01}\nnot json\n' > "$T/state/spend.jsonl"; n0=$(calls); cr shipwright
+readable "$T/state/spend.jsonl"; printf '{"at":"2999-01-01T00:00:00Z","billing":"api","duty":"shipwright","cost":0.01}\nnot json\n' > "$T/state/spend.jsonl"; n0=$(calls); cr shipwright
 ck "  and so does a ledger with a line that is not a row" 'stopped "spend ledger"'
 printf '{"at":"2999-01-01T00:00:00Z","billing":"api","duty":"shipwright","cost":"lots"}\n' > "$T/state/spend.jsonl"; n0=$(calls); cr shipwright
 ck "  and a row billed to the key whose cost is not a number" 'stopped "spend ledger"'

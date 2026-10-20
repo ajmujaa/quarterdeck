@@ -232,6 +232,9 @@ ck "QUARTERDECK_PROVIDER_OVERRIDE beats everything (a decision panel can put eve
 printf '{"tp":{"repo":"x/tp","path":"%s","providers":{"surveyor":"llama-cloud"}}}' "$R/wd" > "$QD/config/projects.json"
 rm -f "$R/calls.jsonl" "$R/fake-calls.jsonl"; call "$QD" surveyor QUARTERDECK_PROJECT=tp -- "$R/wd" "Review."
 ck "an unknown provider in the registry is refused too, and the message says it came from the registry" '[ "$(used)" = none ] && grep -q "unknown provider .llama-cloud." <<<"$(lastlog)" && grep -q "projects.json" <<<"$(lastlog)"'
+# root reads a file through chmod 000, so a check that needs an unreadable file would pass or fail by who runs it; a directory cannot be read as a file by anyone
+unreadable() { if [ "$(id -u)" = 0 ]; then rm -f "$1"; mkdir "$1"; else chmod 000 "$1"; fi; }
+readable() { [ -d "$1" ] && rmdir "$1"; chmod 600 "$1" 2>/dev/null; return 0; }
 # review r9 P1: a registry that cannot be read is not "no provider set": the call is refused, it never falls through to claude
 for bad in 'invalid JSON:{"tp": {"providers": {"surveyor": "fake"}' 'a provider that is not a string:{"tp": {"providers": {"surveyor": ["fake"]}}}' \
            'providers that are not an object:{"tp": {"providers": "fake"}}' 'a project that is not an object:{"tp": "fake"}'; do
@@ -240,10 +243,10 @@ for bad in 'invalid JSON:{"tp": {"providers": {"surveyor": "fake"}' 'a provider 
   ck "a registry with ${bad%%:*} refuses the call (no model runs, claude least of all) and the log names the registry" \
      '[ "$(used)" = none ] && [ "$(cat "$R/rc")" != 0 ] && grep -q "projects.json" <<<"$(lastlog)"'
 done
-printf '{"tp":{"providers":{"surveyor":"fake"}}}' > "$QD/config/projects.json"; chmod 000 "$QD/config/projects.json"; rm -f "$R/calls.jsonl" "$R/fake-calls.jsonl" "$QD/logs/quarterdeck.log"
+printf '{"tp":{"providers":{"surveyor":"fake"}}}' > "$QD/config/projects.json"; unreadable "$QD/config/projects.json"; rm -f "$R/calls.jsonl" "$R/fake-calls.jsonl" "$QD/logs/quarterdeck.log"
 call "$QD" surveyor QUARTERDECK_PROJECT=tp "${FK[@]}" -- "$R/wd" "Review."
 ck "  and so does a registry that cannot be read" '[ "$(used)" = none ] && [ "$(cat "$R/rc")" != 0 ] && grep -q "projects.json" <<<"$(lastlog)"'
-chmod 600 "$QD/config/projects.json"
+readable "$QD/config/projects.json"
 mkdir -p "$QD/crew"; printf -- '---\nname: seatx\ndiscipline: dev\nseat: a seat\nbias: b\nmodel:\nprovider: fake\n---\nA seat.\n' > "$QD/crew/seatx.md"
 ck "the panel duties export a crew seat's provider: line the way they export its model: line" \
    '(n=$(grep -c "crew_meta \"\$seat\" model" "$REAL/duties/marshal.sh"); m=$(grep -c "crew_meta \"\$seat\" provider)" "$REAL/duties/marshal.sh"); [ "$n" = "$m" ]) && grep -q "crew_meta \"\$1\" provider)" "$REAL/duties/panel.sh" && grep -q "crew_meta modelmaker provider" "$REAL/duties/mockup.sh"'

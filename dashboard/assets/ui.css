@@ -740,9 +740,9 @@ body.brain-mode .rh{flex:1;min-height:0;overflow:auto;margin:var(--s3) var(--s4)
 .brain-region{font:600 12px var(--font-mono);letter-spacing:.16em}
 .brain-hub{font:600 12px/1 var(--font-mono);color:var(--ink);text-shadow:0 0 3px var(--code),0 0 3px var(--code)}
 .brain-tip[hidden],.brain-panel[hidden]{display:none}
-.brain-tip{position:absolute;max-width:250px;padding:7px 10px;background:var(--card);border:1px solid var(--line-2);border-radius:var(--r-sm);font-size:12px;pointer-events:none;display:flex;flex-direction:column;gap:2px}
+.brain-tip{position:absolute;z-index:3;max-width:250px;padding:7px 10px;background:var(--card);border:1px solid var(--line-2);border-radius:var(--r-sm);font-size:12px;pointer-events:none;display:flex;flex-direction:column;gap:2px}
 .brain-tip span{color:var(--dim);overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical}
-.brain-hud{position:absolute;left:12px;right:12px;top:12px;display:flex;flex-direction:column;align-items:flex-start;gap:var(--s2);pointer-events:none}
+.brain-hud{position:absolute;z-index:2;left:12px;right:12px;top:12px;display:flex;flex-direction:column;align-items:flex-start;gap:var(--s2);pointer-events:none}
 .brain-hud>*{pointer-events:auto}
 .brain-stats{display:flex;flex-wrap:wrap;gap:6px}
 .brain-stats button.st,.brain-hub button{font:inherit;color:inherit;background:none;border:0;padding:2px 4px;margin:-2px -4px;border-radius:6px;cursor:pointer;pointer-events:auto;min-height:0}

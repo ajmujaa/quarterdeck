@@ -80,8 +80,386 @@ def json_of(text):
     try:
         j = json.loads(text)
         return j if isinstance(j, dict) else {}
-    except ValueError:
+    except (ValueError, RecursionError):           # deeply nested text is not a manifest; it must not stop the scan
         return {}
+
+
+# ---- the stack: which framework and tools a project uses, from its files only ----
+# Nothing here runs project code, opens the network or reads more than the manifests the rest of the scan reads. Every name that reaches a
+# command comes from the fixed tables below, never from the project; a script NAME is checked against SCRIPT_OK before it is used.
+SCRIPT_OK = re.compile(r"[A-Za-z0-9][A-Za-z0-9:_-]{0,39}")           # a package.json script name; no leading dash, space, quote or shell character
+CMD_OK = re.compile(r"[A-Za-z0-9_./:=@+ -]{1,200}")                  # the same limits as attach.VERIFY_OK: one plain command line
+CONTROL_RE = re.compile(r"[\x00-\x1f\x7f\x85  ]")
+RUN_KEYS = ("dev", "start", "build", "lint", "typecheck", "test")
+MAX_PKG_FILES = 20                                                   # package.json files merged for a monorepo
+NPM_LOCKS = (("pnpm-lock.yaml", "pnpm"), ("yarn.lock", "yarn"), ("package-lock.json", "npm"), ("bun.lockb", "bun"), ("bun.lock", "bun"))
+JS_MAIN = (("next", "Next.js"), ("nuxt", "Nuxt"), ("@sveltejs/kit", "SvelteKit"), ("astro", "Astro"), ("@angular/core", "Angular"), ("expo", "Expo"),
+           ("react-native", "React Native"), ("vue", "Vue"), ("svelte", "Svelte"), ("react", "React"), ("@nestjs/core", "NestJS"), ("fastify", "Fastify"), ("express", "Express"))
+JS_UI = {"Next.js", "Nuxt", "SvelteKit", "Astro", "Angular", "Vue", "Svelte", "React"}
+JS_MOBILE = {"Expo", "React Native"}
+JS_SERVER = {"NestJS", "Fastify", "Express"}
+# (label, kind, dependency names, config file prefixes)
+JS_TOOLS = (("Vite", "build", ("vite",), ("vite.config.",)), ("webpack", "build", ("webpack",), ("webpack.config.",)), ("esbuild", "build", ("esbuild",), ()),
+            ("tsup", "build", ("tsup",), ("tsup.config.",)),
+            ("Vitest", "test", ("vitest",), ("vitest.config.", "vitest.workspace")), ("Jest", "test", ("jest",), ("jest.config.",)),
+            ("Mocha", "test", ("mocha",), (".mocharc",)), ("Playwright", "test", ("@playwright/test", "playwright"), ("playwright.config.",)),
+            ("Cypress", "test", ("cypress",), ("cypress.config.",)),
+            ("ESLint", "lint", ("eslint", "eslint-config-next"), ("eslint.config.", ".eslintrc")), ("Biome", "lint", ("@biomejs/biome",), ("biome.json",)),
+            ("Prettier", "tool", ("prettier",), (".prettierrc", "prettier.config.")), ("Tailwind", "tool", ("tailwindcss",), ("tailwind.config.",)),
+            ("TypeScript", "language", ("typescript",), ("tsconfig.json",)))
+JS_MAIN_CONFIG = {"Next.js": "next.config.", "Nuxt": "nuxt.config.", "SvelteKit": "svelte.config.", "Astro": "astro.config.", "Angular": "angular.json", "Svelte": "svelte.config."}
+SCRIPT_ALIASES = {"dev": ("dev", "develop"), "start": ("start",), "build": ("build",), "lint": ("lint",), "typecheck": ("typecheck", "type-check"), "test": ("test",)}
+PY_FRAMEWORKS = (("fastapi", "FastAPI"), ("django", "Django"), ("flask", "Flask"))
+GO_FRAMEWORKS = (("github.com/gin-gonic/gin", "Gin"), ("github.com/labstack/echo", "Echo"), ("github.com/gofiber/fiber", "Fiber"), ("github.com/go-chi/chi", "Chi"))
+RUST_FRAMEWORKS = (("axum", "Axum", "framework"), ("actix-web", "Actix", "framework"), ("rocket", "Rocket", "framework"), ("tokio", "Tokio", "runtime"), ("clap", "clap", "framework"))
+LOCK_FILES = ("package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb", "bun.lock", "poetry.lock", "uv.lock", "Pipfile.lock", "pdm.lock", "Cargo.lock", "go.sum")
+
+
+def clip(s, n=120):
+    """Untrusted text made safe to print or store: no control characters or line breaks, at most n characters."""
+    return CONTROL_RE.sub(" ", str(s))[:n]
+
+
+def major(rng):
+    """The major version from a version range ('^18.2.0', '~14', '>=3.1 <4'); '' when the range does not start with a number (a tag, a path, a workspace link)."""
+    m = re.match(r"[\^~<>=v\s]*(\d{1,4})", rng) if isinstance(rng, str) else None
+    return m.group(1) if m else ""
+
+
+def runner(pm, script):
+    """The command that runs a package.json script with this package manager, or '' when the script name is not a plain one."""
+    if pm not in ("npm", "pnpm", "yarn", "bun") or not isinstance(script, str) or not SCRIPT_OK.fullmatch(script):
+        return ""
+    if script == "test":
+        return {"npm": "npm test", "pnpm": "pnpm test", "yarn": "yarn test", "bun": "bun run test"}[pm]
+    return {"npm": "npm run ", "pnpm": "pnpm run ", "yarn": "yarn ", "bun": "bun run "}[pm] + script
+
+
+def join_words(items):
+    items = list(items)
+    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1] if items else ""
+
+
+def fact(kind, name, version, evidence):
+    return {"kind": kind, "name": name, "version": version, "evidence": clip(evidence)}
+
+
+def _any_name(names, prefixes):
+    for n in names:
+        if n.startswith(prefixes):
+            return n
+    return ""
+
+
+def _js_stack(root, names, first, prof, notes):
+    """The Node side: package.json files (the nearest to the root wins, nested ones fill the gaps), lockfiles, config files. Returns an ecosystem dict or None."""
+    if "package.json" not in names:
+        return None
+    paths = sorted(names["package.json"], key=lambda f: (f.count("/"), f))[:MAX_PKG_FILES]
+    pjs = []
+    for f in paths:
+        text = read_small(root, f)
+        if not text and (Path(root) / f).is_file():
+            try:
+                big = (Path(root) / f).stat().st_size > MAX_MANIFEST
+            except OSError:
+                big = False
+            if big:
+                notes.append(f"{clip(f)} is larger than {MAX_MANIFEST // 1000} KB and was not read")
+        pjs.append((f, json_of(text)))
+    ev = paths[0]
+    deps, scripts_from, scripts = {}, "", {}
+    engines = ""
+    pm_field, pm_ev = "", ""
+    dev_scripts_text = ""
+    for f, pj in pjs:
+        for key in ("dependencies", "devDependencies", "peerDependencies"):
+            d = pj.get(key)
+            if isinstance(d, dict):
+                for k, v in d.items():
+                    if isinstance(k, str) and k not in deps:
+                        deps[k] = (v if isinstance(v, str) else "", f)
+        sc = pj.get("scripts")
+        if isinstance(sc, dict) and sc and not scripts:
+            scripts = {k: v for k, v in sc.items() if isinstance(k, str) and isinstance(v, str)}
+            scripts_from = f
+        if not pm_field and isinstance(pj.get("packageManager"), str):
+            m = re.match(r"(npm|pnpm|yarn|bun)@(\d{1,4})", pj["packageManager"])
+            if m:
+                pm_field, pm_ver, pm_ev = m.group(1), m.group(2), f
+        eng = pj.get("engines")
+        if not engines and isinstance(eng, dict) and isinstance(eng.get("node"), str):
+            engines = major(eng["node"])
+    # the package manager: the packageManager field is the owner's own statement; else the lockfile nearest the root; else npm
+    pm, pm_version, pm_evidence, lock = "", "", "", ""
+    for lockname, mgr in NPM_LOCKS:
+        if lockname in names:
+            add(prof, "package_managers", mgr, first(lockname))
+            if not lock:
+                lock = mgr
+                lock_ev = "lockfile " + first(lockname)
+    if pm_field:
+        add(prof, "package_managers", pm_field, f"{pm_ev} packageManager")
+        pm, pm_version, pm_evidence = pm_field, pm_ver, f"{pm_ev} packageManager field"
+    elif lock:
+        pm, pm_evidence = lock, lock_ev
+    else:
+        pm, pm_evidence = "npm", f"{ev} (no lockfile, npm assumed)"
+        add(prof, "package_managers", "npm", ev)
+    facts = []
+    facts.append(fact("package_manager", pm, pm_version, pm_evidence))
+    if lock and lock != pm:
+        facts.append(fact("package_manager", lock, "", lock_ev))
+    # scripts -> commands (fixed script names only)
+    run = {k: "" for k in RUN_KEYS}
+    for key, aliases in SCRIPT_ALIASES.items():
+        for a in aliases:
+            if a in scripts and SCRIPT_OK.fullmatch(a):
+                if key == "test" and "no test specified" in scripts[a]:
+                    continue                                     # npm's own placeholder is not a test command
+                cmd = runner(pm, a)
+                if cmd and CMD_OK.fullmatch(cmd):
+                    run[key] = cmd
+                    add(prof, "commands", f"{key}: {cmd}", f"{scripts_from} scripts.{a}")
+                break
+    # frameworks
+    main = None
+    present = {}
+    for dep, label in JS_MAIN:
+        cfg = JS_MAIN_CONFIG.get(label)
+        if dep in deps:
+            present[label] = (major(deps[dep][0]), f"{deps[dep][1]} dependency {dep}")
+        elif cfg and _any_name(names, (cfg,)):
+            present[label] = ("", first(_any_name(names, (cfg,))))
+    for dep, label in JS_MAIN:
+        if label in present:
+            main = (label, present[label][0])
+            break
+    for label, (ver, evd) in present.items():
+        facts.append(fact("framework", label, ver, evd))
+    tools = {"build": [], "test": [], "lint": []}
+    for label, kind, depnames, cfgs in JS_TOOLS:
+        hit = next((d for d in depnames if d in deps), "")
+        evd, ver = "", ""
+        if hit:
+            evd, ver = f"{deps[hit][1]} dependency {hit}", major(deps[hit][0])
+        elif cfgs and _any_name(names, cfgs):
+            evd = first(_any_name(names, cfgs))
+        elif label == "ESLint" and any("next lint" in v or v.startswith("eslint") for v in scripts.values()):
+            evd = f"{scripts_from} scripts"
+        if not evd:
+            continue
+        facts.append(fact(kind, label, ver, evd))
+        if kind in tools:
+            tools[kind].append(label)
+    if any("--turbo" in v or "turbopack" in v.lower() for k, v in scripts.items() if k in ("dev", "build")) and main and main[0] == "Next.js":
+        facts.append(fact("build", "Turbopack", "", f"{scripts_from} scripts use --turbo"))
+        tools["build"].insert(0, "Turbopack")
+    if any(k.startswith("@testing-library/") for k in deps):
+        k = next(k for k in deps if k.startswith("@testing-library/"))
+        facts.append(fact("test", "Testing Library", major(deps[k][0]), f"{deps[k][1]} dependency {k}"))
+    facts.append(fact("runtime", "Node", engines, f"{ev} engines.node" if engines else ev))
+    labels = {f["name"] for f in facts}
+    # what kind of application
+    app = "unknown"
+    if main and main[0] in JS_MOBILE:
+        app = "mobile"
+    elif main and main[0] in JS_UI:
+        app = "web-ui"
+    elif main and main[0] in JS_SERVER:
+        app = "web-api"
+    else:
+        first_pj = pjs[0][1] if pjs else {}
+        if isinstance(first_pj.get("bin"), (str, dict)):
+            app = "cli"
+        elif any(k in first_pj for k in ("main", "module", "exports", "types")) or "tsup" in labels:
+            app = "library"
+    # the sentence pieces
+    if main and main[0] in JS_SERVER:
+        head, withs = "Node", [main[0]]
+    elif main:
+        head, withs = (main[0] + (" " + main[1] if main[1] else "")), []
+    else:
+        head, withs = "Node", []
+    builds = [t for t in tools["build"] if t in ("Turbopack", "Vite", "webpack", "esbuild", "tsup")]
+    withs += builds
+    withs += [x for x in ("TypeScript", "Tailwind") if x in labels]
+    unit = [t for t in tools["test"] if t in ("Vitest", "Jest", "Mocha")]
+    e2e = [t for t in tools["test"] if t in ("Playwright", "Cypress")]
+    tests = unit[:1] + e2e[:1]
+    return {"eco": "js", "facts": facts, "run": run, "app": app, "head": head, "with": withs, "tests": tests, "lints": tools["lint"][:1], "pm": pm,
+            "recognised": bool(main or tools["build"] or tools["test"] or tools["lint"]), "main": main[0] if main else "", "ui": bool(main and main[0] in JS_UI | JS_MOBILE),
+            "lock": bool(lock), "deps": bool(deps), "_deps": deps}
+
+
+def _py_stack(root, names, first, files, dirs, prof):
+    manifests = [m for m in ("pyproject.toml", "requirements.txt", "Pipfile", "setup.py", "setup.cfg", "tox.ini") if m in names]
+    cfgfiles = [n for n in ("pytest.ini", "conftest.py", "ruff.toml", ".ruff.toml", "mypy.ini", ".flake8") if n in names]
+    pytest_cmd = next((c["evidence"][0] for c in prof["commands"] if c["name"] == "test: python -m pytest"), "")
+    if not manifests and not cfgfiles and not pytest_cmd:
+        return None
+    anchor = first(manifests[0]) if manifests else first(cfgfiles[0]) if cfgfiles else pytest_cmd
+    texts = {m: read_small(root, first(m)).lower() for m in manifests}
+    allt = "\n".join(texts.values())
+    dep = lambda d: re.search(r"(^|[\s\"'\[,])" + re.escape(d) + r"([\s=<>~!\]\"',;\[]|$)", allt, re.M)
+    facts = []
+    where = lambda needle, d: next((f"{first(m)} lists {d}" for m in manifests if needle in texts[m]), f"{anchor} lists {d}")
+    pm, pm_ev = "pip", ""
+    if "[tool.poetry" in allt or "poetry.lock" in names:
+        pm, pm_ev = "poetry", first("poetry.lock") if "poetry.lock" in names else where("[tool.poetry", "poetry")
+    elif "[tool.uv" in allt or "uv.lock" in names:
+        pm, pm_ev = "uv", first("uv.lock") if "uv.lock" in names else where("[tool.uv", "uv")
+    elif "[tool.pdm" in allt or "pdm.lock" in names:
+        pm, pm_ev = "pdm", first("pdm.lock") if "pdm.lock" in names else where("[tool.pdm", "pdm")
+    elif "Pipfile" in names:
+        pm, pm_ev = "pipenv", first("Pipfile")
+    else:
+        pm_ev = anchor
+    if pm in ("uv", "pdm"):
+        add(prof, "package_managers", pm, pm_ev)
+    facts.append(fact("package_manager", pm, "", ("lockfile " if pm_ev.endswith(".lock") else "") + pm_ev))
+    if "hatch" in allt:
+        facts.append(fact("tool", "Hatch", "", where("hatch", "hatch")))
+    elif "setuptools" in allt:
+        facts.append(fact("tool", "setuptools", "", where("setuptools", "setuptools")))
+    main = ""
+    for d, label in PY_FRAMEWORKS:
+        if dep(d):
+            facts.append(fact("framework", label, "", where(d, d)))
+            main = main or label
+    tests, lints = [], []
+    pyt_ev = next((first(n) for n in ("pytest.ini", "conftest.py") if n in names), "")
+    if dep("pytest") or "[tool.pytest" in allt or pyt_ev or pytest_cmd:
+        evd = where("pytest", "pytest") if dep("pytest") or "[tool.pytest" in allt else pyt_ev or pytest_cmd
+        facts.append(fact("test", "pytest", "", evd))
+        tests.append("pytest")
+    if "tox.ini" in names:
+        facts.append(fact("tool", "tox", "", first("tox.ini")))
+    run = {k: "" for k in RUN_KEYS}
+    if tests:
+        run["test"] = "python -m pytest"
+    ruff = dep("ruff") or "[tool.ruff" in allt or "ruff.toml" in names or ".ruff.toml" in names
+    black = dep("black") or "[tool.black" in allt
+    mypy = dep("mypy") or "[tool.mypy" in allt or "mypy.ini" in names
+    if ruff:
+        facts.append(fact("lint", "ruff", "", where("ruff", "ruff") if dep("ruff") or "[tool.ruff" in allt else first("ruff.toml") if "ruff.toml" in names else first(".ruff.toml")))
+        lints.append("ruff")
+        run["lint"] = "ruff check ."
+    if black:
+        facts.append(fact("tool", "black", "", where("black", "black")))
+        if not ruff:
+            lints.append("black")
+            run["lint"] = "black --check ."
+    if mypy:
+        facts.append(fact("tool", "mypy", "", where("mypy", "mypy") if dep("mypy") or "[tool.mypy" in allt else first("mypy.ini")))
+        run["typecheck"] = "mypy ."
+    facts.append(fact("language", "Python", "", anchor))
+    app = "web-api" if main else "unknown"
+    return {"eco": "python", "facts": facts, "run": run, "app": app, "head": main or "Python", "with": tests, "tests": [], "lints": lints, "pm": pm,
+            "recognised": bool(main or tests or lints), "main": main, "ui": False, "lock": pm_ev.endswith(".lock"), "deps": bool(manifests)}
+
+
+def _go_stack(root, names, first, files):
+    if "go.mod" not in names:
+        return None
+    ev = first("go.mod")
+    text = read_small(root, ev)
+    facts, run = [], {k: "" for k in RUN_KEYS}
+    m = re.search(r"(?m)^go\s+(\d{1,2}\.\d{1,3})", text)
+    ver = m.group(1) if m else ""
+    mod = re.search(r"(?m)^module\s+([A-Za-z0-9._/~-]{1,100})\s*$", text)
+    facts.append(fact("language", "Go", ver, f"{ev}" + (f" (module {mod.group(1)})" if mod else "")))
+    main = ""
+    for needle, label in GO_FRAMEWORKS:
+        if needle in text:
+            facts.append(fact("framework", label, "", f"{ev} requires {needle}"))
+            main = main or label
+    facts.append(fact("package_manager", "go modules", "", ev))
+    facts.append(fact("test", "go test", "", ev))
+    run["test"], run["build"] = "go test ./...", "go build ./..."
+    lints = []
+    gl = _any_name(names, (".golangci.",))
+    if gl:
+        facts.append(fact("lint", "golangci-lint", "", first(gl)))
+        lints.append("golangci-lint")
+        run["lint"] = "golangci-lint run"
+    else:
+        run["lint"] = "go vet ./..."
+    if "main.go" in names and "main.go" in files:
+        run["start"] = "go run ."
+    app = "web-api" if main else ("cli" if "main.go" in files or any(f.startswith("cmd/") for f in files) else "library")
+    return {"eco": "go", "facts": facts, "run": run, "app": app, "head": "Go" + (" " + ver if ver else ""), "with": [main] if main else [], "tests": ["go test"], "lints": lints,
+            "pm": "", "recognised": True, "main": main, "ui": False, "lock": "go.sum" in names, "deps": "go.sum" in names or "require" in text}
+
+
+def _rust_stack(root, names, first, files):
+    if "Cargo.toml" not in names:
+        return None
+    ev = first("Cargo.toml")
+    text = read_small(root, ev)
+    facts, run = [], {k: "" for k in RUN_KEYS}
+    m = re.search(r'(?m)^\s*edition\s*=\s*"(\d{4})"', text)
+    ed = m.group(1) if m else ""
+    facts.append(fact("language", "Rust", ed, ev + (" (edition)" if ed else "")))
+    main, kinds = "", set()
+    for dep, label, kind in RUST_FRAMEWORKS:
+        if re.search(r"(?m)^\s*(?:\[(?:dev-|build-)?dependencies\.)?" + re.escape(dep) + r"\s*[=\]\.]", text):
+            facts.append(fact(kind, label, "", f"{ev} lists {dep}"))
+            kinds.add(label)
+            if label in ("Axum", "Actix", "Rocket") and not main:
+                main = label
+    facts.append(fact("package_manager", "cargo", "", ev))
+    facts.append(fact("test", "cargo test", "", ev))
+    cl = _any_name(names, ("clippy.toml", ".clippy.toml"))
+    facts.append(fact("lint", "Clippy", "", first(cl) if cl else ev + " (cargo clippy ships with the Rust toolchain)"))
+    rf = _any_name(names, ("rustfmt.toml", ".rustfmt.toml"))
+    if rf:
+        facts.append(fact("tool", "rustfmt", "", first(rf)))
+    run["test"], run["build"], run["lint"] = "cargo test", "cargo build", "cargo clippy"
+    run["start"] = "cargo run"
+    app = "web-api" if main else "cli" if "clap" in kinds or "src/main.rs" in files else "library" if "src/lib.rs" in files else "unknown"
+    return {"eco": "rust", "facts": facts, "run": run, "app": app, "head": "Rust" + (f" ({ed} edition)" if ed else ""), "with": [main] if main else [], "tests": ["cargo test"],
+            "lints": ["Clippy"], "pm": "", "recognised": True, "main": main, "ui": False, "lock": "Cargo.lock" in names, "deps": True}
+
+
+def stack_of(root, names, first, files, dirs, prof, js):
+    """The `stack` object of the profile: {summary, facts, app, runnable}, plus what the duty suggestions read (ui, lockfile, dependencies)."""
+    notes = prof["notes"]
+    ecos = [e for e in (js, _py_stack(root, names, first, files, dirs, prof), _go_stack(root, names, first, files),
+                        _rust_stack(root, names, first, files)) if e]
+    for e in ecos:
+        if e["eco"] in ("go", "rust"):
+            for f in e["facts"]:
+                if f["kind"] == "framework":
+                    add(prof, "frameworks", f["name"], f["evidence"])
+    out = {"summary": "", "facts": [], "app": "unknown", "runnable": {k: "" for k in RUN_KEYS}, "ui": False, "lockfile": False, "dependencies": False}
+    langs = ", ".join(f"{l['name']} ({l['evidence'][0].split(' ', 1)[0]})" for l in prof["languages"][:4])
+    if not ecos:
+        out["summary"] = langs or "no language recognised"
+        return out
+    count = lambda *ls: sum(int(i["evidence"][0].split(" ", 1)[0]) for i in prof["languages"] if i["name"] in ls)
+    weight = {"js": count("JavaScript", "TypeScript"), "python": count("Python"), "go": count("Go"), "rust": count("Rust")}
+    ecos.sort(key=lambda e: (not e["recognised"], -weight[e["eco"]]))
+    p = ecos[0]
+    for e in ecos:
+        out["facts"] += e["facts"]
+    out["app"] = p["app"]
+    for k in RUN_KEYS:
+        v = p["run"].get(k, "")
+        out["runnable"][k] = v if CMD_OK.fullmatch(v or "") else ""
+    out["ui"], out["lockfile"], out["dependencies"] = p["ui"], any(e["lock"] for e in ecos), any(e["deps"] for e in ecos)
+    if not p["recognised"]:
+        out["summary"] = langs or "no language recognised"
+        return out
+    s = p["head"] + (" with " + join_words(p["with"]) if p["with"] else "")
+    if p["tests"]:
+        s += ", tests by " + join_words(p["tests"])
+    if p["lints"]:
+        s += ", lint by " + join_words(p["lints"])
+    if p["pm"]:
+        s += ", package manager " + p["pm"]
+    out["summary"] = s
+    return out
 
 
 def scan(path):
@@ -93,7 +471,7 @@ def scan(path):
     dirs = [p for p, d in entries if d]
     base = lambda p: p.rsplit("/", 1)[-1]
     prof = {"path": str(root), "name": root.name, "languages": [], "frameworks": [], "package_managers": [], "commands": [], "ci": [], "containers": [],
-            "infrastructure": [], "deploy_targets": [], "sensitive": [], "secret_files": [], "agent_config": [], "git": {}, "notes": []}
+            "infrastructure": [], "deploy_targets": [], "sensitive": [], "secret_files": [], "agent_config": [], "git": {}, "notes": [], "stack": {}}
 
     # languages: by file extension, evidence is how many files
     counts = {}
@@ -109,24 +487,17 @@ def scan(path):
         names.setdefault(base(f), []).append(f)
     first = lambda n: names[n][0]
 
-    # package managers, commands, frameworks from manifests
-    if "package.json" in names:
-        pj = json_of(read_small(root, first("package.json")))
-        ev = first("package.json")
-        for lock, mgr in (("pnpm-lock.yaml", "pnpm"), ("yarn.lock", "yarn"), ("package-lock.json", "npm"), ("bun.lockb", "bun")):
-            if lock in names:
-                add(prof, "package_managers", mgr, first(lock))
-        if not any(m["name"] in ("pnpm", "yarn", "npm", "bun") for m in prof["package_managers"]):
-            add(prof, "package_managers", "npm", ev)
-        for script in ("test", "lint", "build", "dev", "start", "typecheck"):
-            if isinstance(pj.get("scripts"), dict) and script in pj["scripts"]:
-                add(prof, "commands", f"{script}: npm run {script}" if script != "test" else "test: npm test", f"{ev} scripts.{script}")
-        deps = {**(pj.get("dependencies") or {}), **(pj.get("devDependencies") or {})}
+    # package managers, commands, frameworks from manifests. The Node side is read once, with the stack (nearest package.json first, nested ones fill the gaps)
+    js = _js_stack(root, names, first, prof, prof["notes"])
+    if js:
+        deps = js["_deps"]
         for dep, label in (("react", "React"), ("next", "Next.js"), ("vue", "Vue"), ("svelte", "Svelte"), ("express", "Express"), ("fastify", "Fastify"),
                            ("serverless", "Serverless Framework"), ("aws-cdk-lib", "AWS CDK"), ("vite", "Vite"), ("react-native", "React Native"), ("expo", "Expo"),
-                           ("jest", "Jest"), ("vitest", "Vitest"), ("playwright", "Playwright"), ("@playwright/test", "Playwright")):
+                           ("jest", "Jest"), ("vitest", "Vitest"), ("playwright", "Playwright"), ("@playwright/test", "Playwright"), ("nuxt", "Nuxt"),
+                           ("@sveltejs/kit", "SvelteKit"), ("astro", "Astro"), ("@angular/core", "Angular"), ("@nestjs/core", "NestJS"), ("cypress", "Cypress"),
+                           ("mocha", "Mocha"), ("webpack", "webpack")):
             if dep in deps:
-                add(prof, "frameworks", label, f"{ev} dependency {dep}")
+                add(prof, "frameworks", label, f"{deps[dep][1]} dependency {dep}")
     for req in ("requirements.txt", "pyproject.toml", "Pipfile", "setup.py"):
         if req in names:
             ev = first(req)
@@ -156,6 +527,8 @@ def scan(path):
             for target in ("test", "lint", "build", "check"):
                 if re.search(r"^" + target + r"\s*:", text, re.M):
                     add(prof, "commands", f"{target}: make {target}", f"{first(mk)} target {target}")
+
+    prof["stack"] = stack_of(root, names, first, files, dirs, prof, js)
 
     # CI
     for f in files:
@@ -340,6 +713,11 @@ def save(prof, name):
 
 def say(prof):
     print(f"  {prof['name']}  ({prof['path']})")
+    st = prof.get("stack") or {}
+    if st.get("summary"):
+        print(f"    stack: {st['summary']}" + (f" [{st['app']}]" if st.get("app") not in (None, "unknown") else ""))
+        for f in st.get("facts", []):
+            print(f"      {f['kind']}: {f['name']}{' ' + f['version'] if f['version'] else ''} [{f['evidence']}]")
     for key, title in (("languages", "languages"), ("frameworks", "frameworks"), ("package_managers", "package managers"), ("commands", "commands"), ("ci", "CI"),
                        ("containers", "containers"), ("infrastructure", "infrastructure"), ("deploy_targets", "deploy targets"), ("sensitive", "sensitive areas"),
                        ("secret_files", "secret files (names only)"), ("agent_config", "agent set-up already there")):

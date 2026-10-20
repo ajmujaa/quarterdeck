@@ -23,9 +23,12 @@ import {fileURLToPath} from "node:url";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const arg = (n, d) => { const i = process.argv.indexOf("--" + n); return i < 0 ? d : (process.argv[i + 1] && !process.argv[i + 1].startsWith("--") ? process.argv[i + 1] : true); };
 const QUICK = process.argv.includes("--quick");
-const ALL_VIEWS = ["overview", "brain", "inbox", "missions", "prs", "board", "timeline", "operations", "ledger", "spend", "log", "crew", "fleet", "connections", "documents", "panels", "notes", "showcase", "settings"];
-// a view may name a project to be on: "missions@saltpan-blog" is the Missions page with that Demo project chosen (a project with no GitHub repo, so the repo options and the tickets list are drawn)
-const VIEWS = String(arg("views", QUICK ? "overview,crew,settings,missions@saltpan-blog" : ALL_VIEWS.join(",") + ",missions@saltpan-blog,missions@wayfarer-web")).split(",");
+const ALL_VIEWS = ["overview", "projects", "brain", "inbox", "missions", "prs", "board", "timeline", "operations", "ledger", "spend", "log", "crew", "fleet", "connections", "documents", "panels", "notes", "showcase", "settings"];
+// a view may name a project to be on: "missions@saltpan-blog" is the Missions page with that Demo project chosen (a project with no GitHub repo, so the repo options and the tickets list are drawn);
+// "projects@wayfarer-web" is that project's own page (the Projects overview when no project is named)
+const VIEWS = String(arg("views", QUICK ? "overview,projects,projects@wayfarer-web,crew,settings,missions@saltpan-blog" : ALL_VIEWS.join(",") + ",projects@wayfarer-web,projects@saltpan-blog,missions@saltpan-blog,missions@wayfarer-web")).split(",");
+// the pages that have a project scope, and so show the project select and the scope chip; every other page shows neither (see Navigation, the scope table, in dashboard/UI.md)
+const SCOPED = new Set(["projects", "inbox", "missions", "prs", "board", "ledger", "timeline", "operations", "log", "crew", "fleet", "panels", "documents", "notes"]);
 const THEMES = String(arg("themes", QUICK ? "dark" : "dark,light")).split(",");
 const CALMS = { both: [false, true], off: [false], on: [true] }[String(arg("calm", QUICK ? "off" : "both"))] || [false];
 const SEED = arg("seed-agents", false);      // "one" | "all": no Demo; a made-up registry whose project has 3 agent files, so the Crew page's own-agents section is measured
@@ -287,11 +290,13 @@ for (const theme of THEMES) for (const calm of CALMS) {
     await showView(view);
     await page.evaluate(() => { window.__ctN = 0; });
     for (const x of await page.evaluate(inPage, {contrast: true, ui: true})) add(x.rule, x.where, x.detail, c);
-    {                                                                                  // the project selector: one box on every page, and none in the Brain
+    {                                                                                  // the project selector: one box on every page that has a scope, none on the others (Home, the Brain, Spend, Connections, Settings, Showcase)
       const box = await page.evaluate(() => { const e = document.querySelector("#proj-switch"); if (!e || !e.checkVisibility() || !e.getBoundingClientRect().width) return null; const r = e.getBoundingClientRect(); return [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)].join(","); });
       const key = theme + calm;
-      if (view === "brain") { if (box) add("ui-selector", "#proj-switch", "the Brain has no project selector, but it is showing", c); }
+      const chip = await page.evaluate(() => { const e = document.querySelector("#pscope .scope-chip"); return !!e && e.checkVisibility() && e.getBoundingClientRect().width > 0; });
+      if (!SCOPED.has(view)) { if (box) add("ui-selector", "#proj-switch", `${view} has no project scope, but the project selector is showing`, c); if (chip) add("ui-selector", "#pscope", `${view} has no project scope, but a scope chip is showing`, c); }
       else if (!box) add("ui-selector", "#proj-switch", "the project selector is not visible", c);
+      else if (!chip) add("ui-selector", "#pscope", "the scope chip is not visible on a page that has a scope", c);
       else { selBox[key] = selBox[key] || box; if (selBox[key] !== box) add("ui-selector", "#proj-switch", `at ${box}, first seen at ${selBox[key]}`, c); }
     }
     if (process.env.QD_VERBOSE) console.log(view, theme, calm ? "calm" : "normal", "text checked for contrast:", await page.evaluate(() => window.__ctN));

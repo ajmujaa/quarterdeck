@@ -1732,7 +1732,7 @@ def cycle_nodes(r):
         if key == "human" and st == "awaiting" and not note:
             note = "Read the local branch" if isinstance(r.get("ticket"), int) else "Read the pull request"
         if st == "skipped":
-            note = str(next((x.get("detail") for x in real if x.get("detail")), "") or "")[:90]
+            note = str(next((x.get("detail") for x in real if x.get("detail")), "") or "").split(":")[0][:60]       # the short reason; the whole one is on the stage's own row
         state_of[key] = st
         out.append({"id": key, "label": label, "state": st, "note": note})
     if status in ("stopped-cap", "stopped-ceiling"):
@@ -1757,8 +1757,9 @@ def cycle_mission(r, out):
                mission_ref=f"cycle {r.get('id')}", pipeline=cycle_nodes(r), issue=r.get("issue") if isinstance(r.get("issue"), int) else None,
                state={"running": "running", "awaiting-review": "awaiting"}.get(status, "blocked" if status in CYCLE_BAD else "done"))
     running = next((x for x in stages if x.get("state") == "running"), None)
+    local_done = isinstance(r.get("ticket"), int) and not isinstance(r.get("ticket"), bool) and isinstance(r.get("branch"), str) and r.get("branch")
     body = {"running": f"The cycle is working on {running.get('title') if running else 'its next stage'}.",
-            "awaiting-review": (r.get("final") or "") + f" It cost {_money(cost)} in all.",
+            "awaiting-review": (f"The crew built it on the local branch {r['branch']}, as one commit. Nothing was pushed and no pull request exists." if local_done else (r.get("final") or "")) + f" It cost {_money(cost)} in all.",
             "nothing": r.get("final") or "There was nothing to build.",
             "report-only": r.get("final") or "A report-only cycle: nothing was written."}.get(status, r.get("final") or "No reason was recorded.")
     title = {"running": "Working", "awaiting-review": "Waiting for you", "needs-human": "Needs a person", "failed": "Failed",

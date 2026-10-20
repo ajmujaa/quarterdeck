@@ -7,6 +7,7 @@ whose caller is the feed that needs it. Linux and any Mac without the binary: av
 """
 import binascii
 import os
+import re
 import subprocess
 import sys
 
@@ -53,7 +54,12 @@ MAX_LINE = 4000                          # `security -i` reads about 4,094 bytes
 MAX_CHARS = 1950                         # what that leaves for a value, said in plain words
 
 
+SAFE_NAME = re.compile(r"^[A-Za-z0-9_.@-]{1,100}$")      # KEY or KEY@label: one word, so the account name can never end the line or add a command
+
+
 def _line(key, value):
+    if not SAFE_NAME.match(key):
+        raise KeychainError("that credential name is not one the keychain takes")
     return f"add-generic-password -U -s {SERVICE} -a {key} -X {binascii.hexlify(value.encode()).decode()}\n"
 
 

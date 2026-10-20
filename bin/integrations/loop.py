@@ -5,7 +5,7 @@ import sys
 import time
 from pathlib import Path
 
-from integrations import common
+from integrations import accounts, common
 
 RUN = Path(__file__).resolve().parent / "run.py"
 MIN_MINUTES = 5
@@ -16,25 +16,27 @@ def minimal_env():
 
 
 def due_sources(cfg, last_run, now):
+    """The work items due: "gmail" for the default account, "gmail@work" for another. Each service has one interval, shared by its accounts."""
     out = []
     for name, s in cfg["sources"].items():
-        if not s.get("enabled"):
-            continue
         try:
             every = max(MIN_MINUTES, float(s.get("minutes", 60))) * 60
         except (TypeError, ValueError):
             every = 3600
-        if now - last_run.get(name, 0) >= every:
-            out.append(name)
+        items = ([name] if s.get("enabled") else []) + [accounts.work_item(name, l) for l in accounts.labels_of(s) if s["accounts"][l].get("enabled")]
+        out.extend(i for i in items if now - last_run.get(i, 0) >= every)
     return out
 
 
 def run_subprocess(name):
+    """`name` is a work item: "gmail" or "gmail@work"."""
+    service, _, label = name.partition("@")
+    argv = [sys.executable, str(RUN), service] + (["--account", label] if label else [])
     try:
-        subprocess.run([sys.executable, str(RUN), name], env=minimal_env(), capture_output=True, timeout=180)
+        subprocess.run(argv, env=minimal_env(), capture_output=True, timeout=180)
     except Exception:
-        for snap in common.snapshots_of(name):
-            common.record_status(snap, False, "the refresh did not finish", 0)
+        for snap in common.snapshots_of(service):
+            common.record_status(snap, False, "the refresh did not finish", 0, label or "default")
 
 
 def run_due(cfg, last_run, now, runner=run_subprocess):

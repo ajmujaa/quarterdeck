@@ -12,12 +12,9 @@ Versions already released under Apache-2.0 stay under Apache-2.0. A later change
 
 A team edition is planned (see issue #41, and #40 for compliance reports). It would add things that matter to groups and companies, not to one person on one machine, for example a shared dashboard, sign-in for several people, an audit trail, and compliance reports. Those would be a separate product, with its own terms, that works on top of this open core. Nothing is for sale today.
 
-## The line we are drawing now
+## Our intent
 
-- **Open:** one person, one machine, any number of projects, with everything above.
-- **May be paid:** features for teams and organisations.
-
-We will not move a feature that is already in this repository behind a payment. If that line ever has to change, this page will say so first.
+Our aim is to keep everything for one person on one machine open. Features for teams and organisations may be paid. We will try not to move a feature that is already here behind a payment, and if the plan changes we will say so on this page first.
 
 ## Contributing
 
@@ -27,7 +24,7 @@ If a future change needs a licence other than Apache-2.0 for the open core, cont
 
 ## The name
 
-"Quarterdeck" is the name of this project. It is not a registered trademark, and nothing here claims it is. Using the code does not give you the right to present your product as Quarterdeck or as endorsed by it. A trademark search and any filing will happen before a paid product is sold.
+"Quarterdeck" is the name of this project. The Apache License does not grant rights to use the project's name to present your own product as Quarterdeck or as endorsed by it (section 6 of the licence).
 
 ## Questions
 

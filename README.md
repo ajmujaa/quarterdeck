@@ -31,7 +31,7 @@ bin/qtdeck setup
 bin/qtdeck dashboard      # switch Demo on to look around with invented data
 ```
 
-`bin/qtdeck attach ~/Projects/my-app` registers your first project. The [guide](GUIDE.md) has the rest. `bin/qtdeck check` runs every test.
+`bin/qtdeck attach ~/Projects/my-app` registers your first project. It names the stack it found (for example React 18 with Vite, tests by Vitest), proposes build and lint commands next to the verify command, and says why each duty is on or off; duties that also fit the stack are listed as "also fit this stack" and stay off until you tick them. The [guide](GUIDE.md) has the rest. `bin/qtdeck check` runs every test.
 
 ## Why Quarterdeck
 

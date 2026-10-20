@@ -448,6 +448,23 @@ def context_text(project):
     return s
 
 
+def dedupe(project, did, tracker):
+    """Take out of a draft every ticket whose title is already on the tracker (`tracker`: "#n [STATE] title" lines, as bin/lib.sh existing_issues prints
+    them). Returns one line per ticket taken out: "#n title"."""
+    seen = {}
+    for ln in tracker.splitlines():
+        m = re.match(r"#(\d+) \[[A-Za-z_]+\] (.*)$", ln)
+        if m:
+            seen.setdefault(norm_title(m.group(2)), int(m.group(1)))
+    gone = []
+    for i, t in reversed(_LIST(enumerate(draft_get(project, did)["tickets"]))):
+        n = seen.get(norm_title(t["title"]))
+        if n:
+            gone.append(f"#{n} {t['title']}")
+            draft_drop_ticket(project, did, i)
+    return gone[::-1]
+
+
 # ---- the command line --------------------------------------------------------------------------------------------------------------
 def _fail(msg, code=2):
     print(f"  {msg}", file=sys.stderr)
@@ -487,8 +504,8 @@ def main(argv):
                 print(f"{dr['id']}\t{len(dr['tickets'])}\t{dr['at']}\t{dr['request'][:80]}")
             return 0
         if cmd == "show":
-            js = "--json" in a
-            a = [x for x in a if x != "--json"]
+            js, bare = "--json" in a, "--bare" in a
+            a = [x for x in a if x not in ("--json", "--bare")]
             if len(a) != 2:
                 return _fail("usage: tickets.py show [--json] <project> <id|dN>")
             if DRAFT_OK.fullmatch(a[1]):
@@ -497,7 +514,8 @@ def main(argv):
                     print(json.dumps(dr))
                 else:
                     _show_draft(dr, a[0])
-                    print(f"\n  nothing is filed. To file it: qtdeck ticket file {a[0]} {dr['id']} --apply")
+                    if not bare:
+                        print(f"\n  nothing is filed. To file it: qtdeck ticket file {a[0]} {dr['id']} --apply")
                 return 0
             t = get(a[0], a[1])
             if js:
@@ -565,11 +583,17 @@ def main(argv):
         if cmd == "drop-draft-ticket" and len(a) == 3:
             draft_drop_ticket(a[0], a[1], int(a[2]))
             return 0
-        if cmd == "record-filed" and len(a) == 5:                # <project> <draft> <index> <issue> <url>: a ticket that went to GitHub is remembered, then leaves the draft
-            project, did, idx = a[0], a[1], int(a[2])
-            t = draft_get(project, did)["tickets"][idx]
-            local_add(project, [t], source="github", issues=[(int(a[3]), a[4])])
+        if cmd == "record-filed" and len(a) == 5:                # <project> <draft> <issue> <url> <title>: a ticket that went to GitHub is remembered, then leaves the draft
+            project, did, title = a[0], a[1], a[4]
+            dr = draft_get(project, did)
+            idx = next((i for i, t in enumerate(dr["tickets"]) if t["title"] == title), None)
+            if idx is None:
+                return _fail(f"draft {did} has no ticket titled that")
+            local_add(project, [dr["tickets"][idx]], source="github", issues=[(int(a[2]), a[3])])
             draft_drop_ticket(project, did, idx)
+            return 0
+        if cmd == "dedupe" and len(a) == 2:                      # <project> <draft>; "#n [STATE] title" lines of the tracker on stdin
+            print("\n".join(dedupe(a[0], a[1], sys.stdin.read(400000))))
             return 0
         if cmd == "set" and len(a) >= 3:                         # <project> <n> field=value ... (the shell's way to update; requirements come on stdin: field "requirements=-")
             fields = {}

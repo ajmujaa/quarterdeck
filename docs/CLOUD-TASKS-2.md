@@ -131,3 +131,16 @@ Change, as part of section 6:
 4. Fleet stays a page, but its content is reachable from Home and from each project, not hidden behind Agents.
 5. A header line shows when the live data was last updated and says plainly when the hook is not installed.
 Test with fixture events (a session working, one idle, one finished; two projects; a worktree with a draft PR).
+
+## 6c. The project Crew page is a wall of "not enabled" (owner screenshot, 2026-10-20)
+`Agents > Crew` for one project lists all 21 duties; 19 say "Not enabled for this project. How to enable it" and the page is
+about 2,000 px tall. The header says "RUNNING NOW 0" while a Claude Code session is working in that very project (it is not
+a Quarterdeck duty, so it is not counted). Change:
+1. Enabled agents first and full size; the rest folded in one "Available (N)" list, one line each (name, what it does) with an
+   **Enable** button that works from the page (through the existing guarded config path, with the reason shown), not a link
+   to instructions.
+2. "Running now" counts live Claude Code sessions from the fleet hook as well as duties, named differently (session vs duty),
+   and links to the project's live work (section 6b).
+3. "This project's own agents" and "Which jobs are covered": show only when the project has its own agents; otherwise one
+   sentence.
+4. The scan (section 1) decides which agents are suggested; the page offers them first.

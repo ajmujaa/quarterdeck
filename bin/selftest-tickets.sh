@@ -360,4 +360,110 @@ OUT=$($QD repo create weird.git --yes 2>&1 </dev/null); RC=$?
 ck "a project name GitHub cannot use as a repository name is refused (checked with the same rule as qtdeck repo)" '[ "$RC" = 2 ] && grep -q "cannot be a GitHub repository name" <<<"$OUT" && nocreate'
 ck "no account is ever created and no password touched: the only gh calls the program makes are auth status, api user and repo create" '[ "$(grep -o "_gh(\"[a-z]*\", \"[a-z]*\"" "$REAL/bin/repo.py" | sort -u | tr "\n" " ")" = "_gh(\"api\", \"user\" _gh(\"auth\", \"status\" _gh(\"repo\", \"create\" " ]'
 
+# ---- 6. a local ticket through the crew --------------------------------------------------------------------------------------------------------
+# A real throwaway git repository with a bare origin; the model is the fake provider, and a hook plays the builder that edits the worktree.
+st_file app.py $'def counter_reset(n):\n    return n\n'; st_commit "base"
+git -C "$T/work" checkout -q main
+ORIGIN_BEFORE=$(git -C "$T/origin.git" for-each-ref --format='%(refname) %(objectname)' | sort)
+VERIFY='PYTHONPATH=. python3 -c "import app"'
+st_registry '["planner","purser","panel","shipwright"]' '{"cycle":true,"repo":"","verify":"PYTHONPATH=. python3 -c \"import app\"","forbidden_paths":["secrets/"]}'
+printf '%s' "$DEC" > "$T/decoy"
+cat > "$T/claude-hook" <<HOOK
+#!/bin/bash
+case "\$1" in
+  *"Build this one ticket"*)
+    case "\$1" in
+      *HOOK-SECRETFILE*) mkdir -p secrets; echo x > secrets/k.txt ;;
+      *HOOK-CRED*)       printf 'TOKEN = "%s"\n' "\$(cat "$T/decoy")" >> app.py ;;
+      *HOOK-BREAK*)      printf 'def (\n' >> app.py ;;
+      *HOOK-NOTHING*)    : ;;
+      *)                 sed 's/return n/return 0  # TICKET-MARKER/' app.py > app.py.t && mv app.py.t app.py ;;
+    esac ;;
+esac
+HOOK
+chmod +x "$T/claude-hook"
+st_noreplies
+st_reply 'REQUIREMENTS_JSON' 'REQUIREMENTS_JSON: {"summary":"Let the counter be reset","requirements":[{"what":"Reset sets the counter to zero","accept":"Call counter_reset(5) and check the result equals 0"}],"out_of_scope":["styling"]}
+RESULT: READY 1 requirement(s)'
+st_reply 'RULING_JSON' 'HEADLINE: one change
+RULING_JSON: [{"kind":"change","tier":"routine","area":"app","severity":"major","title":"Make counter_reset return zero","claim":"it returns its argument","where":"app.py","why":"the ticket asks for zero","action":"return 0","support":["shipwright"],"overruled":[],"note":""}]
+RESULT: RULED 1'
+st_reply 'STANCES_JSON' 'STANCES_JSON: [{"id":"shipwright-1","stance":"agree","note":"n"}]
+RESULT: STANCES 1'
+st_reply 'Build this one ticket' 'RESULT: FIXED the counter resets to zero'
+st_reply default 'ITEMS_JSON: [{"area":"app","severity":"major","title":"Make counter_reset return zero","claim":"it returns its argument","where":"app.py","why":"the ticket asks for zero","action":"return 0"}]
+RESULT: ITEMS 1'
+reset_tp
+python3 -c "
+import sys; sys.path.insert(0, '$T/bin'); import tickets as K
+K.local_add('tp', [
+ {'title': 'Add a Reset button', 'body': 'ZEBRA-TICKET-9 Add a reset function that sets the counter back to zero.', 'acceptance': ['Call counter_reset(5) and the result is 0']},
+ {'title': 'Touch secrets HOOK-SECRETFILE', 'body': 'b', 'acceptance': ['a']},
+ {'title': 'Leak a token HOOK-CRED', 'body': 'b', 'acceptance': ['a']},
+ {'title': 'Break the build HOOK-BREAK', 'body': 'b', 'acceptance': ['a']},
+ {'title': 'Change nothing HOOK-NOTHING', 'body': 'b', 'acceptance': ['a']}])
+K.local_add('tp', [{'title': 'Filed on GitHub', 'body': 'b', 'acceptance': ['a']}], source='github', issues=[(77, 'https://github.com/o/r/issues/77')])"
+rm -f "$T/gh-calls" "$T/claude-calls"
+nogh() { [ ! -s "$T/gh-calls" ]; }
+refs_now() { git -C "$T/origin.git" for-each-ref --format='%(refname) %(objectname)' | sort; }
+
+st_duty purser --ticket 1
+ck "purser --ticket 1, report only: prints the requirements, writes nothing into the ticket, and calls no gh" '[ "$RC" = 0 ] && grep -q "Reset sets the counter to zero" <<<"$OUT" && [ "$(store ".tickets[0].requirements")" = "" ] && nogh && [ "$(last_verdict)" = DRY-RUN ]'
+ck "  the ticket text reaches the prompt only inside an untrusted block" 'jq -r .prompt "$T/claude-calls" | awk "/^BEGIN UNTRUSTED ticket text/{f=1} f&&/ZEBRA-TICKET-9/{ok=1} /^END UNTRUSTED ticket text/{f=0} END{exit !ok}" && [ "$(jq -r .prompt "$T/claude-calls" | grep -c ZEBRA-TICKET-9)" = 1 ]'
+st_duty purser --ticket 1 --apply
+ck "purser --ticket 1 --apply: the requirements go into the ticket's own record, no card moves, still no gh" '[ "$RC" = 0 ] && store ".tickets[0].requirements" | grep -q "Reset sets the counter to zero" && ! store ".tickets[0].requirements" | grep -q "quarterdeck:requirements" && nogh && [ "$(last_verdict)" = READY ] && [ "$(store ".tickets[0].status")" = open ]'
+st_duty purser --ticket 6
+ck "--ticket on a ticket that is a GitHub issue says so and exits non-zero" '[ "$RC" != 0 ] && grep -q "this ticket is GitHub issue #77: use --issue 77" <<<"$OUT" && nogh'
+st_duty purser --ticket 1 --issue 3
+ck "--ticket and --issue together are refused" '[ "$RC" != 0 ] && grep -q "two different jobs" <<<"$OUT"'
+st_duty purser --ticket 99
+ck "a ticket that does not exist is a plain error" '[ "$RC" != 0 ] && grep -q "there is no local ticket 99" <<<"$OUT"'
+st_duty purser --ticket x
+ck "--ticket takes digits only" '[ "$RC" != 0 ] && grep -q "takes a number" <<<"$OUT"'
+
+: > "$T/claude-calls"
+st_duty panel --panel dev --ticket 1 --rounds 1
+PLANF="$T/workspace/tp-plan-ticket1.md"
+ck "the dev panel plans a local ticket: the plan file is named for the ticket, the ruling is recorded, no gh" '[ "$RC" = 0 ] && [ -s "$PLANF" ] && grep -q "implementation plan for ticket #1" "$PLANF" && grep -q "RULED" <<<"$(last_verdict)" && grep -q "ticket #1" <<<"$(last_detail)" && nogh'
+ck "  its seats read the ticket (with the purser requirements) only inside an untrusted block, and the next step names --ticket" 'grep -q "shipwright --ticket 1 --plan" <<<"$OUT" && [ "$(jq -r .prompt "$T/claude-calls" | grep -c "BEGIN UNTRUSTED ticket text")" -ge 1 ] && [ "$(jq -r .prompt "$T/claude-calls" | grep -c "Reset sets the counter to zero")" -ge 1 ]'
+st_duty panel --panel dev --ticket 6 --rounds 1
+ck "  a ticket that is a GitHub issue is sent to --issue here too" '[ "$RC" != 0 ] && grep -q "use --issue 77" <<<"$OUT"'
+st_duty panel --panel design --ticket 1
+ck "  --ticket belongs to the dev panel only" '[ "$RC" != 0 ] && grep -q "dev panel" <<<"$OUT"'
+
+st_duty shipwright --ticket 1 --plan "$PLANF"
+ck "shipwright --ticket 1, report only: checks run, nothing is committed, no branch holds a build, no gh" '[ "$RC" = 0 ] && grep -q "report only" <<<"$OUT" && [ "$(last_verdict)" = DRY-RUN ] && [ "$(git -C "$T/work" rev-list --count main..ticket/1-add-a-reset-button 2>/dev/null || echo 0)" = 0 ] && nogh && [ "$(refs_now)" = "$ORIGIN_BEFORE" ]'
+st_duty shipwright --ticket 1 --plan "$PLANF" --apply
+BR=ticket/1-add-a-reset-button
+ck "shipwright --ticket 1 --apply: one commit on the local branch ticket/1-<slug> in the project's own checkout" '[ "$RC" = 0 ] && [ "$(git -C "$T/work" rev-list --count main..$BR)" = 1 ] && git -C "$T/work" show $BR:app.py | grep -q TICKET-MARKER && [ "$(git -C "$T/work" log -1 --format=%s $BR)" = "build: Add a Reset button" ]'
+ck "  nothing is pushed: the bare origin has the same refs, and no branch of this name" '[ "$(refs_now)" = "$ORIGIN_BEFORE" ] && [ -z "$(git -C "$T/origin.git" branch --list "ticket/*")" ]'
+ck "  the gh stand-in recorded no call at all (no issue, no pr, no api, no auth)" 'nogh'
+ck "  the verify command ran before and after and its result is on the record, with the verdict BRANCH" '[ "$(last_verdict)" = BRANCH ] && grep -q "verify exit 0" <<<"$(last_detail)" && grep -q "ticket #1" <<<"$(last_detail)" && grep -q "baselining local checks" <<<"$OUT" && grep -q "re-running local checks" <<<"$OUT"'
+ck "  the ticket is in review, with its branch" '[ "$(store ".tickets[0].status")" = review ] && [ "$(store ".tickets[0].branch")" = $BR ]'
+ck "  it prints how to review, keep and discard it, and that nothing was pushed" 'grep -q "diff .*\.\.\.$BR" <<<"$OUT" && grep -q "branch -D $BR" <<<"$OUT" && grep -q "nothing was pushed" <<<"$OUT" && grep -q "no pull request was opened" <<<"$OUT"'
+ck "  the checkout of the project is left alone: still on main, clean" '[ "$(git -C "$T/work" rev-parse --abbrev-ref HEAD)" = main ] && [ -z "$(git -C "$T/work" status --porcelain)" ] && [ ! -e "$T/workspace/wt-tp-t1" ]'
+st_duty shipwright --ticket 1 --plan "$PLANF" --apply
+ck "building the same ticket again refuses to reset a branch that holds a build, and says how to discard it" '[ "$RC" != 0 ] && grep -q "already holds an earlier build" <<<"$OUT" && grep -q "branch -D $BR" <<<"$OUT" && [ "$(git -C "$T/work" rev-list --count main..$BR)" = 1 ]'
+st_duty shipwright --ticket 6 --apply
+ck "shipwright --ticket on a GitHub ticket is sent to --issue" '[ "$RC" != 0 ] && grep -q "use --issue 77" <<<"$OUT" && nogh'
+st_duty shipwright --ticket 2 --apply
+ck "the same refusals hold: a change to a forbidden path is REFUSED, nothing is committed, no branch holds a build" '[ "$RC" != 0 ] && [ "$(last_verdict)" = REFUSED ] && grep -q "forbidden path" <<<"$OUT" && [ "$(git -C "$T/work" rev-list --count main..ticket/2-touch-secrets-hook-secretfile 2>/dev/null || echo 0)" = 0 ] && [ "$(store ".tickets[1].status")" = open ]'
+st_duty shipwright --ticket 3 --apply
+ck "  a credential shape in the added lines stops the commit (the push-time scan), nothing is committed" '[ "$RC" != 0 ] && [ "$(git -C "$T/work" rev-list --count main..ticket/3-leak-a-token-hook-cred 2>/dev/null || echo 0)" = 0 ] && [ "$(store ".tickets[2].status")" = open ] && ! grep -q "$DEC" <<<"$OUT"'
+st_duty shipwright --ticket 4 --apply
+ck "  a change that makes the verify command worse is REFUSED before any commit" '[ "$RC" != 0 ] && [ "$(last_verdict)" = REFUSED ] && grep -q "local check" <<<"$OUT" && [ "$(git -C "$T/work" rev-list --count main..ticket/4-break-the-build-hook-break 2>/dev/null || echo 0)" = 0 ] && [ "$(store ".tickets[3].status")" = open ]'
+st_duty shipwright --ticket 5 --apply
+ck "  a build that changes nothing is an error, not a commit" '[ "$RC" != 0 ] && [ "$(git -C "$T/work" rev-list --count main..ticket/5-change-nothing-hook-nothing 2>/dev/null || echo 0)" = 0 ] && nogh'
+ck "  and none of them touched origin or gh" '[ "$(refs_now)" = "$ORIGIN_BEFORE" ] && nogh'
+OUT=$($QD run tp shipwright --issue 3 2>&1); RC=$?
+ck "qtdeck run: a project with no repo still refuses the duties that need GitHub" '[ "$RC" != 0 ] && grep -qF "tp has no GitHub repo" <<<"$OUT"'
+OUT=$($QD run tp shipwright --ticket 5 2>&1); RC=$?
+ck "  but lets the shipwright through with --ticket" '! grep -qF "tp has no GitHub repo" <<<"$OUT"'
+OUT=$($QD run tp purser --ticket 1 2>&1); RC=$?
+ck "  and the purser with --ticket" '[ "$RC" = 0 ] && ! grep -qF "tp has no GitHub repo" <<<"$OUT"'
+OUT=$($QD run tp panel --panel dev --ticket 1 --rounds 1 2>&1); RC=$?
+ck "  and the dev panel with --ticket, but not another panel" '[ "$RC" = 0 ] && [ "$($QD run tp panel --panel design 2>&1 | grep -cF "tp has no GitHub repo")" = 1 ]'
+OUT=$($QD run tp planner --request "build a thing" 2>&1); RC=$?
+ck "  and the planner with --request (but not a bare planner run)" '! grep -qF "tp has no GitHub repo" <<<"$OUT" && [ "$($QD run tp planner 2>&1 | grep -cF "tp has no GitHub repo")" = 1 ]'
+
 st_done

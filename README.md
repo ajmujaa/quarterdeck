@@ -1,5 +1,8 @@
 <p align="center">
-  <img src="images/logo.png" width="160" alt="Quarterdeck">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="images/logo-dark.png">
+    <img src="images/logo.png" width="160" alt="Quarterdeck">
+  </picture>
 </p>
 
 <h1 align="center">Quarterdeck</h1>

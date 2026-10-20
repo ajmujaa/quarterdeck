@@ -70,7 +70,7 @@ setBasePath("/assets/vendor/shoelace");
   <div class="page">
     <sl-alert id="lost" variant="warning" role="status" aria-live="polite"><sl-icon slot="icon" name="exclamation-triangle"></sl-icon><span id="lost-text"></span></sl-alert>
     <div class="phead">
-      <div><div class="kicker" id="pkicker"></div><h1 id="ptitle">Quarterdeck</h1><p id="psub"></p></div>
+      <div><div class="krow"><div class="kicker" id="pkicker"></div><span id="pscope"></span></div><div class="pproj" id="pproj" hidden></div><h1 id="ptitle">Quarterdeck</h1><p id="psub"></p></div>
       <div class="acts" id="pacts"></div>
     </div>
     <div class="ptabs" id="ptabs"></div>
@@ -186,6 +186,7 @@ let view = localStorage.getItem("quarterdeck.view") || "overview";
 // places that read a project name never see it. "" means a project, or all of them.
 let atPlace = localStorage.getItem("quarterdeck.place") || "";
 if(!EXT.places.some(p => p.id === atPlace)) atPlace = "";
+let scopeAddon = "";     // the add-on scope: "" or an installed add-on's id (Needs you then shows only that add-on's items). Kept apart from `sel`, which is only ever a project.
 
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 // A link or window.open target that came from data (a PR address, a provider page, a board address) is http(s) or mailto, or nothing: never a script, data or other scheme.
@@ -467,13 +468,14 @@ VIEWS.forEach(v => { if(EXT.sub[v.id]) v.sub = EXT.sub[v.id]; });
 // The Brain is a place of its own, not a page of a project: it takes the whole window, and leaving it returns to where you were.
 let brainReturn = null, brainHelmOpen = false, brainMode = "map";      // brainMode: the Brain workspace has two modes, the map and My rhythm; one toolbar serves both
 const brainImm = () => view === "brain" && !atPlace;
-function rememberBrainReturn(v){ if(v === "brain" && !brainImm() && !brainReturn) brainReturn = {view, place: atPlace}; }
+function rememberBrainReturn(v){ if(v === "brain" && !brainImm() && !brainReturn){ brainReturn = {view, place: atPlace}; brainReturn.hash = routeApplied; } }
 function leaveBrain(){
   const r = brainReturn; brainReturn = null;
+  if(r && routeBack(r.hash)) return;           // the Brain was opened from this tab's own history: leaving it is one step back, not a new entry
   if(r && r.place) selectPlace(r.place, r.view);
   else dockGo(r && r.view && r.view !== "brain" ? r.view : "overview");
 }
-function go(v){ rememberBrainReturn(v); if(v !== "brain") brainReturn = null; if(v !== "log") logFrom = null; view = v; localStorage.setItem("quarterdeck.view", v); { const g = groupOf(v); if(g) localStorage.setItem("quarterdeck.tab." + g.id, v); } filter = ""; $("#q").value = ""; closeMobileMenu(); render(); }
+function go(v){ rememberBrainReturn(v); if(v !== "brain") brainReturn = null; if(v !== "log") logFrom = null; if(v !== "inbox") scopeAddon = ""; view = v; localStorage.setItem("quarterdeck.view", v); { const g = groupOf(v); if(g) localStorage.setItem("quarterdeck.tab." + g.id, v); } filter = ""; $("#q").value = ""; closeMobileMenu(); routeTouch(); render(); }
 function dockGo(v){ rememberBrainReturn(v); atPlace = ""; localStorage.setItem("quarterdeck.place", ""); go(v); }
 function toggleMobileMenu(){ const d = $("#more"); if(d.open) d.hide(); else { renderMore(); d.show(); } }
 function closeMobileMenu(){ const d = $("#more"); if(d && d.open) d.hide(); }
@@ -482,13 +484,134 @@ function selectPlace(id, v){
 }
 function selectProject(p){
   closeMobileMenu();
-  atPlace = ""; localStorage.setItem("quarterdeck.place", "");
+  atPlace = ""; localStorage.setItem("quarterdeck.place", ""); scopeAddon = "";
   sel = p; localStorage.setItem("quarterdeck.project", p);
   curLog = null; board = null; boardFor = null; prs = null; prsFor = null;
   // a project whose agents live in its own repository has no Quarterdeck duties to show: send the page to its Fleet
   if(fleetProjects.has(p)){ view = "fleet"; localStorage.setItem("quarterdeck.view", "fleet"); fleetAt = 0; loadFleet(); }
-  render();
+  routeTouch(); render();
 }
+// An add-on is a scope too, chosen in the same select as the projects. One with a place of its own opens that place; one without opens Needs you, filtered to it.
+function selectAddon(id){
+  const a = addonList().find(x => x.id === id);
+  if(!a) return;
+  closeMobileMenu();
+  sel = ""; localStorage.setItem("quarterdeck.project", ""); curLog = null; board = null; boardFor = null; prs = null; prsFor = null;
+  if(a.place && isPlace(a.place)){ scopeAddon = ""; selectPlace(a.place); }
+  else{ atPlace = ""; localStorage.setItem("quarterdeck.place", ""); scopeAddon = id; go("inbox"); }
+}
+/* ---- the address: the page, the project scope and the open mission live in the URL hash (assets/route.js, a pure module) ----
+   Only what the owner does pushes a history entry: go(), dockGo(), selectPlace(), selectProject(), selectAddon(), opening or closing a mission, the Brain's
+   Map | Rhythm switch and its project choice all call routeTouch(), which waits for the end of the current task (so a click that sets three variables is one
+   entry) and pushes only when the address differs. The poll and every re-render never touch the address. popstate and hashchange (Back, Forward, a typed or
+   pasted address) call applyRoute() and render() and push nothing. On load the address wins; localStorage is only the fallback for a bare address.
+   The address is untrusted input: parseHash() checks it against routeKnown() and gives Home for anything else, and nothing from it is written as HTML. */
+let routeMod = null, routeReady = false, routeApplying = false, routeQueued = false, routeApplied = "", routeIdx = 0;
+const routeLog = [];                                       // history index -> the address it holds (this tab only), so Esc in the Brain can step back to where it started
+const routeLoad = import("/assets/route.js").then(m => (routeMod = m)).catch(() => null);
+function addonList(){                                      // the installed add-ons: those the server names (S.addons) and the places an add-on script registered (EXT.places)
+  const out = new Map();
+  for(const a of (S && Array.isArray(S.addons) ? S.addons : [])) if(a && typeof a.id === "string" && a.id) out.set(a.id, {id: a.id, label: String(a.label || a.id), place: typeof a.place === "string" ? a.place : ""});
+  for(const pl of EXT.places){
+    const a = [...out.values()].find(x => x.place === pl.id || x.id === pl.id);
+    if(a){ a.place = pl.id; a.label = a.label || pl.label || pl.id; }
+    else out.set(pl.id, {id: pl.id, label: String(pl.label || pl.id), place: pl.id});
+  }
+  return [...out.values()];
+}
+function routeKnown(){
+  const places = {};
+  for(const pl of EXT.places) places[pl.id] = [...new Set([pl.id, ...VIEWS.filter(v => v.place === pl.id && !v.hidden).map(v => v.id)])];
+  return {groups: NAV_GROUPS.map(g => ({id: g.id, views: g.views})), projects: ((S && S.projects) || []).map(p => p.name), addons: addonList().map(a => a.id), places, brainModes: ["map", "rhythm"]};
+}
+const logRouteId = () => { if(!curLog) return ""; const [duty, proj] = splitLog(curLog); return proj + "~" + duty; };
+function routeState(){
+  const g = groupOf(view), projects = ((S && S.projects) || []).map(p => p.name);
+  return {group: g ? g.id : "", view, place: atPlace, id: view === "mission" ? missionId : view === "log" ? logRouteId() : "",
+          project: !atPlace && projects.includes(sel) ? sel : "", addon: !atPlace && view === "inbox" ? scopeAddon : "", brain: view === "brain" && !atPlace ? brainMode : ""};
+}
+const routeHash = () => routeMod ? routeMod.buildHash(routeState()) : "";
+// Make the address say what the page now shows: a new entry, or (replace, or the same address) the current one rewritten.
+function pushRoute(replace = false){
+  if(!routeMod) return;
+  const h = routeHash(), url = location.pathname + location.search + h;
+  const at = history.state && Number.isInteger(history.state.qd) ? history.state.qd : routeIdx;
+  try{
+    if(replace || location.hash === h){ history.replaceState({qd: at}, "", url); routeLog[at] = h; routeIdx = at; }
+    else{ history.pushState({qd: at + 1}, "", url); routeLog[at + 1] = h; routeIdx = at + 1; }
+  }catch(e){ /* a browser that refuses: the page works, the address just does not follow */ }
+  routeApplied = h;
+}
+function routeTouch(){
+  if(!routeMod || !routeReady || routeApplying || routeQueued) return;
+  routeQueued = true;
+  queueMicrotask(() => { routeQueued = false; if(routeHash() !== routeApplied || location.hash !== routeApplied) pushRoute(false); });
+}
+// Set the page to a parsed route. Pushes nothing. `draw` false leaves the render to the caller (the first load).
+function applyRoute(r, draw = true){
+  routeApplying = true;
+  try{
+    scopeAddon = ""; closeMobileMenu();
+    if(r.group === "addon"){ atPlace = r.addon; view = r.view; }
+    else{
+      atPlace = ""; view = r.view; scopeAddon = r.addon || "";
+      if(r.project !== sel){ sel = r.project; curLog = null; board = null; boardFor = null; prs = null; prsFor = null; }
+      if(view === "mission"){ if(r.id !== missionId){ missionLens = "summary"; delete missionCache[r.id]; } missionId = r.id; }
+      if(view === "log" && r.id){ const [proj, duty] = r.id.split("~"), name = proj ? duty + "-" + proj : duty; if(((S && S.logs) || []).includes(name)) curLog = name; }
+      if(view === "brain") brainMode = r.brain === "rhythm" && S && S.demo && S.demo.on ? "rhythm" : "map";
+    }
+    if(view !== "brain") brainReturn = null;
+    if(view !== "log") logFrom = null;
+    filter = ""; $("#q").value = "";
+    try{
+      localStorage.setItem("quarterdeck.view", view); localStorage.setItem("quarterdeck.place", atPlace); localStorage.setItem("quarterdeck.project", sel);
+      const g = groupOf(view); if(g && view !== "mission") localStorage.setItem("quarterdeck.tab." + g.id, view);
+      if(view === "mission" && missionId) localStorage.setItem("quarterdeck.mission", missionId);
+    }catch(e){}
+    routeApplied = routeHash();
+  } finally { routeApplying = false; }
+  if(draw){
+    render();
+    if(view === "brain" && !atPlace){ paintFocus(true); rhythmSync(); if(brainMode === "map") window.dispatchEvent(new Event("resize")); }
+  }
+}
+// The first route of this tab, once the first state is in: the address wins; a bare address falls back to what this browser remembers.
+function initRoute(){
+  if(routeReady || !routeMod) return;
+  const h = location.hash;
+  if(h && h !== "#" && !routeMod.isPairHash(h)) applyRoute(routeMod.parseHash(h, routeKnown()), false);
+  else{
+    if(!(S.projects || []).some(p => p.name === sel)) sel = "";
+    if(!VIEWS.some(x => x.id === view && (x.place || "") === atPlace)) view = atPlace || "overview";
+    routeApplied = routeHash();
+  }
+  routeReady = true;
+  pushRoute(true);                                         // the first route replaces the entry the tab opened with (and the pairing link's, already gone): Back never lands on a bare page
+}
+// Back, Forward, or an address typed or pasted into this tab.
+function routeNav(){
+  if(!routeMod || !routeReady || routeApplying) return;
+  const h = location.hash;
+  if(routeMod.isPairHash(h) || h === routeApplied) return;     // a pairing link reloads the page (below); an address already shown is left alone
+  const r = routeMod.parseHash(h, routeKnown());
+  applyRoute(r);
+  if(!r.ok || routeHash() !== h) pushRoute(true);              // an address that was not ours is rewritten as the page it opened (Home), never kept
+}
+// Esc in the Brain: when the page the owner came from is earlier in this tab's history, go back to it in one step.
+function routeBack(hash){
+  if(!routeMod || !routeReady || !hash || !history.state || !Number.isInteger(history.state.qd)) return false;
+  const at = history.state.qd;
+  for(let i = at - 1; i >= 0 && i >= at - 8; i--){
+    if(routeLog[i] !== hash) continue;
+    applyRoute(routeMod.parseHash(hash, routeKnown()));     // drawn now; the popstate that follows finds the address already shown and does nothing
+    history.go(i - at);
+    return true;
+  }
+  return false;
+}
+window.addEventListener("popstate", routeNav);
+window.addEventListener("hashchange", routeNav);
+
 // The Brain view keeps a focus timer in this browser; the rail just shows it, wherever you are.
 function focusNow(){
   try{
@@ -711,16 +834,25 @@ function planPage(m){
     ${(p.left_out || []).length ? card(null, p.left_out.map(l => `<p><b>#${l.issue} ${esc(l.title)}.</b> ${esc(l.reason)}</p>`).join(""), {kicker: "Left out"}) : ""}</div>`;
 }
 document.addEventListener("sl-tab-show", e => { const t = e.target.closest && e.target.closest("#ptabs"); if(t && !t._sync && e.detail.name && e.detail.name !== view) go(e.detail.name); });
+// What the project select shows: a project, an add-on ("__addon:<id>", also while that add-on's own place is open), or All projects ("_").
+const ADDON_VALUE = "__addon:";
+function scopeValue(){
+  const a = atPlace ? addonList().find(x => x.place === atPlace) : scopeAddon ? addonList().find(x => x.id === scopeAddon) : null;
+  return a ? ADDON_VALUE + a.id : S && S.projects.some(p => p.name === sel) && !atPlace ? sel : "_";
+}
 function projSwitch(v){
-  v = v === "_" ? "" : v;
-  if(v === "__add"){ $("#proj-switch").value = sel || "_"; openAttach(); return; }
-  if(v === sel) return;
-  selectProject(v);
+  if(v === "__add"){ $("#proj-switch").value = scopeValue(); openAttach(); return; }
+  if(v === scopeValue()) return;
+  if(v.startsWith(ADDON_VALUE)){ selectAddon(v.slice(ADDON_VALUE.length)); return; }
+  selectProject(v === "_" ? "" : v);
 }
 function renderProjSwitch(){
   const el = $("#proj-switch"); if(!el || !S) return;
-  setHtml(el, `<sl-option value="_">All projects</sl-option>` + S.projects.map(p => `<sl-option value="${esc(p.name)}">${esc(p.name)}</sl-option>`).join("") + `<sl-option value="__add">Add a project…</sl-option>`);
-  const want = S.projects.some(p => p.name === sel) ? sel : "_";
+  const addons = addonList();
+  setHtml(el, `<sl-option value="_">All projects</sl-option>` + S.projects.map(p => `<sl-option value="${esc(p.name)}">${esc(p.name)}</sl-option>`).join("")
+    + (addons.length ? `<sl-divider></sl-divider><small class="sw-grp">Add-ons</small>` + addons.map(a => `<sl-option value="${ADDON_VALUE}${esc(a.id)}">${esc(a.label)}</sl-option>`).join("") : "")
+    + `<sl-divider></sl-divider><sl-option value="__add">Add a project…</sl-option>`);
+  const want = scopeValue();
   if(el.value !== want) el.value = want;
   // the options are upgraded after the markup lands: set the value again once the select has rendered them, so it never shows blank
   Promise.all([customElements.whenDefined("sl-select"), customElements.whenDefined("sl-option")]).then(() => (el.updateComplete || Promise.resolve()).then(() => {
@@ -957,12 +1089,20 @@ function fixCard(r){
 // S.inbox, whatever its history, and an acknowledged item is marked as such
 // rather than silently dropped from the record. This just adapts that shape
 // for callers built against the old client-computed one.
+// An item from an add-on carries its place (or its name) and a source other than "local". Its label is "Add-on: <name>", from the add-on's registered name.
+function addonOfItem(x){
+  const id = String(x.addon || x.place || (x.source && x.source !== "local" ? x.source : "") || "");
+  if(!id) return null;
+  const a = addonList().find(y => y.id === id || (y.place && y.place === id));
+  return {id: a ? a.id : id, label: a ? a.label : id.charAt(0).toUpperCase() + id.slice(1), installed: !!a};
+}
+const addonPill = x => x.addon ? pill("", "Add-on: " + x.addon.label) : "";
 function obsAttention(scoped = true){
-  return (S.inbox || []).filter(x => !x.acknowledged && (x.place || !scoped || mine(x))).map(x => ({
+  return (S.inbox || []).filter(x => !x.acknowledged).map(x => ({
     id:x.id, source: x.label || (x.project || "Local") + " · " + (x.duty || "run"),
     text:x.text, view: x.place || "ledger", kind:x.severity, at:x.at, stale:x.stale,
-    blocker:x.blocker, project:x.project, duty:x.duty,
-  }));
+    blocker:x.blocker, project:x.project, duty:x.duty, addon: addonOfItem(x), mine: !!(x.place || x.addon) || mine(x),
+  })).filter(x => scoped && scopeAddon ? !!x.addon && x.addon.id === scopeAddon : (!scoped || x.mine));
 }
 async function ackInbox(id, text){
   if(!await confirmDlg("Acknowledge this? It leaves the list for good and nothing here brings it back.")) return;
@@ -1066,18 +1206,36 @@ function homeHeadline(f, n){
     : [f.running && f.state !== "running" ? f.running + " running" : "", f.state !== "blocked" && f.att.length ? f.att.length + " blocked" : "", f.state !== "awaiting" && f.waiting.length ? f.waiting.length + " waiting for you" : ""].filter(Boolean).join(" · ") || "Nothing is running and nothing is waiting.";
   return {text, sub, state: noProjects ? "idle" : f.state, noProjects};
 }
+// Home's Mission trajectory: one self-contained card (it reads recentMissions(), MSTATE and the kit helpers and nothing else on this page), so a later
+// page can move it whole. Open missions come first and large, each naming its project and what is next; finished ones are one small collapsed line.
+let trajOpen = false;
+function trajToggle(){ trajOpen = !trajOpen; render(); }
 function trajectoryCard(f){
-  const rec = recentMissions().slice(0, 5);
-  const rows = rec.map(x => `<button class="rowcard ${x.state}" data-m="${esc(x.id)}" ${act("openMissionPage", x.id)}>
+  const all = recentMissions(40), open = all.filter(x => x.state !== "done"), fin = all.filter(x => x.state === "done");
+  const rank = {blocked: 0, awaiting: 1, running: 2};
+  open.sort((a, b) => (rank[a.state] ?? 3) - (rank[b.state] ?? 3) || b.when.localeCompare(a.when));
+  const next = x => {                                       // what is next, from the kind and the state; nothing here is counted or guessed
+    const kind = x.id.split(":")[0];
+    if(x.state === "blocked") return "Open it to see why it stopped.";
+    if(x.state === "running") return "Nothing to do yet. It will say when it needs you.";
+    if(x.state === "awaiting") return kind === "brief" ? "Read the brief, then approve it or ask for changes." : kind === "plan" ? "Read the plan and approve it if it looks right."
+      : /ticket #/.test(x.title) ? "Review the local branch and merge it yourself." : kind === "panel" ? "Answer the open decision." : "Review the pull request and merge it yourself.";
+    return "";
+  };
+  const row = x => `<button class="rowcard ${x.state}" data-m="${esc(x.id)}" ${act("openMissionPage", x.id)}>
       <span class="rowcard-top"><b>${esc(x.title)}</b>${pill(x.state, MSTATE[x.state][0])}</span>
-      <span class="meta">${esc(x.project || "")}${x.when ? " · " + esc(ago(x.when)) : ""}</span></button>`);
-  const body = rows.length ? `<div class="list">${rows.join("")}</div>`
-    : emptyState({inline: true, title: "Nothing is running.", body: "A fix, a panel or a run appears here once one has started."});
-  return card(null, body, {kicker: "Mission trajectory", count: f.running ? f.running + " running" : "", actions: `<button class="mlink link" ${act("dockGo", "missions")}>All missions</button>`, cls: "traj", label: "Mission trajectory"});
+      <span class="traj-proj">${x.project ? "in <b>" + esc(x.project) + "</b>" : "no project"}${x.when ? " · " + esc(ago(x.when)) : ""}</span>
+      <span class="traj-next">Next: ${esc(next(x))}</span></button>`;
+  const compact = x => `<li><button class="mlink title" data-m="${esc(x.id)}" ${act("openMissionPage", x.id)}>${esc(x.title)}</button><span class="sub"> ${x.project ? esc(x.project) : "no project"}${x.when ? " · " + esc(ago(x.when)) : ""}</span></li>`;
+  const finished = fin.length ? `<div class="traj-fin"><button class="mlink link" aria-expanded="${trajOpen}" ${act("trajToggle")}>Finished recently (${fin.length})</button>
+      ${trajOpen ? `<ul id="traj-fin-list" class="traj-list">${fin.map(compact).join("")}</ul>` : ""}</div>` : "";
+  const body = open.length ? `<div class="list">${open.map(row).join("")}</div>`
+    : emptyState({inline: true, title: all.length ? "Nothing is open." : "Nothing is running.", body: all.length ? "Everything that started has finished." : "A fix, a panel or a run appears here once one has started."});
+  return card(null, body + finished, {kicker: "Mission trajectory", count: f.running ? f.running + " running" : "", actions: `<button class="mlink link" ${act("dockGo", "missions")}>All missions</button>`, cls: "traj", label: "Mission trajectory"});
 }
 function needsCard(f){
   const next = S.schedules.filter(x => !x.paused && x.seconds_until != null).sort((a, b) => a.seconds_until - b.seconds_until)[0];
-  const rows = f.att.slice(0, 3).map(x => callout(x.blocker === "config" ? "blocked" : "awaiting", mlink(attnMissionId(x), x.source, "title"), esc(x.text),
+  const rows = f.att.slice(0, 3).map(x => callout(x.blocker === "config" ? "blocked" : "awaiting", mlink(attnMissionId(x), x.source, "title") + (x.addon ? " " + addonPill(x) : ""), esc(x.text),
       {meta: x.at ? (x.stale ? "Snapshot read " : "Run ") + ago(x.at) : "Current status", actions: btn(x.blocker === "config" ? "Inspect blocker" : "Inspect", {size: "small", variant: "primary", click: isPlace(x.view) ? act("selectPlace", x.view) : act("dockGo", "ledger")})}))
     .concat(f.waiting.slice(0, 3).map(r => callout("awaiting", mlink(fixMissionId(r), r.title, "title"), `${esc(r.project)} · pull request #${esc((r.pr || "").split("/").pop())} is open and waiting for your review.`,
       {actions: btn("Open the pull request", {size: "small", variant: "primary", href: r.pr})})));
@@ -1166,9 +1324,14 @@ function viewMissions(){
 function viewInbox(){
   const alerts = obsAttention().filter(x => hit(x.source,x.text,x.kind));
   const info = `<p class="hint" data-calm="hide" style="margin-bottom:var(--s4)">A connected source shows its latest available status, with stale snapshots marked. A local entry is a project and duty's most recent run when that run failed in the last 24 hours; a later success, of any kind, retires it on its own. Acknowledging one is recorded on this machine: the same exact problem stays quiet, a genuinely new one does not.</p>`;
-  if(!alerts.length) return info + emptyState({kicker: "All quiet", title: "Nothing needs you right now.", body: "No live alerts or local blocker verdicts from the last 24 hours. Older events are in the Ledger.", label: "Open the Ledger", click: act("go", "ledger")});
-  return info + card(null, alerts.map(x => `<div class="attn"><span class="ico ${x.blocker === "config" ? "bad" : "await"} li-ico" style="display:grid;place-items:center;width:34px;height:34px;border-radius:8px;flex:none">${slIcon("warn")}</span>
-      <div class="attn-main"><div class="t">${mlink(attnMissionId(x), x.source, "title")} ${x.blocker === "config" ? pill("warn", "needs a config change") : ""}</div>
+  // Add-on items are not tied to a project: say so once, and say how to see only them. One from an add-on that is not installed here cannot be chosen as a scope.
+  const ad = alerts.filter(x => x.addon), gone = ad.find(x => !x.addon.installed), cur = scopeAddon ? addonList().find(a => a.id === scopeAddon) : null;
+  const scopeNote = cur ? `<p class="hint" style="margin-bottom:var(--s4)">Showing only items from the add-on ${esc(cur.label)}. Choose All projects in the scope box to see everything.</p>`
+    : ad.length ? `<p class="hint" style="margin-bottom:var(--s4)">Items marked Add-on come from an add-on, not from one of your projects, so they show under every project.${ad.some(x => x.addon.installed) ? " Choose the add-on in the scope box to see only its items." : ""}${gone ? ` ${esc(gone.addon.label)} is not installed here, so it cannot be chosen as a scope.` : ""}</p>` : "";
+  if(!alerts.length) return info + (cur ? `<p class="hint" style="margin-bottom:var(--s4)">Showing only items from the add-on ${esc(cur.label)}. Choose All projects in the scope box to see everything.</p>` : "")
+    + emptyState({kicker: "All quiet", title: cur ? `Nothing from ${cur.label} needs you right now.` : "Nothing needs you right now.", body: "No live alerts or local blocker verdicts from the last 24 hours. Older events are in the Ledger.", label: "Open the Ledger", click: act("go", "ledger")});
+  return info + scopeNote + card(null, alerts.map(x => `<div class="attn"><span class="ico ${x.blocker === "config" ? "bad" : "await"} li-ico" style="display:grid;place-items:center;width:34px;height:34px;border-radius:8px;flex:none">${slIcon("warn")}</span>
+      <div class="attn-main"><div class="t">${mlink(attnMissionId(x), x.source, "title")} ${addonPill(x)} ${x.blocker === "config" ? pill("warn", "needs a config change") : ""}</div>
         <p>${esc(x.text)}</p><p class="sub">${x.at ? (x.stale ? "snapshot read " : "recorded ") + ago(x.at) : "status"}</p>
         <div class="attn-act">${btn(x.blocker === "config" ? "Inspect blocker" : "Inspect", {size: "small", variant: "primary", click: isPlace(x.view) ? act("selectPlace", x.view) : act("go", "ledger")})}
         ${btn("Acknowledge", {size: "small", click: act("ackInbox", x.id, x.text)})}</div></div></div>`).join(""),
@@ -1183,9 +1346,9 @@ function openMissionPage(id){
   missionId = id; missionLens = "summary";
   try{ localStorage.setItem("quarterdeck.mission", id); }catch(e){}
   delete missionCache[id];
-  if(view === "mission") render(); else go("mission");
+  if(view === "mission"){ routeTouch(); render(); } else go("mission");
 }
-function closeMissionPage(){ missionId = ""; try{ localStorage.removeItem("quarterdeck.mission"); }catch(e){} render(); }
+function closeMissionPage(){ missionId = ""; try{ localStorage.removeItem("quarterdeck.mission"); }catch(e){} routeTouch(); render(); }
 function setLens(l){ missionLens = l; render(); }
 function loadMission(){
   const id = missionId, c = missionCache[id];
@@ -1201,7 +1364,7 @@ const attnMissionId = x => x.project && x.at && !isPlace(x.view) ? `run:${x.at}|
 const MSTATE = {running: ["Running", "blue"], blocked: ["Blocked", "bad"], awaiting: ["Awaiting you", "warn"], done: ["Done", "good"], idle: ["Not started", ""]};
 const NSTATE = {done: "Done", active: "Active", blocked: "Blocked", awaiting: "Awaiting you", notstarted: "Not started", skipped: "Skipped"};
 const fixStateOf = r => r.status === "running" ? "running" : r.status === "pr" ? "awaiting" : ["failed", "blocked", "abandoned"].includes(r.status) ? "blocked" : "done";
-function recentMissions(){
+function recentMissions(limit = 8){
   const fx = Object.values(S.fixes || {}).filter(mine).map(r => ({id: fixMissionId(r), title: r.title, project: r.project, state: fixStateOf(r), when: r.finished || r.started || ""}));
   const pn = S.panels.filter(mine).filter(p => !p.superseded_by).map(p => ({id: "panel:" + p.id, title: p.headline || p.subject || p.discipline + " panel", project: p.project,
     state: p.status === "running" ? "running" : p.status === "done" ? "done" : "blocked", when: p.finished || p.started || ""}));
@@ -1215,7 +1378,7 @@ function recentMissions(){
       : ["proposed", "changes_requested"].includes(b.status) || b.mockups === "ready" ? "awaiting" : "done", when: b.at || ""}));
   const pl = (S.plans || []).filter(mine).map(p => ({id: "plan:" + p.id, title: `Sprint plan · ${p.project}`, project: p.project,
     state: p.status === "proposed" ? "awaiting" : p.status === "approved" ? "awaiting" : "done", when: p.at || ""}));
-  return [...fx, ...pn, ...cy, ...bf, ...pl].sort((a, b) => b.when.localeCompare(a.when)).slice(0, 8);
+  return [...fx, ...pn, ...cy, ...bf, ...pl].sort((a, b) => b.when.localeCompare(a.when)).slice(0, limit);
 }
 function missionList(){
   const rec = recentMissions();
@@ -3003,7 +3166,7 @@ function showLedgerRow(key, project){
     if(row){ row.scrollIntoView({block: "center"}); row.focus({preventScroll: true}); }
   });
 }
-function showLog(n){ if(logFrom && n !== logFrom.duty + "-" + logFrom.project) logFrom = null; curLog = n; if(view !== "log") go("log"); else { render(); } loadLog(); }
+function showLog(n){ if(logFrom && n !== logFrom.duty + "-" + logFrom.project) logFrom = null; curLog = n; if(view !== "log") go("log"); else { routeTouch(); render(); } loadLog(); }
 async function loadLog(){
   if(!curLog || view !== "log") return;
   try{
@@ -4052,15 +4215,15 @@ function brainBar(){
 // The Map | Rhythm switch: one click either way, the toolbar and the page stay where they are.
 function setBrainMode(m){
   if(brainMode === m) return;
-  brainMode = m; paintFocus(true); rhythmSync();
+  brainMode = m; routeTouch(); paintFocus(true); rhythmSync();
   if(m === "map") window.dispatchEvent(new Event("resize"));
 }
 // My rhythm's project choice is the app's one project scope (the same `sel` the top bar sets). The top bar is hidden inside the Brain, so the toolbar shows it in the first slot after the switch.
 const rhythmProject = () => ((S && S.projects) || []).some(p => p.name === sel) ? sel : "";
 function rhythmScope(v){
   if(v === sel) return;
-  sel = v; localStorage.setItem("quarterdeck.project", v); curLog = null; board = null; boardFor = null; prs = null; prsFor = null;
-  renderProjSwitch(); paintFocus(true); rhythmSync();
+  sel = v; localStorage.setItem("quarterdeck.project", v); curLog = null; board = null; boardFor = null; prs = null; prsFor = null; scopeAddon = "";
+  routeTouch(); renderProjSwitch(); paintFocus(true); rhythmSync();
 }
 // Replay: drag a day slider and the nodes re-size from that day's buckets, with that day's Ledger events in the panel.
 // It never plays by itself and nothing moves but the sizes.
@@ -4548,18 +4711,26 @@ async function brainAttach(){
   }catch(e){ brainErr = e.message || String(e); if(view === "brain") render(); }
 }
 // What the page header says: a mono kicker (where you are), the big heading, one line of description, and any actions.
+// The scope every page is showing: all projects, one project, or one add-on. It is shown as a chip in the page header; the chip opens the project select, which stays the one place to choose it.
+function scopeNow(){
+  if(atPlace){ const a = addonList().find(x => x.place === atPlace); return {kind: "addon", label: "Add-on: " + (a ? a.label : (EXT.places.find(pl => pl.id === atPlace) || {}).label || atPlace)}; }
+  if(scopeAddon){ const a = addonList().find(x => x.id === scopeAddon); return {kind: "addon", label: "Add-on: " + (a ? a.label : scopeAddon)}; }
+  return S.projects.some(p => p.name === sel) ? {kind: "project", label: sel} : {kind: "all", label: "All projects"};
+}
+const scopeChip = sc => `<button class="chip scope-chip" data-kind="${sc.kind}" ${act("openScope")} aria-label="Scope: ${esc(sc.label)}. Change the scope." title="What this page shows. Choose a project or an add-on.">${slIcon("folder2")}<b>${esc(sc.label)}</b></button>`;
+function openScope(){ const el = $("#proj-switch"); if(el && el.show) el.show(); else if(el) el.focus(); }
 function pageMeta(v){
-  const g = groupOf(v.id), scope = atPlace || v.id === "brain" ? "" : sel || "All projects";
+  const g = groupOf(v.id), scope = v.id === "brain" ? null : scopeNow();
   const where = atPlace ? ((EXT.places.find(pl => pl.id === atPlace) || {}).label || "") : g ? g.label : v.label;
-  const kicker = [where, v.id !== "overview" && g && g.views.length > 1 ? v.label : "", scope].filter(Boolean).join(" · ");
+  const kicker = [where, v.id !== "overview" && g && g.views.length > 1 ? v.label : ""].filter(Boolean).join(" · ");
   const p = atPlace || v.id === "brain" || v.id === "fleet" ? null : S.projects.find(x => x.name === sel);
   let title = p ? `${sel} · ${v.title}` : v.title, sub = v.sub, acts = "";
   if(v.id === "overview" && !atPlace){
     const f = homeFacts(), h = homeHeadline(f, nextNow());
     title = h.text; sub = h.sub; acts = h.noProjects ? "" : pill(h.state, h.state === "idle" ? "Idle" : MSTATE[h.state][0]);
   } else if(v.id === "mission" && missionNow()){
-    const m = missionNow(); title = m.title; sub = ""; acts = pill(m.state, (MSTATE[m.state] || MSTATE.idle)[0]);
-    return {kicker: `Mission · ${m.project || "No project"} · ${m.mission_ref}`, title, sub, acts, p: null};
+    const m = missionNow(); title = m.title; sub = m.line || ""; acts = pill(m.state, (MSTATE[m.state] || MSTATE.idle)[0]);
+    return {kicker: `Mission · ${m.mission_ref}`, title, sub, acts, p: null, scope, project: m.project ? ["Project", m.project] : m.addon ? ["Add-on", (addonList().find(a => a.id === m.addon || a.place === m.addon) || {}).label || m.addon.charAt(0).toUpperCase() + m.addon.slice(1)] : ["Project", "None"]};
   } else if(v.id === "crew" && crewMod){
     const rows = crewRows().filter(r => r.state !== "off"), n = rows.length, run = rows.filter(r => r.state === "running").length, att = rows.filter(r => r.state === "attention").length;
     const where = sel ? `on ${sel}` : `across ${S.projects.length} ${plural(S.projects.length, "project")}`;
@@ -4571,7 +4742,7 @@ function pageMeta(v){
        ${p.board ? `<a class="pill" href="${esc(safeUrl(p.board))}" target="_blank" rel="noopener">project board ↗</a>` : ""}
        ${p.cycle ? pill("", "cycle: opted in") : ""}
        ${(p.guardrails||[]).length ? btn(p.guardrails.length + " guardrails", {size: "small", click: act("showGuardrails")}) : ""}`;
-  return {kicker, title, sub, acts, p};
+  return {kicker, title, sub, acts, p, scope, project: null};
 }
 function render(){
   if(!S) return;
@@ -4599,6 +4770,8 @@ function render(){
   const meta = pageMeta(v), p = meta.p;
   $("#ptitle").title = v.id === "brain" ? v.sub : "";
   $("#pkicker").textContent = meta.kicker; $("#ptitle").textContent = meta.title; $("#psub").textContent = meta.sub;
+  setHtml($("#pscope"), meta.scope ? scopeChip(meta.scope) : "");
+  { const pp = $("#pproj"); pp.hidden = !meta.project; setHtml(pp, meta.project ? `${slIcon("folder2")}<span class="pp-l">${esc(meta.project[0])}</span><b>${esc(meta.project[1])}</b>` : ""); }
   setHtml($("#pacts"), meta.acts);
   if(document.title !== meta.title + " · Quarterdeck"){ document.title = meta.title + " · Quarterdeck"; if(annRunning !== null) announce(meta.title); }
   const brainMounted = v.id === "brain" && !brainErr && $("#brain-slot .brain-host");
@@ -4697,6 +4870,7 @@ async function tick(){
     if(r.status === 401){ showUnpaired(); return; }
     if(!r.ok) throw new Error("state " + r.status);
     S = await r.json();
+    if(!routeReady){ await routeLoad; initRoute(); }
     try{ sgTick(); }catch(e){}
     loadAttention();
     lastOk = Date.now();
@@ -4767,13 +4941,13 @@ const ACTIONS = {
   crewEnableHelp, crewSchedule, openRun, runGo, runPaint,
   dockStartOver, dockGo, dockToggle, explainWrites, fileAsIssues, fixItem, fixSelected, fleetAct, focusEdit, go, helmOrb, leaveBrain, linkPanelToMission,
   loadBoard, markSeen, mergePr, noteAdd, noteDone, noteEditSave, noteEditStart, noteEditStop, noteFilter, notePromote, noteTag, nwMakeBrief,
-  openAttach, openAttention, openCard, openCycleDialog, openDoc, openFocusDrawer, openFullLog, openMission, openMissionPage, openPalette, openPanel, openShowcase,
+  openScope, openAttach, openAttention, openCard, openCycleDialog, openDoc, openFocusDrawer, openFullLog, openMission, openMissionPage, openPalette, openPanel, openShowcase,
   openWhatChanged, palGo, pickCase, planAct, planMove, projSwitch, proposeMissionPlan, publishShowcase, queueAction, replayStep, restartDemo, rhythmScope,
   rowClick, rowKey, runHarbourmaster, runNext, saveFocus, saveMissionDraft, saveMissionEdit, saveShowcaseDraft, saveShowcaseEdit, schedAction,
-  selectPlace, selectProject, setBilling, setBrainMode, setCapSave, setFleetView, setHandsFree, setKeyRemove, setKeySave, setLens, setSizeBy, setTheme, sgSpeakToggle, showGuardrails, showLog, showPrivacy,
+  selectAddon, selectPlace, selectProject, setBilling, setBrainMode, setCapSave, setFleetView, setHandsFree, setKeyRemove, setKeySave, setLens, setSizeBy, setTheme, sgSpeakToggle, showGuardrails, showLog, showPrivacy,
   startCycle, startMissionPanel, stopRun, talkSubmit, thinkToggle, tlClick, tlHover, tlSet, toggleCalm, toggleDemo, toggleLedger,
   toggleMissionForm, toggleMobileMenu, toggleOld, toggleReplay, toggleSched, toggleSel, toggleShowcaseForm, unpublishShowcase, unqueue, workOn,
-  tkRequest, tkDraft, tkFile, tkDiscard, tkRepoName, tkRepoSave, tkRepoCreate, tkMission,
+  trajToggle, tkRequest, tkDraft, tkFile, tkDiscard, tkRepoName, tkRepoSave, tkRepoCreate, tkMission,
   rdShow, rdToggle, rdNext, rdDraft, rdApply, rdTurnOn, rdCycle,
   ...EXT.actions,                                   // an add-on's own (assets/ext-*.js), by name
 };

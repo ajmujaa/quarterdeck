@@ -67,3 +67,27 @@ all about it, make a README or an architecture document, attach the agents and s
    nothing is written outside the data folder until the owner says so.
 Test it in `bin/selftest-flow.sh` with the sample React project and the stand-in provider. Report what a newcomer
 would still find confusing.
+
+## 5. Navigation and clear missions (found by the owner using the dashboard, 2026-10-20; do after 4, same branch)
+Findings, from the page code and the owner's screenshots:
+1. **No browser history.** `dashboard/index.html` keeps the page in a variable and `localStorage` (`go(v)`), and the
+   address bar never changes. So Back and Forward do nothing useful, a reload returns to Home, a mission cannot be linked
+   or bookmarked, and after Missions to Pull requests and back, the open mission is forgotten (a different view appears).
+   Fix: one small router. Page, project scope and open mission live in the URL hash (`#/work/missions/<id>?project=x`),
+   `go()` pushes a history entry, `popstate`/`hashchange` restores it, reload and a pasted link open the same place.
+   The one-time pairing hash (`#pair=...`) keeps working and is still removed from the address bar. Keep the page's
+   security rules (CSP, no new inline script). Test with a headless browser: click through five pages, Back four
+   times, Forward, reload, deep link.
+2. **A mission marked Done shows steps "Not started".** A design-panel mission has Brief and Panel done, then Build, Verify,
+   Review "Not started" under a green Done badge. It reads as unfinished or contradictory. Fix: a mission shows only the
+   steps its kind needs; the rest show "Not needed" (the page already has a "Skipped" state) or are hidden, and Done is
+   explained in one line ("The panel ruled on 10 items; fixing them is optional, start it from the Work tab").
+3. **Mission trajectory on Home lists finished missions at full size.** Open missions first and large; finished ones in a
+   small collapsed "Finished recently" line. Every row names its project and what is next. Keep it calm.
+4. **A project named only by a small label.** On a mission page the project is a tiny crumb (`MISSION · DRYDOCK · DESIGN
+   PANEL`). Show the project clearly in the heading area, and make the "All projects" scope visible on every page so the
+   owner knows what they are looking at.
+5. **Add-ons are not in the project list.** An add-on's alert (for example Hermes) shows under Needs you while the
+   "All projects" box and the project list do not mention it. Label such items "Add-on: <name>" and let the scope box
+   include the add-on when it is installed, or say plainly why it is separate.
+Report what you tested and what still confuses.

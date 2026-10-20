@@ -40,7 +40,7 @@ try {
   await page.goto(LINK);
   await page.waitForFunction(() => typeof S !== "undefined" && S && S.projects && document.querySelector("#view") && document.querySelector("#view").children.length > 0, null, {timeout: 30000});
 
-  await page.evaluate(n => { selectProject(n); go("missions"); }, PROJECT);
+  await page.evaluate(n => { selectProject(n); go("projects"); }, PROJECT);
   const listed = await here("#tk-list .li", 20000);
   await sleep(500);
   const lt = await text("#view");

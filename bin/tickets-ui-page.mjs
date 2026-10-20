@@ -39,7 +39,7 @@ const gone = async (sel, ms = 20000) => { try { await page.waitForSelector(sel, 
 const here = async (sel, ms = 20000) => { try { await page.waitForSelector(sel, {state: "visible", timeout: ms}); return true; } catch (e) { return false; } };
 const calls = () => { try { return fs.readFileSync(path.join(T, "gh-calls"), "utf8").split("\n").filter(Boolean); } catch (e) { return []; } };
 const reg = () => JSON.parse(fs.readFileSync(path.join(T, "config", "projects.json"), "utf8"));
-const openProject = async name => { await page.evaluate(n => { selectProject(n); go("missions"); }, name); await here("#view .tk-card"); await sleep(400); };
+const openProject = async name => { await page.evaluate(n => { selectProject(n); go("projects"); }, name); await here("#view .tk-card"); await sleep(400); };
 const fill = async (sel, value) => { const i = page.locator(sel + " textarea, " + sel + " input").first(); await i.click(); await i.fill(value); };
 const confirmText = async () => { await here("#confirm-dlg[open]"); return text("#confirm-msg"); };
 const dlgClick = async which => { await page.locator(which).click(); await sleep(450); };
@@ -50,9 +50,9 @@ await page.goto(LINK);
 await page.waitForFunction(() => typeof S !== "undefined" && S && S.projects && document.querySelector("#view") && document.querySelector("#view").children.length > 0, null, {timeout: 30000});
 
 // ---- no project chosen: the card asks for one, with the project select as its one action ----
-await page.evaluate(() => { selectProject(""); go("missions"); });
-await here("#view .tk-card, #view .card");
-ok("with All projects the Tickets card says to choose a project and offers the project select", (await text("#view")).includes("Choose a project to add tickets") && await page.locator("#tk-pick").count() === 1);
+await page.evaluate(() => { selectProject(""); go("projects"); });
+await here("#view .pj-card");
+ok("with All projects the Projects overview shows one card per project, each with an Open button, and no Tickets card (tickets belong to one project; the project page has them)", await page.locator("#view .pj-card").count() === (await page.evaluate(() => S.projects.length)) && await page.locator("#tk-pick").count() === 0 && await page.locator("#view .tk-card").count() === 0 && await page.locator('#view .pj-card sl-button[aria-label^="Open "]').count() >= 1);
 await shot("00-all-projects");
 
 // ---- a project with no repo: the options, in order ----
@@ -167,7 +167,7 @@ await page.evaluate(() => toggleCalm(false));
 
 // ---- a review ticket in the list, and the other widths and theme ----
 const reviewTk = await page.evaluate(() => 1);
-await page.evaluate(() => { selectProject("norepo"); go("missions"); });
+await page.evaluate(() => { selectProject("norepo"); go("projects"); });
 await here("#tk-list .li", 15000); await sleep(400);
 const lt = await text("#tk-list");
 ok("a local ticket in review shows its branch and the review command as selectable text, and the What now line", lt.includes("review") && lt.includes("Review it with") && lt.includes("What now: review it, merge it yourself, or connect a repo to run the reviewers.") && await page.locator("#tk-list code.tk-sel").count() >= 2);
@@ -197,7 +197,7 @@ ok("  at most one primary button in the Tickets card", kit.primaries <= 1, kit.p
 // ---- Demo mode: invented tickets, and every action says nothing is done ----
 ok("no console error, no page error and no failed request in the whole run so far", problems.console.length === 0 && problems.page.length === 0 && problems.requests.length === 0, JSON.stringify(problems));
 watching = false;
-await page.evaluate(async () => { await post("/api/demo", {on: true}); await tick(); selectProject("saltpan-blog"); go("missions"); });
+await page.evaluate(async () => { await post("/api/demo", {on: true}); await tick(); selectProject("saltpan-blog"); go("projects"); });
 await here("#view .tk-card", 15000); await sleep(800);
 const dt = await text("#view");
 ok("Demo mode shows invented tickets and a draft, and the options for the project with no repo", dt.includes("No GitHub repo yet") && dt.includes("Thank the reader after the newsletter signup") && dt.includes("Add a recipe card to the template") && dt.includes("Review it with"));

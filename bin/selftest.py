@@ -267,9 +267,9 @@ check("the Notes view is in the rail, the Home card links to it, edits and promo
       all(w in _idx_html for w in ('id:"notes", label:"Notes"', "notes:viewNotes", 'act("go", "notes")', 'action: "edit"', 'action: "promote"', "confirm: kind === \"plan\"", 'case "notedone"', 'case "promote"', 'case "notes"', "on this Mac. The file is only ever added to"))
       and "—" not in _nj and "document." not in _nj and "fetch(" not in _nj)
 _tlj = (ROOT / "dashboard" / "assets" / "timeline.js").read_text()
-check("the Timeline view is in the rail with windows, lanes, legend, filters remembered per browser, hover/focus detail and click to the Ledger; the Home strip shows 12 events",
-      all(w in _idx_html for w in ('id:"timeline", label:"Timeline"', "timeline:viewTimeline", "quarterdeck.timeline", 'actOn("hover", "tlHover", T.el)', 'actOn("focus", "tlHover", T.el)', "openEvent", "recentStrip(", "/api/timeline?window=", "tl-legend"))
-      and "—" not in _tlj and "document." not in _tlj and "fetch(" not in _tlj and "animation" not in _ui[_ui.index(".tl-strip{"):_ui.index(".c-bad{")])
+check("the Timeline view is in the rail with windows, lanes, legend, filters remembered per browser, hover/focus detail and click to the Ledger; Home shows the same lanes for every project over the last 24 hours",
+      all(w in _idx_html for w in ('id:"timeline", label:"Timeline"', "timeline:viewTimeline", "quarterdeck.timeline", 'actOn("hover", "tlHover", T.el)', 'actOn("focus", "tlHover", T.el)', "openEvent", "tl.buildLanes(", "/api/timeline?window=", "tl-legend", "function homeTimeline("))
+      and "—" not in _tlj and "document." not in _tlj and "fetch(" not in _tlj and "animation" not in _ui[_ui.index(".tl-legend{"):_ui.index(".note{")])
 _sj = (ROOT / "dashboard" / "assets" / "suggest.js").read_text()
 check("the suggestion bar is quiet and kept in this browser: Snooze, Dismiss, What changed, speaking off by default and never while Helm is busy; the module has no DOM, network or em dashes",
       all(w in _idx_html for w in ('id="suggest"', "sgDo(kind)", "Snooze 1 hour", "openWhatChanged", "quarterdeck.suggest", "quarterdeck.sgSpeak", 'id="sg-say"', "helmState !== \"idle\" || micMode === \"push\" || busy", "shouldSpeak("))
@@ -3844,7 +3844,7 @@ _basefs = float(_r4.search(r"\nbody\{[^}]*font:400 (\d+)px", _css4).group(1)); _
 _calmpad = float(_r4.search(r"\.calm \.card-b\{padding:\d+px (\d+)px", _css4).group(1)); _basepad = float(_r4.search(r"\n\.card-b\{padding:\d+px (\d+)px", _css4).group(1))
 check("Calm measured: body font 14 to 16.5 (at least +2px), card side padding 20 to 28, spacing tokens and control height raised, one column for split/home/mission/settings, 800px reading width",
       _calmfs - _basefs >= 2 and _calmpad - _basepad >= 6 and ":root.calm{--s2:10px;--s3:16px;--s4:22px;--s5:36px" in _cm and "--ctl-h:44px" in _cm
-      and all(c in _cm for c in (".calm .split", ".calm .home-grid", ".calm .home-row", ".calm .mission-grid", ".calm .set-row", ".calm .page{max-width:800px}")), (_basefs, _calmfs, _basepad, _calmpad))
+      and all(c in _cm for c in (".calm .split", ".calm .home-row", ".calm .mission-grid", ".calm .set-row", ".calm .page{max-width:800px}")), (_basefs, _calmfs, _basepad, _calmpad))
 check("Calm folds away a named list of secondary things with data-calm=\"hide\" (Home cards, stats rows, side columns, Notes search, Needs you intro, Crew detail lines) until Show everything",
       _ix4.count('data-calm="hide"') + _ix4.count("calmHide(") >= 12 and '.calm:not(.calm-all) [data-calm="hide"]{display:none}' in _css4 and 'id="calm-all"' in _ix4 and "function calmShowAll" in _ix4 and "Calm is keeping" in _ix4)
 _q = _cm.split(".calm .pill.running")[1].split("}")[0]

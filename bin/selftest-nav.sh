@@ -8,7 +8,7 @@
 #   1  the address as served: the page is the same for every path and the hash never reaches the server
 #   2  the page, in a headless browser (skipped, saying so, when this machine has none), on the seeded data folder and again in Demo mode:
 #      five pages and Back four times, Forward, reload, project scope, a mission and Back, a deep link, hostile addresses, the pairing hash gone,
-#      Esc in the Brain, polling adds no entry, the scope chip on every page, mission steps by kind, Home's trajectory, the add-on label and scope
+#      Esc in the Brain, polling adds no entry, the scope chip on every page where a scope applies (and none on the pages of the person), mission steps by kind, the trajectory on Projects, the add-on label and scope
 # QD_KEEP=1 keeps the throwaway folder; QD_KEEP_SHOTS=<folder> copies the pictures the page checks take there.
 source "$(dirname "${BASH_SOURCE[0]}")/selftest-lib.sh"
 st_init
@@ -74,7 +74,7 @@ newlink() { QUARTERDECK_DASHBOARD_PORT="$PORT" python3 "$T/bin/dashboard.py" lin
 code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
 HOME_URL="http://127.0.0.1:$PORT/"
 CSP=$(curl -s -D - -o /dev/null "$HOME_URL" | grep -i '^content-security-policy' | tr -d '\r')
-ck "the page is served at / and at /index.html, and the same page for a request that has a hash in it (the hash is never sent)" '[ "$(curl -s "$HOME_URL" | sed "s/nonce[=-][^ >]*//g" | md5sum)" = "$(curl -s "${HOME_URL}index.html" | sed "s/nonce[=-][^ >]*//g" | md5sum)" ] && [ "$(code "${HOME_URL}#/work/mission/x")" = 200 ]'
+ck "the page is served at / and at /index.html, and the same page for a request that has a hash in it (the hash is never sent)" '[ "$(curl -s "$HOME_URL" | sed "s/nonce[=-][^ >]*//g" | md5sum)" = "$(curl -s "${HOME_URL}index.html" | sed "s/nonce[=-][^ >]*//g" | md5sum)" ] && [ "$(code "${HOME_URL}#/projects/mission/x")" = 200 ]'
 ck "the router is served as an asset next to the page, as an ES module" '[ "$(code "${HOME_URL}assets/route.js")" = 200 ] && curl -s "${HOME_URL}assets/route.js" | grep -q "export function parseHash"'
 ck "the Content-Security-Policy is the same as before: scripts from this server and the nonce only, no unsafe-inline and no unsafe-eval for scripts" 'grep -q "script-src .self. .nonce-" <<<"$CSP" && ! grep -Eq "script-src[^;]*(unsafe-inline|unsafe-eval)" <<<"$CSP"'
 ck "no inline script without the nonce and no inline handler attribute in the page (the router adds none)" 'python3 - "$REAL/dashboard/index.html" <<PY

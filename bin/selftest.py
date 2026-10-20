@@ -2843,7 +2843,7 @@ with _tf.TemporaryDirectory() as _ad:
     _e4 = _rv({"forbidden_paths": ["db/"]}); _e5 = _rv({"guardrails": []}); _e6 = _rv({"duties": ["shipwright"], "verify": ""}); _e7 = _rv({"name": "x"})
     check("attach review: unknown duties, shell characters in verify, paths outside the project, dropping protected paths or the merge and push rules, a Shipwright with no verify, and other fields are all refused",
           all(c == 400 for c, _ in (_e1, _e2, _e3, _e4, _e5, _e6, _e7)))
-    _ok = d.attach_api({"path": str(_app), "edits": {"duties": ["surveyor"], "verify": "npm run check", "guardrails": _attach.GUARDRAILS[:2],
+    _ok = d.attach_api({"path": str(_app), "edits": {"duties": ["surveyor"], "verify": "npm run check", "guardrails": _attach.GUARDRAILS[:3],
                         "forbidden_paths": _b3["proposal"]["entry"]["forbidden_paths"] + ["secrets-here"]}})
     check("attach review: a valid edit comes back in the proposal and registers nothing", _ok[0] == 200 and _ok[1]["proposal"]["entry"]["duties"] == ["surveyor"] and _ok[1]["proposal"]["entry"]["verify"] == "npm run check" and "edited-app" not in d.PROJECTS_FILE.read_text())
     _ag = d.attach_api({"path": str(_app), "apply": True, "name": "edited-app", "agents_md": True, "edits": {"duties": ["surveyor"]}})

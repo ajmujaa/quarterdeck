@@ -47,6 +47,10 @@ import ready as _ready
 READ_ONLY_DUTIES = ["surveyor", "foreman", "inspector"]
 GUARDRAILS = ["Never merge a pull request.", "Never push to the default branch; every change goes on its own branch.",
               "Never touch .env files or anything that holds a secret.", "Follow the repository's own AGENTS.md or CLAUDE.md where it has one."]
+# The three standing rules no edit, page, command or API call can turn off, each with the plain reason shown next to it (bin/guardrails.py).
+LOCKED = [(GUARDRAILS[0], "The crew prepares changes and only you merge them."),
+          (GUARDRAILS[1], "A change on its own branch can be reviewed and undone; a push to the default branch cannot."),
+          (GUARDRAILS[2], "A secret the crew reads or writes can end up in a prompt, a log or a commit.")]
 
 
 def default_branch(root, prof):
@@ -217,7 +221,7 @@ def known_duties():
 
 def edit(prop, edits):
     """A copy of the proposal with the owner's changes, or ValueError saying what is wrong. Only duties, verify, build, lint, typecheck, forbidden_paths
-    and guardrails can change. The Shipwright needs a verify command; the harness's own protected paths and the two standing rules about merging and pushing stay."""
+    and guardrails can change. The Shipwright needs a verify command; the harness's own protected paths and the three locked rules (merging, pushing, secrets) stay."""
     if not isinstance(edits, dict):
         raise ValueError("edits must be an object")
     out = json.loads(json.dumps(prop))
@@ -262,11 +266,10 @@ def edit(prop, edits):
         e["forbidden_paths"] = sorted(dict.fromkeys(f))
     if "guardrails" in edits:
         g = edits["guardrails"]
-        if not isinstance(g, list) or any(x not in GUARDRAILS for x in g):
-            raise ValueError("guardrails must be some of the standing rules")
-        if not set(GUARDRAILS[:2]) <= set(g):
-            raise ValueError("never merging and never pushing to the default branch cannot be turned off")
-        e["guardrails"] = [x for x in GUARDRAILS if x in g]
+        if not isinstance(g, list) or not all(isinstance(x, str) for x in g):
+            raise ValueError("guardrails must be a list of rules")
+        import guardrails as _gr                     # the rules for a rule (length, characters, credentials) live with the editor; the three locked ones lead
+        e["guardrails"] = _gr.normalise(g)
     if "shipwright" in e["duties"] and not e["verify"]:
         raise ValueError("the Shipwright needs a verify command to prove its work")
     return out

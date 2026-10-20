@@ -69,6 +69,7 @@ Usage: qtdeck <command>
                               the scribe drafts the README and the architecture overview the survey found missing, from the survey's facts, and
                               keeps the draft (nothing is written to your project). --apply puts them on a NEW branch (a pull request when the
                               project has a GitHub repo); never on the default branch, never over a file that exists.
+  guardrail <project> list|add|remove|move   the rules every agent is given for a project; three are locked (see: list)
   enable <project> <duty>... | cycle      turn duties on; "cycle" also allows full cycles and turns on the purser and the panel
   disable <project> <duty>... | cycle     turn duties off
   ticket list <project>       the local tickets and the drafts, one line each
@@ -175,7 +176,7 @@ cmd="${1:-status}"; shift || true
 case "$cmd" in
   -h|--help|help) if [ "${1:-}" = more ]; then usage_more; else usage; fi; exit 0 ;;
   setup) exec python3 "$SELF/setup.py" "$@" ;;
-  status|doctor|check|home|projects|duties|crew|add|remove|repo|run|spend|fix|cycle|plan|brief|mockup|dashboard|keys|billing|logs|runs|new|attach|connect|ticket|ready|docs|enable|disable) ;;
+  status|doctor|check|home|projects|duties|crew|add|remove|repo|run|spend|fix|cycle|plan|brief|mockup|dashboard|keys|billing|logs|runs|new|attach|connect|ticket|ready|docs|enable|disable|guardrail) ;;
   *) { echo "qtdeck: unknown command '$cmd'"; echo; usage; } >&2; exit 2 ;;
 esac
 source "$SELF/lib.sh"
@@ -488,6 +489,11 @@ case "$cmd" in
 
   enable|disable)
     exec python3 "$QUARTERDECK_DIR/bin/attach.py" "$cmd" "$@" ;;
+
+  guardrail)
+    # guardrail <project> list [--effective] | add "<text>" | remove <number|text> | move <number> up|down: the project's rules (bin/guardrails.py); three are locked
+    [ -n "${1:-}" ] && project_exists "$1" || die "guardrail: which project? (see: qtdeck projects)"
+    exec python3 "$QUARTERDECK_DIR/bin/guardrails.py" "$@" ;;
 
   ticket)
     # Local tickets and the planner's drafts (bin/tickets.py). Drafting needs neither a repo nor the planner to be switched on for the project;

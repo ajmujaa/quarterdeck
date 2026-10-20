@@ -2756,7 +2756,14 @@ async function attachLook(){
   attachLast = j;
   const p = j.profile, e = j.proposal.entry, list = k => p[k].map(i => i.name).join(", ");
   const line = (label, k) => p[k].length ? `<li><b>${label}</b> ${esc(list(k))}</li>` : "";
-  out.innerHTML = `<h3>What was found in ${esc(p.name)}</h3><ul>`
+  const plan = j.proposal.duty_reasons || {}, sugg = j.proposal.suggested || [], role = Object.fromEntries(j.duty_options.map(o => [o.name, o.role]));
+  const dutyBox = (name, checked) => slCheckbox(`${esc(name)}<small> ${esc((plan[name] || {}).why || role[name] || "")}</small>`, {attrs: `data-ad="${esc(name)}"${checked ? " checked" : ""}`});
+  const dutyGroup = names => names.length ? `<div class="focus-rows" style="flex-direction:column;align-items:flex-start;gap:0">${names.map(n => dutyBox(n, e.duties.includes(n))).join("")}</div>` : "";
+  const known = j.duty_options.map(o => o.name);
+  const dOn = known.filter(n => e.duties.includes(n)), dSug = known.filter(n => !e.duties.includes(n) && sugg.includes(n)), dRest = known.filter(n => !e.duties.includes(n) && !sugg.includes(n));
+  const cmdHelp = (k, none) => e[k] ? cap(j.proposal.reasons[k] || "") + ". One plain command." : none;
+  out.innerHTML = `<h3>What was found in ${esc(p.name)}</h3>
+    <p id="at-stack"><b>${esc(p.stack && p.stack.summary || "")}</b></p><ul>`
     + line("Languages", "languages") + line("Frameworks", "frameworks") + line("Commands", "commands") + line("Checks that run on push", "ci")
     + line("Containers", "containers") + line("Infrastructure", "infrastructure") + line("Deploys to", "deploy_targets") + line("Sensitive areas", "sensitive")
     + (p.secret_files.length ? `<li><b>Secret files</b> ${esc(list("secret_files"))} (named only, never opened)</li>` : "")
@@ -2768,8 +2775,16 @@ async function attachLook(){
       <li><b>Stack notes</b> ${esc(e.packs.join(", ") || "none")} ${e.packs.map(id => packPill((j.pack_status || {})[id])).join(" ")}. ${esc(cap(j.proposal.reasons.packs))}.</li></ul>
       <div class="sec-h">Duties</div>
       <p class="hint">${esc(cap(j.proposal.reasons.duties))}.</p>
-      <div class="focus-rows" style="flex-direction:column;align-items:flex-start;gap:0">${j.duty_options.map(o => slCheckbox(`${esc(o.name)}<small> ${esc(o.role)}</small>`, {attrs: `data-ad="${esc(o.name)}"${e.duties.includes(o.name) ? " checked" : ""}`})).join("")}</div>
-      ${slInput({id: "at-verify", label: "Command that proves a change works", value: e.verify, help: e.verify ? "One plain command. The Shipwright needs one." : "None was found. The Shipwright stays off until you give one."})}
+      ${dutyGroup(dOn)}
+      ${dSug.length ? `<div class="sec-h">These also fit this stack, switched off</div>
+      <p class="hint">Nothing here is on unless you tick it.</p>${dutyGroup(dSug)}` : ""}
+      ${dRest.length ? `<div class="sec-h">Other duties, off</div>${dutyGroup(dRest)}` : ""}
+      <div class="sec-h">Commands</div>
+      ${slInput({id: "at-verify", label: "Command that proves a change works", value: e.verify, help: e.verify ? cap(j.proposal.reasons.verify) + ". One plain command. The Shipwright needs one." : "None was found. The Shipwright stays off until you give one."})}
+      ${slInput({id: "at-build", label: "Build command", value: e.build || "", help: cmdHelp("build", "None was found. Leave it empty if there is none.")})}
+      ${slInput({id: "at-lint", label: "Lint command", value: e.lint || "", help: cmdHelp("lint", "None was found. Leave it empty if there is none.")})}
+      ${e.typecheck ? slInput({id: "at-typecheck", label: "Type check command", value: e.typecheck, help: cmdHelp("typecheck", "")}) : ""}
+      <p class="hint">The build command is the one the Shipwright's checks already run. Lint and type check are recorded for your review and the crew's notes; nothing runs them by itself.</p>
       ${slTextarea({id: "at-forbid", label: "Paths the crew may not touch, one per line", rows: 6, value: e.forbidden_paths.join("\n")})}
       <p class="hint">The build, CI and dependency files the harness already protects cannot be removed.</p>
       <div class="sec-h">Standing rules</div>
@@ -2783,7 +2798,9 @@ async function attachLook(){
 }
 function attachEdits(){
   const on = a => [...document.querySelectorAll(`#at-out [${a}]`)].filter(c => c.checked).map(c => c.getAttribute(a));
-  return {duties: on("data-ad"), verify: $("#at-verify").value.trim(), guardrails: on("data-ag"),
+  const cmd = id => { const el = $(id); return el ? el.value.trim() : undefined; };
+  const more = {}; for(const [k, id] of [["build", "#at-build"], ["lint", "#at-lint"], ["typecheck", "#at-typecheck"]]){ const v = cmd(id); if(v !== undefined) more[k] = v; }
+  return {...more, duties: on("data-ad"), verify: $("#at-verify").value.trim(), guardrails: on("data-ag"),
     forbidden_paths: $("#at-forbid").value.split("\n").map(x => x.trim()).filter(Boolean)};
 }
 function yourDay(){

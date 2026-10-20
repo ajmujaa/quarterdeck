@@ -45,6 +45,7 @@ LABELS = {
     "selftest-connections.sh": "connections: instructions, several accounts per service",
     "selftest-stack.sh": "the stack scan: framework and tools named, build and lint proposed, a reason per duty",
     "selftest-tickets.sh": "tickets: drafted from a request, filed only with --apply, local tickets and branches when there is no repo, repo create after a yes",
+    "selftest-tickets-ui.sh": "tickets on the dashboard: draft first, file on a click, the repo options, a mission from a ticket, Demo mode does nothing",
 }
 
 

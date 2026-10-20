@@ -30,15 +30,14 @@
     "mpim:read",
     "mpim:history",
     "channels:read",
-    "channels:history",
     "groups:read",
-    "groups:history",
     "users:read",
     "search:read"
   ],
   "steps": [
     "Go to api.slack.com/apps and create an app for your workspace, from scratch.",
-    "Under OAuth and Permissions add the ten User Token Scopes listed here. Use user scopes, not bot scopes.",
+    "Under OAuth and Permissions add exactly the eight User Token Scopes listed here. Use user scopes, not bot scopes.",
+    "Do not add channels:history or groups:history. Quarterdeck reads your direct messages and where you were mentioned, never the history of a channel.",
     "Install the app to your workspace. Your workspace may need an admin to approve it.",
     "Copy the User OAuth Token. It starts with xoxp-.",
     "Paste it here and save. Then switch Slack on."

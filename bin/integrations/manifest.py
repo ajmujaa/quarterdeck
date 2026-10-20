@@ -125,7 +125,8 @@ def status(services=None, cfg=None, have=None, recorded=None):
             state = "failing"
         else:
             state = "ok" if last else "ready"
-        rows.append({**{k: s[k] for k in ("id", "label", "what", "minutes", "local", "steps", "settings", "reads", "not_reads", "scopes", "revoke", "tested", "links")},
+        rows.append({**{k: s[k] for k in ("id", "label", "what", "minutes", "local", "settings", "reads", "not_reads", "scopes", "revoke", "tested", "links")},
+                     "steps": [x.replace("{data_folder}", str(common.HOME)) for x in s["steps"]],          # the exact folder, not "your data folder"
                      "verified": s["tested"].startswith(VERIFIED),
                      "credentials": [{**c, "present": c["key"] in have, "stored": kind if c["key"] in have else None} for c in s["credentials"]],
                      "enabled": bool((cfg["sources"].get(s["id"]) or {}).get("enabled")), "state": state, "missing": missing,

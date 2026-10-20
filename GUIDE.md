@@ -117,6 +117,8 @@ bin/qtdeck run my-app surveyor --pr 12 --apply   # posts the review
 
 `bin/qtdeck crew` lists the crew, `bin/qtdeck duties` the jobs, and `bin/qtdeck check` runs every test.
 
+**Guardrails are yours to edit.** On a project's page the Guardrails card lists the rules every agent is given for it. Edit, add, remove and reorder your own, then Save guardrails; "What the crew receives" shows the exact text. The same works from a terminal: `qtdeck guardrail <project> list|add|remove|move`. Three rules are locked and cannot be removed or changed by the page, the command or the API: never merge a pull request (only you merge), never push to the default branch (a branch can be reviewed and undone, a push cannot), and never touch .env files or anything that holds a secret. Every change is a line in `logs/guardrails.log`.
+
 ## Say what you want built
 
 You do not need an issue to start. Tell the planner in plain words:

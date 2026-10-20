@@ -31,6 +31,7 @@ LABELS = {
     "selftest-harbourmaster.sh": "board notes stay local", "selftest-portable.sh": "scripts run on macOS bash 3.2 and BSD tools",
     "selftest-purser.sh": "requirements reach the issue body only", "selftest-planner.sh": "the planner: validated plans, no card moves before approval",
     "selftest-packs.sh": "stack notes from listed packs only", "selftest-untrusted.sh": "third-party text reaches prompts only as data",
+    "selftest-guardrails.sh": "guardrails are editable, three stay locked, and the crew receives exactly the list shown",
     "selftest-pilot.sh": "the pilot: the harness drives the browser", "selftest-lookout.sh": "the lookout: only pictures the harness took",
     "selftest-marshal.sh": "the marshal: forbidden paths block before any model", "selftest-caulker.sh": "the caulker: only what was found, three cycles",
     "selftest-assayer.sh": "the assayer: tests that fail first", "selftest-logkeeper.sh": "the logkeeper: records",

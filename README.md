@@ -49,6 +49,8 @@ The dashboard keeps its place in the address: Back, Forward, reload and links wo
 
 Dashboard · Crew · Brain map · Fleet · Connections · Helm (optional voice)
 
+Guardrails, the rules every agent is given for a project, are editable on the project page and with `qtdeck guardrail <project> list|add|remove|move`. Three are locked and cannot be removed: never merge, never push to the default branch, never touch secrets.
+
 ## Status
 
 Early. Built and used daily on macOS. The Linux sandbox is run in CI only. Read [SECURITY.md](SECURITY.md) before you trust it with anything you care about.

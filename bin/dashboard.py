@@ -358,6 +358,25 @@ def load_extensions():
     return loaded
 
 
+ADDON_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
+
+
+def addons_list(mods=None):
+    """The installed add-ons, for the page's scope box: [{id, label, place}]. One per bin/ext_<id>.py that loaded. The label is the module's ADDON_NAME
+    (a short string) or the id made readable; `place` is the page place the add-on registers, when its module says (ADDON_PLACE). Nothing in here reads
+    the add-on's data, so an add-on that has nothing to show still appears, and with none installed the list is empty and the page changes nothing."""
+    out = []
+    for m in (globals().get("EXTENSIONS", []) if mods is None else mods):
+        stem = str(getattr(m, "__name__", ""))
+        aid = stem[4:] if stem.startswith("ext_") else stem
+        if not ADDON_ID.match(aid):
+            continue
+        name, place = getattr(m, "ADDON_NAME", None), getattr(m, "ADDON_PLACE", None)
+        out.append({"id": aid, "label": name.strip()[:40] if isinstance(name, str) and name.strip() else aid.replace("_", " ").replace("-", " ").title(),
+                    "place": place if isinstance(place, str) and ADDON_ID.match(place) else ""})
+    return out
+
+
 def valid_id(x):
     """Every id that becomes a path under state/ passes here, and nowhere else."""
     return isinstance(x, str) and bool(SAFE_ID.match(x)) and ".." not in x
@@ -1858,6 +1877,7 @@ def compose_mission(mid, get_panel, fixes, runs, inbox, queue, get_cycle=None, g
     if not isinstance(mid, str) or len(mid) > 300 or ":" not in mid:
         return None
     kind, ref = mid.split(":", 1)
+    hint = None          # the record's own status where it explains a finished mission (nothing to build, taken, report-only)
     out = {"id": mid, "kind": kind, "project": None, "title": "", "state": "idle", "pipeline": None,
            "detail": {"title": "", "body": ""}, "blocker": None, "decision": None, "evidence": None,
            "items": [], "disputes": [], "history": [], "mission_ref": ""}
@@ -1887,17 +1907,24 @@ def compose_mission(mid, get_panel, fixes, runs, inbox, queue, get_cycle=None, g
                 for s in ("blocked", "awaiting", "active"):
                     if s in col:
                         return s
-                return "done" if col and all(s == "done" for s in col) else "notstarted"
+                if col and all(s == "done" for s in col):
+                    return "done"
+                return "active" if "done" in col else "notstarted"          # some items further along than others: the step is under way
             seats = len(tx.get("seats") or [])
+            ref = out.get("mission_ref") or "panel"
+            # Build, Verify and Review belong to a fix, not to a panel: a panel mission needs only Brief and Panel. They are shown from the fixes started
+            # from its items; with none started they are not needed, and nothing here is "Not started" under a Done badge.
+            tail = ([{"id": NODES[k][0], "label": NODES[k][1], "state": agg(k), "note": "per item"} for k in (2, 3, 4)] if per
+                    else [{"id": NODES[k][0], "label": NODES[k][1], "state": "skipped", "note": f"Not needed for a {ref} mission"} for k in (2, 3, 4)])
+            out["fixes_started"] = len(per)
             out["pipeline"] = ([{"id": "brief", "label": "Brief", "state": "done", "note": ""},
-                                {"id": "panel", "label": "Panel", "state": panel, "note": f"{seats} seats" if seats else ""}]
-                               + [{"id": NODES[k][0], "label": NODES[k][1], "state": agg(k), "note": "per item" if per else ""} for k in (2, 3, 4)])
+                                {"id": "panel", "label": "Panel", "state": panel, "note": f"{seats} seats" if seats else ""}] + tail)
             decision = _open_decision(items) if st == "done" else None
             out["decision"] = decision
             out["state"] = "running" if st == "running" else "blocked" if st == "abandoned" else "awaiting" if decision else "done"
             body = {"running": "The seats are still arguing. The ruling appears here when the chair has made it.",
                     "abandoned": "The panel stopped before it reached a ruling."}.get(st) \
-                or f"The chair ruled on {len(items)} {'item' if len(items) == 1 else 'items'}. Each one can be fixed from the Work tab."
+                or f"The chair ruled on {len(items)} {'item' if len(items) == 1 else 'items'}. Each one is listed in the Work tab."
             out["detail"] = {"title": {"running": "Panel in progress", "abandoned": "Panel stopped"}.get(st, "Ruled"), "body": body}
             if st == "abandoned":
                 out["blocker"] = {"cause": body, "cls": None, "rerun": False}
@@ -1908,6 +1935,7 @@ def compose_mission(mid, get_panel, fixes, runs, inbox, queue, get_cycle=None, g
                        mission_ref=f"issue #{rec['issue']}" if (rec or {}).get("issue") else f"item {n}",
                        items=[item] if item else [], decision=_open_decision([item]) if item else None)
             if rec:
+                hint = rec.get("status")
                 if isinstance(rec.get("issue"), int):
                     out["issue"] = rec["issue"]                 # the page offers "Make a brief for this issue"
                 out["pipeline"] = fix_nodes(rec)
@@ -1956,6 +1984,7 @@ def compose_mission(mid, get_panel, fixes, runs, inbox, queue, get_cycle=None, g
         if not r:
             return None
         cycle_mission(r, out)
+        hint = r.get("status")
     elif kind == "brief":
         r = get_brief(ref) if get_brief and isinstance(ref, str) and len(ref) <= 40 else None
         if not r:
@@ -1970,13 +1999,60 @@ def compose_mission(mid, get_panel, fixes, runs, inbox, queue, get_cycle=None, g
         a = next((x for x in inbox if x.get("id") == ref), None)
         if a is None:
             return None
+        src = str(a.get("addon") or a.get("place") or (a.get("source") if a.get("source") not in (None, "", "local") else "") or "")
+        if src:
+            out["addon"] = src[:60]          # an alert from an add-on: the page names the add-on where it would otherwise say "No project"
         out.update(project=a.get("project"), title=a.get("label") or f"{a.get('project') or 'Local'} {a.get('duty') or ''}".strip(),
                    mission_ref=a.get("source") or "attention", state="blocked",
                    detail={"title": "Needs a look", "body": a.get("text") or ""},
                    blocker={"cause": a.get("text") or "", "cls": a.get("blocker"), "rerun": False, "place": a.get("place")})
     else:
         return None
+    out["line"] = mission_line(out, hint)
+    _settle_steps(out, hint)
     return out
+
+
+# The steps a finished mission does not show as "Not started": a step the kind never needed (or that did not apply) is "Skipped", with the reason in its note.
+# A mission still under way keeps its pending steps as "Not started": those are still to come.
+def _settle_steps(out, hint=None):
+    nodes = out.get("pipeline")
+    if not nodes or out.get("state") != "done":
+        return
+    kind, ref = out.get("kind"), out.get("mission_ref") or ""
+    why = {"brief": "Optional, not made", "cycle": "Not needed for a cycle mission"}.get(kind) or f"Not needed for a {kind if kind != 'panel' else (ref or 'panel')} mission"
+    if hint in ("nothing", "report-only", "taken"):
+        why = {"nothing": "Not needed: nothing to build", "report-only": "Not needed: a report-only cycle", "taken": "Not needed: taken by someone else"}[hint]
+    for n in nodes:
+        if n.get("state") == "notstarted":
+            n["state"], n["note"] = "skipped", why
+
+
+def mission_line(out, hint=None):
+    """One plain sentence under a mission's title: what its state means and what comes next, built from the mission's own data. Empty
+    when the state speaks for itself (a mission still running, blocked or waiting says so in its own card)."""
+    kind, state, project = out.get("kind"), out.get("state"), out.get("project")
+    body = (out.get("detail") or {}).get("body") or ""
+    if kind == "cycle" and state == "awaiting":
+        return (out.get("ticket") or {}).get("next") or body
+    if state != "done":
+        return ""
+    if kind == "panel":
+        n, k = len(out.get("items") or []), out.get("fixes_started") or 0
+        if not n:
+            return "The panel ruled nothing worth doing, so there is nothing to fix."
+        if k:
+            return f"The panel ruled on {n} {'item' if n == 1 else 'items'}; fixing them is optional and {k} {'fix has' if k == 1 else 'fixes have'} been started. Each fix is a mission of its own."
+        return (f"The panel ruled on {n} {'item' if n == 1 else 'items'}; fixing them is optional, start it from the Work tab."
+                + (f" They would be fixed in {project}." if project else ""))
+    if kind == "fix":
+        return {"merged": "The pull request was merged. Nothing more is needed.", "closed": "The pull request was closed without merging.",
+                "nothing": "There was nothing to build, so nothing more happens.", "taken": "Someone else already took this one."}.get(hint or "", body)
+    if kind == "cycle":
+        return {"nothing": "The cycle found nothing to build, so nothing is waiting.", "report-only": "A report-only cycle: nothing was written and nothing is waiting."}.get(hint or "", body)
+    if kind == "run":
+        return "The run finished and its result is on this page. Nothing is waiting for you."
+    return body
 
 
 def mission_view(mid):
@@ -4995,6 +5071,7 @@ def _build_state():
         "connectors": _safe(brain_connectors, []),
         "integrations": read_json(STATE / "integrations-status.json", {}),
         "memory": _safe(memory_view),
+        "addons": addons_list(),
         **{k: _safe(f) for k, f in EXT["state"].items()},
     }
 

@@ -873,6 +873,11 @@ class World:
 
     def inbox(self, t, runs):
         items = [i for x in self.EXT for i in x.inbox(self, t, runs)]
+        # one invented add-on, so the Add-on label and the Add-ons group of the scope box can be seen: it has no place of its own, only an alert
+        hk = "demo:hermes:digest"
+        items.append({"id": hk, "source": "hermes", "addon": "hermes", "label": "Hermes · evening digest", "severity": "BLOCKED",
+                      "text": "The evening digest did not go out: the mail account it sends from needs to be signed in again.",
+                      "at": self.ago(minutes=35), "stale": False, "acknowledged": hk in self.acks})
         last = {}
         for r in runs:
             last[(r["project"], r["duty"])] = r
@@ -962,6 +967,7 @@ class World:
                                  "error_short": "token expired" if n == "facebook" and t >= FEED_BREAKS else ""}
                              for n, m in (("ga4", 11), ("gmail@work", 6), ("gmail@personal", 9), ("slack", 3), ("linkedin", 55), ("facebook", 19), ("instagram", 19))},
             "connectors": self.connectors(t), "memory": self.memory(),
+            "addons": [{"id": "hermes", "label": "Hermes", "place": ""}],
         }
         for x in self.EXT:
             out.update(x.state(self, t, runs))

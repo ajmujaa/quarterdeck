@@ -3427,7 +3427,59 @@ _r = _mcy({**_cy, "status": "needs-human", "final": "3 finding(s) are still open
 check("cycle: a hand-over to a person shows the Seal group as the blocked one", _r["state"] == "blocked" and _states(_r)[3] == "blocked" and "still open" in _r["blocker"]["cause"])
 check("cycle: a report-only record is done and claims no stage it did not run",
       _states(_mcy({**_cy, "status": "report-only", "apply": False, "final": "report only", "pr": None, "stages": _cy["stages"][:2]
-                    + [{**_cst("shipwright", "Shipwright", "shipwright", "would", "WOULD", 0), "state": "would"}]}))[2:] == ["notstarted"] * 3)
+                    + [{**_cst("shipwright", "Shipwright", "shipwright", "would", "WOULD", 0), "state": "would"}]}))[2:] == ["skipped"] * 3)   # was "notstarted": a Done mission never shows Not started steps
+# ---- mission steps by kind: a finished mission never shows "Not started" steps; the steps its kind does not need are Skipped with the reason, and one plain sentence says what Done means ----
+_nostart = lambda m: [n["id"] for n in (m["pipeline"] or []) if n["state"] == "notstarted"]
+_tx_done = {**_tx, "ruling": [{"title": "Fix one", "kind": "change", "tier": "routine", "claim": "c", "where": "w", "action": "a"},
+                              {"title": "Fix two", "kind": "change", "tier": "routine", "claim": "c", "where": "w", "action": "a"}]}
+_mp = lambda tx, fixes=None: d.compose_mission("panel:pp", lambda i: tx if i == "pp" else None, {} if fixes is None else fixes, [], [], {})
+_r = _mp(_tx_done)
+check("steps: a done design-panel mission has only its own steps, Build, Verify and Review are Skipped (Not needed for a design panel mission), none Not started",
+      _r["state"] == "done" and _states(_r) == ["done", "done", "skipped", "skipped", "skipped"] and not _nostart(_r)
+      and all(n["note"] == "Not needed for a design panel mission" for n in _r["pipeline"][2:]))
+check("steps: the line under Done is the panel sentence with the real count and the project, and names the Work tab",
+      _r["line"] == "The panel ruled on 2 items; fixing them is optional, start it from the Work tab. They would be fixed in alpha."
+      and _mp({**_tx_done, "ruling": _tx_done["ruling"][:1]})["line"].startswith("The panel ruled on 1 item; fixing them is optional")
+      and "ruled nothing worth doing" in _mp({**_tx_done, "ruling": []})["line"] and "in " not in _mp({**_tx_done, "project": None})["line"].split("Work tab.")[1])
+_r = _mp(_tx_done, {"pp#1": {**_fx["pp#1"]}})
+check("steps: a panel with a fix started from one of its items shows that fix's steps (Build active) and says so in its line, still without a Not started step under Done",
+      _r["state"] == "done" and _r["pipeline"][2]["state"] == "active" and _r["pipeline"][3]["state"] in ("active", "skipped") and not _nostart(_r) and "1 fix has been started" in _r["line"])
+_r = _mp({**_tx_done, "status": "running"})
+check("steps: a panel still arguing is running, its Panel step is Active, and it has no line yet", _r["state"] == "running" and _r["pipeline"][1]["state"] == "active" and _r["line"] == "")
+_r = _m("fix:pp#1")
+check("steps: a running fix still shows its pending steps as Not started, and has no line", _r["state"] == "running" and _nostart(_r) == ["verify", "review"] and _r["line"] == "")
+_fxd = lambda st, **kw: _m("fix:pp#1", {"pp#1": {**_fx["pp#1"], "status": st, "step": None, "plan": None, "issue": None, "pr": None, "verdict": None, **kw}})
+_r = _fxd("nothing", detail="the code already does it")
+check("steps: a fix with nothing to build is done, every step Skipped with the reason, and the line says nothing more happens",
+      _r["state"] == "done" and not _nostart(_r) and set(_states(_r)) == {"skipped"} and _r["pipeline"][0]["note"] == "Not needed: nothing to build" and "nothing to build" in _r["line"])
+_r = _fxd("taken")
+check("steps: a fix someone else took is done with no Not started step, and says who", _r["state"] == "done" and not _nostart(_r) and "Someone else" in _r["line"] and _r["pipeline"][2]["note"] == "Not needed: taken by someone else")
+_r = _m("fix:pp#1", {"pp#1": {**_pr, "status": "merged"}})
+check("steps: a merged fix is done at every step and says the pull request was merged", _states(_r) == ["done"] * 5 and not _nostart(_r) and _r["line"].startswith("The pull request was merged"))
+_r = _m("fix:pp#1", {"pp#1": {**_pr, "status": "closed"}})
+check("steps: a fix closed without merging keeps Review as Skipped and says so", _r["state"] == "done" and not _nostart(_r) and _states(_r)[4] == "skipped" and "closed without merging" in _r["line"])
+_r = _mcy({**_cy, "status": "nothing", "pr": None, "final": "nothing to build", "stages": _cy["stages"][:2]})
+check("steps: a cycle with nothing to build is done, its later groups Skipped with the reason, and the line says nothing is waiting",
+      _r["state"] == "done" and not _nostart(_r) and _states(_r)[2:] == ["skipped"] * 3 and _r["pipeline"][2]["note"] == "Not needed: nothing to build" and "nothing is waiting" in _r["line"])
+_r = _mcy(_cy)
+check("steps: a cycle waiting for review keeps its not-yet-reached group as Not started (it is still to come), and its line is the existing review sentence",
+      _r["state"] == "awaiting" and _nostart(_r) == ["seal"] and "Review the branch" not in _r["line"] and _r["line"].startswith("u is open"), _r["line"])
+_r = _mcy({**_cy, "ticket": 2, "branch": "ticket/2-x", "review": "git diff main..ticket/2-x", "pr": None, "final": "built"})
+check("steps: a ticket cycle waiting for review says what is next in its line", _r["state"] == "awaiting" and "Review the branch ticket/2-x" in _r["line"])
+_r = _mcy({**_cy, "status": "running", "finished": None, "final": "", "pr": None, "stages": _cy["stages"][:2] + [_cst("shipwright", "Shipwright", "shipwright", "running", "", 0)]})
+check("steps: a running cycle shows its pending groups as Not started", _r["state"] == "running" and _nostart(_r) == ["review", "seal", "human"] and _r["line"] == "")
+_bm = lambda st, ms: d.compose_mission("brief:x", None, {}, [], [], {}, get_brief=lambda i: {"id": "b1", "status": st, "mockups": {"state": ms}, "brief": None, "idea": "i", "project": "alpha"})
+_r = _bm("approved", "none")
+check("steps: an approved brief with no mock-ups is done, the mock-up steps are Skipped (optional) and the line is the approval state",
+      _r["state"] == "done" and not _nostart(_r) and _states(_r) == ["done", "done", "skipped", "skipped"] and _r["pipeline"][2]["note"] == "Optional, not made" and "approved" in _r["line"].lower())
+check("steps: a brief waiting for you, or still drafting, keeps its later steps as Not started and has no line",
+      all(_nostart(_bm(a, b)) and _bm(a, b)["line"] == "" for a, b in (("proposed", "none"), ("drafting", "none"))))
+_pl = d.compose_mission("plan:p1", None, {}, [], [], {}, get_plan=lambda i: {"id": "p1", "project": "alpha", "status": "approved", "sprint": [1], "moves": [{"issue": 1, "result": "moved", "from": "Backlog"}], "plan": [], "created": "2026-01-01T00:00:00Z"})
+check("steps: a plan whose cards all moved is done at every step, with the plan's own sentence for a line", _pl["state"] == "done" and not _nostart(_pl) and "moved" in _pl["line"])
+_r = _m("run:2026-01-01T00:00:00Z|alpha|surveyor", runs=[{**_run, "verdict": "CLEAN", "detail": "all fine"}])
+check("steps: a finished ledger run has no steps to show and a one-line sentence saying nothing is waiting", _r["state"] == "done" and _r["pipeline"] is None and "Nothing is waiting" in _r["line"])
+check("steps: no state of any kind shows both the Done state and a Not started step (every kind, every status the demo world and the fixtures produce)",
+      all(not (m["state"] == "done" and _nostart(m)) for m in [_mp(_tx_done), _fxd("nothing"), _fxd("taken"), _bm("approved", "none"), _bm("approved", "ready"), _mcy({**_cy, "status": "nothing", "stages": _cy["stages"][:2]}), _pl]))
 check("cycle: unknown, malformed and path-like cycle ids name nothing; without a reader there is nothing to show",
       all(_mcy(_cy, x) is None for x in ("cycle:nope", "cycle:../x", "cycle:", "cycle:a/b")) and d.compose_mission("cycle:cyc-a-7-1", lambda i: None, {}, [], [], {}) is None)
 _td = _tf.mkdtemp()

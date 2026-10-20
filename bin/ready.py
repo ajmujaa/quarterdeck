@@ -156,7 +156,12 @@ def _repo_item(name, entry):
             "detail": "Optional: tickets work on this computer without it. " + _attach.no_repo_sentence(name), "action": f"qtdeck repo {name}"}
 
 
-def _docs_item(name, sv, draft):
+def docs_branch(project):
+    j = read_json(_folder(project) / "docs-branch.json", None)
+    return j if isinstance(j, dict) and isinstance(j.get("branch"), str) else None
+
+
+def _docs_item(name, sv, draft, branch=None, entry=None):
     if not sv:
         return {"key": "docs", "label": "Docs", "state": "unknown", "detail": "The project has not been surveyed, so its documents are not known.", "action": ""}
     miss = sv["docs"]["missing"]
@@ -168,6 +173,11 @@ def _docs_item(name, sv, draft):
                     "action": f"qtdeck docs {name} --apply", "draft": waiting, "missing": sorted(miss)}
     if not miss:
         return {"key": "docs", "label": "Docs", "state": "done", "detail": "A README and an architecture overview are there.", "action": "", "missing": []}
+    if branch:
+        where = branch["url"] if branch.get("url") else f"the branch {branch['branch']}"
+        review = f"git -C {expand((entry or {}).get('path', ''))} diff {(entry or {}).get('default_branch') or 'main'}...{branch['branch']}"
+        return {"key": "docs", "label": "Docs", "state": "todo", "detail": f"Drafted docs are waiting for your review in {where}. Read them and merge them yourself.", "action": review,
+                "branch": branch["branch"], "missing": sorted(miss)}
     return {"key": "docs", "label": "Docs", "state": "todo",
             "detail": "Missing: " + " and ".join(names[k] for k in ("readme", "architecture") if k in miss) + ". The scribe can draft " + ("it" if len(miss) == 1 else "them")
             + " from the survey; nothing is written to your project until you say so.",
@@ -199,11 +209,11 @@ def _cycle_item(name, entry):
             "action": f"qtdeck enable {name} cycle"}
 
 
-def build(name, entry, sv, record=None, vrec=None, draft=None, path=None, preview=False):
+def build(name, entry, sv, record=None, vrec=None, draft=None, path=None, preview=False, branch=None):
     """The items, in order. `entry` is the registry entry (or the proposal's entry for a preview); nothing here reads a file but through the arguments."""
     path = path or entry.get("path", "")
     return [_scan_item(name, sv, path, preview), _verify_item(name, entry, sv, vrec, path, preview), _repo_item(name, entry),
-            _docs_item(name, sv, draft), _agents_item(name, entry, record), _cycle_item(name, entry)]
+            _docs_item(name, sv, draft, branch, entry), _agents_item(name, entry, record), _cycle_item(name, entry)]
 
 
 def next_action(name, entry, items, tk=None, path=None):
@@ -228,7 +238,8 @@ def next_action(name, entry, items, tk=None, path=None):
         cmd = f"qtdeck cycle {name} --ticket {t['id']}" if t.get("source") != "github" else f"qtdeck cycle {name} --issue {t.get('issue')}"
         return {"kind": "mission", "text": f"Start a mission from ticket {t['id']}: {cmd}", "command": cmd}
     cmd = f"qtdeck ticket new {name} \"<what you want built>\""
-    return {"kind": "ticket", "text": f"File your first ticket: {cmd}", "command": cmd}
+    word = "next" if (tk or {}).get("tickets") else "first"
+    return {"kind": "ticket", "text": f"File your {word} ticket: {cmd}", "command": cmd}
 
 
 def is_ready(items):
@@ -241,7 +252,7 @@ def view(project):
     if entry is None:
         raise ValueError(f"'{project}' is not registered (see: qtdeck projects)")
     sv = _survey.load(project)
-    items = build(project, entry, sv, attach_record(project), verify_record(project), docs_draft(project))
+    items = build(project, entry, sv, attach_record(project), verify_record(project), docs_draft(project), branch=docs_branch(project))
     return {"project": project, "items": items, "next": next_action(project, entry, items, tickets_of(project)), "ready": is_ready(items), "preview": False}
 
 

@@ -580,6 +580,24 @@ class World:
                      "options": opts, "stack": PROJECTS[p]["kind"].capitalize() + " (invented for the demo).", "cycle": p in self.cycle_projects(),
                      "tickets": self.ticket_list(p), "drafts": self.ticket_drafts(p), "running": False, "last_draft_error": "", "last_file_error": "", "request_limit": 2000}
 
+    def ready_view(self, project):
+        """The Ready card in Demo mode: invented, built by the real checklist code from an invented survey. Nothing is read from a disk."""
+        import ready as _ready
+        if project not in PROJECTS:
+            return 400, {"error": "unknown project"}
+        pr = PROJECTS[project]
+        entry = {"repo": "" if project in NO_REPO else f"{ORG}/{project}", "path": f"~/Projects/{project}", "default_branch": "main", "verify": pr["verify"],
+                 "duties": pr["duties"], "cycle": project in self.cycle_projects()}
+        missing = {} if project != "saltpan-blog" else {"readme": "There is no README (invented for the demo).", "architecture": "There is no architecture overview (invented for the demo)."}
+        sv = {"stack": {"summary": pr["kind"].capitalize() + " (invented for the demo)"}, "docs": {"present": {}, "missing": missing}, "surveyed_at": self.at(self.elapsed()),
+              "surveyed_epoch": 2 ** 31, "package_managers": ["npm"]}
+        vrec = {"command": pr["verify"], "exit": 0, "seconds": 41, "at": self.at(self.elapsed()), "sandbox": "invented"} if pr["verify"] else None
+        record = {"duty_reasons": {"joiner": {"suggested": True, "why": "invented for the demo: it reviews the interface for small screens"}}}
+        items = _ready.build(project, entry, sv, record, vrec, None, path=entry["path"])
+        tk = {"tickets": [t for t in self.ticket_list(project) if t.get("status") == "open"]}
+        return 200, {"project": project, "items": items, "next": _ready.next_action(project, entry, items, tk), "ready": _ready.is_ready(items), "preview": False,
+                     "draft": None, "running": {"prove": False, "docs": False}, "last_error": {"prove": "", "docs": ""}, "has_repo": bool(entry["repo"]), "default_branch": "main", "demo": True}
+
     def mockup_page(self, bid, name):
         return self.maker.mockup_page(bid, name) if self.maker else None
 
@@ -1002,6 +1020,8 @@ class World:
             return (200, {"card": c, "fetched": self.at(t)}) if c else (404, {"error": "no such card"})
         if path == "/api/tickets":
             return self.tickets_view(q("project"))
+        if path == "/api/ready":
+            return self.ready_view(q("project"))
         if path == "/api/progress":
             if q("project") not in PROJECTS:
                 return 400, {"error": "unknown project"}
@@ -1311,6 +1331,8 @@ class World:
             return self.cycle_start(b.get("project"), b.get("issue"), b.get("confirm"), b.get("ticket"))
         if path in ("/api/ticket/draft", "/api/ticket/file", "/api/ticket/discard", "/api/repo"):
             return 400, {"error": "Demo mode: nothing is drafted, filed or created."}
+        if path in ("/api/ready/prove", "/api/docs/draft", "/api/docs/apply", "/api/project/duties"):
+            return 400, {"error": "Demo mode: nothing is run, drafted or changed."}
         if path == "/api/work":
             project, issue, action = b.get("project"), b.get("issue"), b.get("action")
             if project not in PROJECTS:

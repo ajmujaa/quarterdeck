@@ -3528,7 +3528,7 @@ def project_agents_api(name):
 
 def attach_api(b):
     """Look at a folder and propose how the crew should work on it; with apply and confirm, register it. Read-only until the owner confirms."""
-    import attach as _attach, scan as _scan
+    import attach as _attach, scan as _scan, survey as _survey, ready as _ready
     raw = str(b.get("path") or "").strip()
     if not raw:
         return 400, {"error": "say which folder"}
@@ -3544,10 +3544,13 @@ def attach_api(b):
         agents = None
         if b.get("edits") is not None:
             prop = _attach.edit(prop, b["edits"])
+        sv = _survey.survey(path, prop["name"])           # the survey (bin/survey.py): files only; it is kept only by the confirmed apply below
+        ready = None
         if b.get("apply"):
             if b.get("confirm") is not True:
                 return 400, {"error": "confirm is required: this adds the project to your registry"}
-            _attach.apply(prop, prof, PROJECTS_FILE, proposed, "owner, reviewed in the dashboard" if b.get("edits") is not None else "owner, with --apply")
+            _attach.apply(prop, prof, PROJECTS_FILE, proposed, "owner, reviewed in the dashboard" if b.get("edits") is not None else "owner, with --apply", sv=sv)
+            ready = _ready.view(prop["name"])
             if b.get("agents_md") is True:                  # opt-in, and only inside the confirmed apply
                 try:
                     agents = _attach.write_agents_md(prop, path)
@@ -3559,11 +3562,15 @@ def attach_api(b):
                     f.write(f"{iso(now_utc())} registered {log_field(prop['name'])}\n")
             except OSError:
                 pass                                   # a note that could not be written never undoes the registration
+        if ready is None:                                   # not registered yet: the checklist as it would be right after attaching
+            items = _attach.preview_items(prop, sv, str(path))
+            ready = {"project": prop["name"], "items": items, "next": {"kind": "attach", "text": "Add this project, then run the verify command once to prove it.", "command": ""}, "ready": False, "preview": True}
+        ready["docs_line"] = _attach.docs_line(sv).replace("<name>", prop["name"])
     except ValueError as e:
         return 400, {"error": str(e)}
     except OSError as e:
         return 500, {"error": str(e)[:200]}
-    return 200, {"profile": prof, "proposal": prop, "applied": bool(b.get("apply")), "agents_md": agents, "duty_options": [{"name": x["name"], "role": x["role"]} for x in duty_list() if x["name"] in _attach.known_duties()], "guardrail_options": _attach.GUARDRAILS, "pack_status": {x["id"]: x["status"] for x in _packs_mod.load()}}
+    return 200, {"profile": prof, "survey": sv, "ready": ready, "proposal": prop, "applied": bool(b.get("apply")), "agents_md": agents, "duty_options": [{"name": x["name"], "role": x["role"]} for x in duty_list() if x["name"] in _attach.known_duties()], "guardrail_options": _attach.GUARDRAILS, "pack_status": {x["id"]: x["status"] for x in _packs_mod.load()}}
 
 
 # ---- tickets and the GitHub repo, on the page --------------------------------------------------------------------------------------------
@@ -3825,6 +3832,181 @@ def repo_api(b):
     pushed = any(ln.startswith("pushed ") for ln in lines)
     return 200, {"ok": True, "code": 0, "repo": now, "private": True, "pushed": pushed,
                  "message": f"Created the private repository {now} and connected it." + (" The default branch was pushed once." if pushed else " Nothing was pushed.")}
+
+
+# ---- the ready checklist, the scribe's docs and the crew's switches, on the page ---------------------------------------------------------------
+# The Ready card (bin/ready.py is the checklist; this is its page). Reading it reads files only. Three things can start work, each one click with
+# confirm:true, each the command line's own command run detached (the way a cycle is started): `qtdeck ready <p> --prove` (the verify command, once,
+# in the sandbox, on a throwaway copy of the default branch), `qtdeck docs <p> [which]` (the scribe drafts; nothing is written to the project) and
+# `qtdeck docs <p> --apply` (the kept draft onto a NEW branch, or a pull request; never the default branch). Duties are switched by the same function
+# `qtdeck enable` uses. Each action logs the action and the project (never a value) to logs/tickets.log.
+READY_JOBS = {}                  # (project, "prove" | "draft" | "apply") -> {"popen", "at"}
+DEMO_READY_MSG = "Demo mode: nothing is run, drafted or changed."
+DOCS_WHICH = ("readme", "architecture")
+
+
+def _ready_job_alive(project, kind):
+    with TICKET_LOCK:
+        job = READY_JOBS.get((project, kind))
+    return bool(job and job["popen"].poll() is None)
+
+
+def _ready_running(project, locks=None):
+    locks = running_locks() if locks is None else locks
+    return {"prove": f"prove-{project}" in locks or _ready_job_alive(project, "prove"),
+            "docs": f"scribe-{project}" in locks or _ready_job_alive(project, "draft") or _ready_job_alive(project, "apply")}
+
+
+def _ready_error(project, kind):
+    """Why the last run this dashboard started for the project made nothing, as one sentence, or "". Nothing here quotes the project's text."""
+    with TICKET_LOCK:
+        job = READY_JOBS.get((project, kind))
+    if not job or job["popen"].poll() is None:
+        return ""
+    if kind == "prove":
+        rec = read_json(STATE / "projects" / project / "verify.json", None)
+        if isinstance(rec, dict) and str(rec.get("at", "")) >= job["at"]:
+            return ""
+        try:
+            tail = [ln.strip() for ln in (LOGS / f"ready-{project}.log").read_text(errors="replace").split("started by dashboard")[-1].splitlines() if ln.strip()]
+        except OSError:
+            tail = []
+        return plain_failure(tail[-1][:200]) if tail else "The verify command could not be run. Nothing was kept."
+    rows = [r for r in read_json(STATE / "runs.json", []) if isinstance(r, dict) and r.get("project") == project and r.get("duty") == "scribe"
+            and isinstance(r.get("at"), str) and r["at"] >= job["at"]]
+    row = rows[-1] if rows else None
+    if row and row.get("verdict") in ("DRAFTED", "BRANCH", "PR"):
+        return ""
+    detail = " ".join(str(row.get("detail") or "").split()) if row else ""
+    if row and row.get("verdict") == "NOTHING_TO_DRAFT":
+        return "The scribe found nothing it could write without guessing, or the documents are there already."
+    if row and row.get("verdict") == "REFUSED" and "already exists" in detail:
+        return "A file of that name appeared in the project since the draft was made, so nothing was written. Read it, then draft again if it is still missing."
+    if row and row.get("verdict") == "REFUSED":
+        return "The draft did not pass Quarterdeck's checks (it looks like it holds a password or a key), so nothing was kept. Try again."
+    if row:
+        return plain_failure(detail)[:300]
+    return "The scribe stopped without a result, perhaps at a usage limit. Try again later."
+
+
+def ready_view(project):
+    """GET /api/ready?project=: the checklist, the one next action, the waiting docs draft and what is running. Read-only; no secret in it."""
+    import ready as _ready, docs as _docs
+    no_demo("read the ready checklist")
+    ent = _ticket_entry(project)
+    v = _ready.view(project)
+    dr = _docs.load_draft(project)
+    v["draft"] = _ticket_shown({"at": dr.get("at"), "files": [{"path": f.get("path"), "content": f.get("content")} for f in dr["files"] if isinstance(f, dict)],
+                                "notes": dr.get("notes") or []}) if dr else None
+    v["running"] = _ready_running(project)
+    v["last_error"] = {"prove": _ready_error(project, "prove"), "docs": _ready_error(project, "draft") or _ready_error(project, "apply")}
+    v["has_repo"] = bool(ent.get("repo"))
+    v["default_branch"] = ent.get("default_branch") or "main"
+    return v
+
+
+def _ready_start(project, kind, argv):
+    LOGS.mkdir(exist_ok=True)
+    at = iso(now_utc())
+    p = _ticket_start(argv, f"ready-{project}.log")
+    with TICKET_LOCK:
+        READY_JOBS[(project, kind)] = {"popen": p, "at": at}
+    return p
+
+
+def ready_prove_api(b):
+    no_demo("run the verify command")
+    if b.get("confirm") is not True:
+        return 400, {"error": "confirm is required: this runs the project's verify command once, in the sandbox"}
+    project = b.get("project")
+    try:
+        ent = _ticket_entry(project)
+        if not ent.get("verify"):
+            return 400, {"error": "this project has no verify command to prove: set one first"}
+        if _ready_running(project)["prove"]:
+            return 409, {"error": f"the verify command is already running for {project}: wait for it to finish"}
+        if not (Path(os.path.expanduser(str(ent.get("path") or ""))) / ".git").exists():
+            return 400, {"error": "that project's folder is not a git checkout"}
+    except ValueError as e:
+        return 400, {"error": str(e)}
+    try:
+        _ready_start(project, "prove", [str(ROOT / "bin" / "qtdeck"), "ready", project, "--prove"])
+    except OSError as e:
+        return 500, {"error": "could not start it: " + type(e).__name__}
+    _ticket_log("ready-prove", project)
+    return 200, {"started": True}
+
+
+def docs_draft_api(b):
+    no_demo("draft the docs")
+    if b.get("confirm") is not True:
+        return 400, {"error": "confirm is required: drafting asks the model, which costs a few cents"}
+    project, which = b.get("project"), b.get("which")
+    try:
+        ent = _ticket_entry(project)
+        if which not in (None, "", "both") + DOCS_WHICH:
+            return 400, {"error": "which is readme, architecture or both"}
+        if _ready_running(project)["docs"]:
+            return 409, {"error": f"the scribe is already working on {project}: wait for it to finish"}
+        if not (Path(os.path.expanduser(str(ent.get("path") or ""))) / ".git").exists():
+            return 400, {"error": "that project's folder is not a git checkout"}
+        bud = daily_budget()
+        if bud is not None and spent_today() >= bud:
+            return 409, {"error": f"today's budget is spent (${spent_today():.2f} of ${bud:.2f}); drafting would stop at once"}
+    except ValueError as e:
+        return 400, {"error": str(e)}
+    argv = [str(ROOT / "bin" / "qtdeck"), "docs", project] + ([which] if which in DOCS_WHICH else [])
+    try:
+        _ready_start(project, "draft", argv)
+    except OSError as e:
+        return 500, {"error": "could not start the scribe: " + type(e).__name__}
+    _ticket_log("docs-draft", project)
+    return 200, {"started": True}
+
+
+def docs_apply_api(b):
+    import docs as _docs
+    no_demo("put the docs on a branch")
+    if b.get("confirm") is not True:
+        return 400, {"error": "confirm is required: this makes a NEW branch (and, with a GitHub repo, opens a pull request); it never touches the default branch"}
+    project = b.get("project")
+    try:
+        ent = _ticket_entry(project)
+        if _docs.load_draft(project) is None:
+            return 400, {"error": "there is no draft to put on a branch: draft it first and read it"}
+        if _ready_running(project)["docs"]:
+            return 409, {"error": f"the scribe is already working on {project}: wait for it to finish"}
+    except ValueError as e:
+        return 400, {"error": str(e)}
+    try:
+        _ready_start(project, "apply", [str(ROOT / "bin" / "qtdeck"), "docs", project, "--apply"])
+    except OSError as e:
+        return 500, {"error": "could not start it: " + type(e).__name__}
+    _ticket_log("docs-apply", project)
+    return 200, {"started": True, "pull_request": bool(ent.get("repo"))}
+
+
+def project_duties_api(b):
+    """Turn duties on or off, and allow or forbid full cycles: attach.set_duties, the function `qtdeck enable` and `qtdeck disable` use."""
+    import attach as _attach
+    no_demo("change the crew")
+    if b.get("confirm") is not True:
+        return 400, {"error": "confirm is required: this changes which duties may run for the project"}
+    project, add, remove, cycle = b.get("project"), b.get("add", []), b.get("remove", []), b.get("cycle")
+    for name, v in (("add", add), ("remove", remove)):
+        if not isinstance(v, list) or not all(isinstance(x, str) for x in v) or len(v) > 40:
+            return 400, {"error": f"{name} is a list of duty names"}
+    if cycle is not None and not isinstance(cycle, bool):
+        return 400, {"error": "cycle is true or false"}
+    try:
+        _ticket_entry(project)
+        r = _attach.set_duties(project, add=add, remove=remove, cycle=cycle)
+    except ValueError as e:
+        return 400, {"error": str(e)}
+    except OSError as e:
+        return 500, {"error": "could not write: " + type(e).__name__}
+    _ticket_log("duties", project)
+    return 200, r
 
 
 # ---- design briefs, mock-ups and sprint plans: the owner's approval screens ------------------------------------------
@@ -5084,6 +5266,12 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as e:
                 return self._send(400, json.dumps({"error": str(e)}))
 
+        if u.path == "/api/ready":
+            try:
+                return self._send(200, json.dumps(ready_view((q.get("project") or [""])[0])))
+            except ValueError as e:
+                return self._send(400, json.dumps({"error": str(e)}))
+
         if u.path == "/api/board":
             name = (q.get("project") or [""])[0]
             projects = read_json(PROJECTS_FILE, {})
@@ -5323,7 +5511,8 @@ class Handler(BaseHTTPRequestHandler):
             code, body = attach_api(b)
             return self._send(code, json.dumps(body))
 
-        for path_, fn_ in (("/api/ticket/draft", ticket_draft_api), ("/api/ticket/file", ticket_file_api), ("/api/ticket/discard", ticket_discard_api), ("/api/repo", repo_api)):
+        for path_, fn_ in (("/api/ticket/draft", ticket_draft_api), ("/api/ticket/file", ticket_file_api), ("/api/ticket/discard", ticket_discard_api), ("/api/repo", repo_api),
+                         ("/api/ready/prove", ready_prove_api), ("/api/docs/draft", docs_draft_api), ("/api/docs/apply", docs_apply_api), ("/api/project/duties", project_duties_api)):
             if u.path == path_:
                 code, body = fn_(b)
                 return self._send(code, json.dumps(body))

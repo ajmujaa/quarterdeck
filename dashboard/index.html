@@ -1161,7 +1161,7 @@ function viewMissions(){
         sub: `${esc(p.project)} · ${esc(p.discipline)} · ${esc(p.status)} · ${ago(p.started)}`})).join("")
       : emptyState({inline: true, title: "No current panels in this scope.", body: "Open Panels to inspect historical work or run a new review."}),
       {kicker: "Available evidence", label: "Available evidence"});
-  return `<div class="stack">${repoOptionsCard(sel)}${ticketsCard(sel)}${intro}<div id="missionform"></div><div class="mission-list">${list}</div>${ev}</div>`;
+  return `<div class="stack">${readyCard(sel)}${readyLink(sel)}${repoOptionsCard(sel)}${ticketsCard(sel)}${intro}<div id="missionform"></div><div class="mission-list">${list}</div>${ev}</div>`;
 }
 function viewInbox(){
   const alerts = obsAttention().filter(x => hit(x.source,x.text,x.kind));
@@ -1402,6 +1402,164 @@ function repoOptionsCard(project){
     <ol class="tk-steps">${((o.c || {}).steps || []).map(s => `<li>${esc(s)}</li>`).join("")}</ol>`);
   const dd = row("d", (o.d || {}).title || "Not now", `<p>The tickets box below keeps tickets on this computer. The crew can build one on a local branch that you review. Nothing goes to GitHub unless you connect a repo and click.</p>`);
   return card("No GitHub repo yet", `<p class="hint">${esc(d.sentence)}</p><div class="tk-opts">${a}${b}${c}${dd}</div>`, {kicker: "Tickets · " + project, label: "No GitHub repo yet", cls: "tk-card"});
+}
+/* ---- Ready: the one checklist that says whether a project is ready for the crew, and the one thing to do next ----
+   readyCard(project) and readyItemsHtml(items) each return a string and read their data from RD (GET /api/ready), so a later page can move them whole.
+   The writes are POSTs with confirm:true (bin/dashboard.py, "the ready checklist, the scribe's docs and the crew's switches"): /api/ready/prove (the verify
+   command, once, in the sandbox), /api/docs/draft, /api/docs/apply (a NEW branch or a pull request, never the default branch), /api/project/duties. */
+const RD = {project: "", data: null, at: 0, loading: false, show: false, busy: "", error: "", how: false};
+const RD_OFFER = {repo: 1, docs: 1, agents: 1, cycle: 1};            // offers, said calmly: never a blocker
+const rdData = project => RD.data && RD.data.project === project ? RD.data : null;
+function rdScope(p){        // a different project starts with a clean card
+  if(RD.project === p) return;
+  Object.assign(RD, {project: p, data: null, at: 0, show: false, busy: "", error: "", how: false});
+}
+async function loadReady(force){
+  const p = sel;
+  if(!p || RD.loading) return;
+  rdScope(p);
+  const d = rdData(p), quick = RD.busy || (d && (d.running.prove || d.running.docs));
+  if(!force && d && Date.now() - RD.at < (quick ? 1800 : 15000)) return;
+  RD.loading = true; RD.at = Date.now();
+  try{
+    const r = await fetch("/api/ready?project=" + encodeURIComponent(p));
+    if(r.status === 401){ showUnpaired(); return; }
+    const j = r.ok ? await r.json() : null;
+    if(j && sel === p){
+      const before = JSON.stringify(RD.data);
+      RD.data = j;
+      const changed = rdSettle(j) || JSON.stringify(j) !== before;
+      if(changed && view === "missions" && !tkTyping()) render();
+    }
+  }catch(e){ /* the next poll asks again */ }
+  finally{ RD.loading = false; }
+}
+function rdSettle(j){        // something this page started has ended: say how it went, once
+  if(!RD.busy || j.running.prove || j.running.docs) return false;
+  const kind = RD.busy; RD.busy = "";
+  const v = j.items.find(i => i.key === "verify"), docsErr = j.last_error.docs;
+  if(kind === "prove"){
+    RD.error = j.last_error.prove;
+    if(RD.error) announce(RD.error);
+    else if(v && v.state === "done") toast("The verify command passed in the sandbox.");
+    else announce("The verify command ran and failed. " + (v ? v.detail : ""));
+  }else if(kind === "draft"){
+    RD.error = docsErr;
+    if(docsErr) announce(docsErr); else if(j.draft) announce("The draft is ready to read. Nothing was written to your project.");
+  }else{
+    RD.error = docsErr;
+    if(docsErr) announce(docsErr); else toast(j.has_repo ? "The docs are on a new branch and a pull request was opened." : "The docs are on a new local branch. Nothing was pushed.");
+  }
+  return true;
+}
+const rdPill = i => i.state === "todo" && RD_OFFER[i.key] ? pill("", "optional") : pill(({done: "done", todo: "awaiting", blocked: "blocked"})[i.state] || "", ({done: "done", todo: "to do", blocked: "blocked", unknown: "unknown"})[i.state]);
+const rdShort = t => clip(String(t).split(/(?<=[a-z0-9)])\. /)[0], 110);
+function rdDraftHtml(d){
+  if(!d.draft) return "";
+  const busy = !!RD.busy || d.running.docs;
+  const label = d.has_repo ? "Open a pull request" : "Put it on a new branch";
+  return `<div class="rd-draft"><p class="sub">A draft is kept (${esc(d.draft.at || "")}). Nothing was written to your project. Read it first.</p>
+    ${d.draft.files.map(f => `<details class="rd-file"><summary>${esc(f.path)} <span class="sub">${esc(String(f.content).length)} characters</span></summary><pre tabindex="0" aria-label="Draft of ${esc(f.path)}">${esc(f.content)}</pre></details>`).join("")}
+    ${(d.draft.notes || []).map(n => `<p class="sub">${esc(n)}</p>`).join("")}
+    <div class="btns">${btn(label, {size: "small", click: act("rdApply"), disabled: busy, attrs: 'id="rd-apply"'})}
+      <span class="sub">${d.has_repo ? "Pushes a new branch only and opens a pull request." : "Makes a new local branch."} Never ${esc(d.default_branch)}.</span></div></div>`;
+}
+function rdItemBody(i, d){
+  let b = `<p>${esc(i.detail)}</p>`;
+  if(i.key === "verify" && i.action && i.state !== "done") b += `<p class="sub">${i.state === "todo" ? "Runs only when you click. " : ""}<code class="tk-sel">${esc(i.action)}</code></p>`;
+  if(i.key === "repo" && i.state === "todo") b += `<p class="sub">The four ways forward are in the card below and with <code class="tk-sel">${esc(i.action)}</code>.</p>`;
+  if(i.key === "docs"){
+    const miss = i.missing || [], busy = !!RD.busy || d.running.docs;
+    b += d.draft ? rdDraftHtml(d) : miss.length ? `<div class="btns">${miss.includes("readme") ? btn("Draft a README", {size: "small", click: act("rdDraft", "readme"), disabled: busy}) : ""}
+      ${miss.includes("architecture") ? btn("Draft an architecture overview", {size: "small", click: act("rdDraft", "architecture"), disabled: busy}) : ""}</div>
+      <p class="sub">Costs a few cents. The scribe reads the survey and the project; it writes nothing until you say so.</p>` : "";
+  }
+  if(i.key === "agents"){
+    b += `<ul class="rd-agents">${(i.on || []).map(a => `<li><b>${esc(a.duty)}</b> <span class="sub">${esc(a.why)}</span></li>`).join("")}</ul>`;
+    if((i.suggested || []).length) b += `<p class="sub">These fit this project and are off:</p><ul class="rd-agents">${i.suggested.map(a =>
+      `<li><b>${esc(a.duty)}</b> <span class="sub">${esc(a.why)}</span> ${btn("Turn on", {size: "small", click: act("rdTurnOn", a.duty), attrs: `aria-label="Turn on the ${esc(a.duty)}"`})}</li>`).join("")}</ul>`;
+  }
+  if(i.key === "cycle" && i.state === "todo") b += `<div class="btns">${btn("Allow cycles", {size: "small", click: act("rdCycle")})}</div>`;
+  return b;
+}
+function readyItemsHtml(items, d){
+  return `<div class="rd-list" role="list">${items.map(i => `<details class="rd-item" role="listitem"${i.state === "blocked" ? " open" : ""}><summary><span class="rd-label">${esc(i.label)}</span>${rdPill(i)}
+    <span class="sub">${esc(rdShort(i.detail))}</span></summary><div class="rd-body">${d ? rdItemBody(i, d) : `<p>${esc(i.detail)}</p>`}</div></details>`).join("")}</div>`;
+}
+function rdNextLabel(n){
+  return ({"set-verify": "Set a verify command", "fix-verify": "Prove it again", "enable-cycle": "Allow cycles"})[n.kind] || String(n.text).split(":")[0];
+}
+function readyCard(project){
+  rdScope(project || "");
+  const d = project ? rdData(project) : null;
+  if(!project || !d) return "";
+  if(d.ready && !RD.show) return "";
+  const n = d.next, busy = !!RD.busy || d.running.prove || d.running.docs;
+  const head = d.ready ? `<p class="hint" role="status">${esc(project)} is ready for a first ticket. The rest below is optional.</p>`
+    : `<p class="hint" role="status">${esc(project)} is not ready yet. One thing is left before a ticket makes sense.</p>`;
+  const run = busy ? callout("running", d.running.prove || RD.busy === "prove" ? "Proving" : "Working", d.running.prove || RD.busy === "prove"
+    ? "The verify command is running once in the sandbox, on a throwaway copy of the default branch. Your files are not used." : "The scribe is working. Nothing is written to your project.", {}).replace("<div ", `<div role="status" `) : "";
+  const err = RD.error && !busy ? callout("blocked", "That did not finish", esc(RD.error)) : "";
+  const how = RD.how && !busy ? `<div class="note-line">Run this in a terminal: <code class="tk-sel">${esc(n.command)}</code></div>` : "";
+  const go = btn(esc(rdNextLabel(n)), {variant: "primary", click: act("rdNext"), disabled: busy, attrs: 'id="rd-next"'});
+  return card("Is it ready?", `${head}${readyItemsHtml(d.items, d)}${run}${err}${how}<div class="btns rd-go">${go}</div><p class="sub" id="rd-next-line">Next: ${esc(n.text)}</p>`,
+    {kicker: "Ready? · " + project, label: "Is it ready?", cls: "rd-card"});
+}
+function readyLink(project){
+  const d = project ? rdData(project) : null;
+  if(!d || !d.ready || RD.show) return "";
+  return `<p class="note-line">${esc(project)} is ready for a first ticket. <button class="mlink link" ${act("rdShow")}>Ready? Show the checklist</button></p>`;
+}
+function rdShow(){ rdScope(sel); RD.show = true; render(); focusSoon("#rd-next"); }
+async function rdNext(){
+  const d = rdData(sel);
+  if(!d || RD.busy) return;
+  const n = d.next;
+  if(n.kind === "prove" || n.kind === "fix-verify") return rdProve();
+  if(n.kind === "ticket"){ const b = $("#tk-request"); if(b){ b.scrollIntoView({block: "center"}); b.focus(); } else window.scrollTo(0, document.body.scrollHeight); return; }
+  if(n.kind === "mission"){ const m = /ticket (\d+)/.exec(n.text); if(m) return tkMission(Number(m[1]), null); return; }
+  if(n.kind === "enable-cycle") return rdCycle();
+  RD.how = !RD.how; render();              // set-verify: the command is shown to copy; a verify command is typed, not clicked
+}
+async function rdProve(){
+  const p = sel, d = rdData(p);
+  if(!d || RD.busy) return;
+  if(!await confirmDlg(`This runs the verify command once, in the sandbox, on a throwaway copy of ${d.default_branch}. It is the project's own code, run with a minimal environment and no secrets. Your files are not used and nothing is installed.`, {title: "Run the verify command once?", ok: "Run it once"})) return;
+  const j = await post("/api/ready/prove", {project: p, confirm: true});
+  if(!j) return;
+  RD.busy = "prove"; RD.error = ""; RD.at = 0;
+  announce("Running the verify command once in the sandbox."); render(); loadReady(true);
+}
+async function rdDraft(which){
+  const p = sel;
+  if(RD.busy) return;
+  if(!await confirmDlg(`The scribe reads the survey of ${p} and its files, and drafts ${which === "readme" ? "a README" : "an architecture overview"}. It costs a few cents. Nothing is written to your project; you read the draft first.`, {title: "Draft it?", ok: "Draft it"})) return;
+  const j = await post("/api/docs/draft", {project: p, which, confirm: true});
+  if(!j) return;
+  RD.busy = "draft"; RD.error = ""; RD.at = 0;
+  announce("The scribe is drafting. This can take a minute and costs a few cents; nothing is written to your project."); render(); loadReady(true);
+}
+async function rdApply(){
+  const p = sel, d = rdData(p);
+  if(!d || RD.busy) return;
+  const msg = d.has_repo ? `This makes a new branch from ${d.default_branch}, pushes that branch only, and opens a pull request with the drafted files. ${d.default_branch} is never touched, and no file that exists is overwritten.`
+    : `This makes a new local branch from ${d.default_branch} with the drafted files. Nothing is pushed, ${d.default_branch} is never touched, and no file that exists is overwritten.`;
+  if(!await confirmDlg(msg, {title: d.has_repo ? "Open a pull request?" : "Put it on a new branch?", ok: d.has_repo ? "Open a pull request" : "Make the branch"})) return;
+  const j = await post("/api/docs/apply", {project: p, confirm: true});
+  if(!j) return;
+  RD.busy = "apply"; RD.error = ""; RD.at = 0;
+  announce("Putting the drafted files on a new branch."); render(); loadReady(true);
+}
+async function rdTurnOn(duty){
+  const j = await post("/api/project/duties", {project: sel, add: [duty], confirm: true});
+  if(!j) return;
+  toast(`Turned on the ${duty}.`); await tick(); loadReady(true); loadTickets(true);
+}
+async function rdCycle(){
+  if(!await confirmDlg(`Allow full cycles for ${sel}? A cycle takes a ticket through the purser, the dev panel and the shipwright and spends model money. It also turns on the purser and the dev panel. It is only ever started by you.`, {title: "Allow cycles?", ok: "Allow cycles"})) return;
+  const j = await post("/api/project/duties", {project: sel, cycle: true, confirm: true});
+  if(!j) return;
+  toast("Cycles are allowed for " + sel + "."); await tick(); loadReady(true); loadTickets(true);
 }
 /* ---- Start a full cycle: only for a project that opted in (cycle: true). The dialog says what it costs and what it does; only its Start button posts. ---- */
 let cycleDlg = {project: "", issue: "", ticket: null, ticketTitle: "", est: null, busy: false};
@@ -2961,7 +3119,8 @@ async function attachLook(){
     + line("Languages", "languages") + line("Frameworks", "frameworks") + line("Commands", "commands") + line("Checks that run on push", "ci")
     + line("Containers", "containers") + line("Infrastructure", "infrastructure") + line("Deploys to", "deploy_targets") + line("Sensitive areas", "sensitive")
     + (p.secret_files.length ? `<li><b>Secret files</b> ${esc(list("secret_files"))} (named only, never opened)</li>` : "")
-    + line("Agent set-up already there", "agent_config") + `</ul>`
+    + line("Agent set-up already there", "agent_config")
+    + (j.survey ? `<li><b>Documents</b> ${esc(j.ready.docs_line || "")}</li>${j.survey.entry_points.length ? `<li><b>Entry points</b> ${esc(j.survey.entry_points.slice(0, 4).map(e => e.file).join(", "))}</li>` : ""}` : "") + `</ul>`
     + (p.notes.length ? `<p>${p.notes.map(n => esc(cap(n))).join("<br>")}</p>` : "")
     + `<h3>What the crew would do</h3>
       <p>This is a proposal. Change anything you like; nothing is added until you click the button at the end.</p>
@@ -2987,6 +3146,9 @@ async function attachLook(){
       <div class="sec-h">A note for other coding agents</div>
       ${slCheckbox("Also add an AGENTS.md to the project", {id: "at-agents"})}
       <p class="hint">Off by default. It would be a small new file in the project that says how the crew works there. An AGENTS.md that is already there is never changed.</p>
+    <div class="sec-h">The checklist, as it would be right after you add it</div>
+      <p class="hint">Nothing here is run. The verify command is proven once, later, only when you click.</p>
+      ${j.ready ? readyItemsHtml(j.ready.items, null) : ""}
     ${slInput({id: "at-name", label: "Name in Quarterdeck", value: j.proposal.name})}
     <div class="btns">${btn("Add this project", {variant: "primary", click: act("attachAdd")})}</div>`;
 }
@@ -3118,9 +3280,18 @@ async function attachAdd(){
   const j = await post("/api/attach", {path, name, apply: true, confirm: true, edits: attachEdits(), agents_md: !!$("#at-agents").checked});
   if(!j) return;
   if(nwBrief.id) await post("/api/brief/action", {id: nwBrief.id, action: "link", project: j.proposal.name, confirm: true});   // the brief now belongs to the project it was written for
-  closeDrawer();
   toast(`Added ${j.proposal.name}.` + ({written: " AGENTS.md was added to the project.", exists: " An AGENTS.md was already there, so it was left alone.", failed: " AGENTS.md could not be written."}[j.agents_md] || ""));
+  attachDone(j);
   await tick();
+}
+function attachDone(j){        // the drawer's last screen: the real checklist, in the same order, and the one next step
+  const name = j.proposal.name, r = j.ready;
+  $("#dtitle").textContent = `Added ${name}`;
+  $("#dbody").innerHTML = `<p>${esc(name)} is in your registry, and its survey is kept in your data folder. Nothing was changed inside the project.</p>
+    <div class="sec-h">Is it ready?</div>${readyItemsHtml(r.items, null)}
+    <p class="sub">Next: ${esc(r.next.text)}</p>
+    <div class="btns">${btn("Open the Ready card", {variant: "primary", click: act("seq", ["closeDrawer"], ["selectProject", name], ["rdShow"], ["go", "missions"])})}${btn("Close", {click: act("closeDrawer")})}</div>`;
+  focusSoon("#dtitle");
 }
 const drawerOn = () => { const d = $("#drawer"); return !!(d && d.open); };
 const paletteOn = () => { const d = $("#palette"); return !!(d && d.open); };
@@ -4451,7 +4622,7 @@ function render(){
   renderSelBar();
   if(v.id === "log") loadLog();
   if(v.id === "timeline") loadTimeline();
-  if(v.id === "missions") loadTickets();
+  if(v.id === "missions"){ loadTickets(); loadReady(); }
   if(v.id === "fleet") loadFleet();
   if(v.id === "connections") loadConnections();
   if(v.id === "settings") loadSettings();
@@ -4599,6 +4770,7 @@ const ACTIONS = {
   startCycle, startMissionPanel, stopRun, talkSubmit, thinkToggle, tlClick, tlHover, tlSet, toggleCalm, toggleDemo, toggleLedger,
   toggleMissionForm, toggleMobileMenu, toggleOld, toggleReplay, toggleSched, toggleSel, toggleShowcaseForm, unpublishShowcase, unqueue, workOn,
   tkRequest, tkDraft, tkFile, tkDiscard, tkRepoName, tkRepoSave, tkRepoCreate, tkMission,
+  rdShow, rdNext, rdDraft, rdApply, rdTurnOn, rdCycle,
   ...EXT.actions,                                   // an add-on's own (assets/ext-*.js), by name
 };
 

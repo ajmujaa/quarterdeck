@@ -67,6 +67,11 @@ WARNING = warning()
 REPO_OK = re.compile(r"[A-Za-z0-9_.][A-Za-z0-9_.-]{0,38}/[A-Za-z0-9_.][A-Za-z0-9_.-]{0,99}")   # a GitHub owner/name; never a leading dash, quote, $ or ;
 
 
+def no_repo_sentence(name):
+    """The one sentence every place that meets a project with no GitHub repo says (bin/repo.py prints the ways forward)."""
+    return f"{name} has no GitHub repo, so the crew cannot open pull requests yet; local tickets still work."
+
+
 def repo_of(prof):
     """owner/repo from the origin URL, only if it is a plain GitHub name: a folder's .git/config is untrusted text and this ends up in gh -R and URLs."""
     m = re.search(r"github\.com[:/]([^/\s]+/[^/\s]+?)(?:\.git)?$", prof["git"].get("origin", ""))
@@ -453,7 +458,12 @@ def main(argv):
         if do:
             reg = apply(prop, prof)
             print(f"  registered '{prop['name']}'" + (f" in {reg}; the profile and a record of this proposal are in {_scan.profile_dir()}" if verbose else " in your data folder"))
-            print(f"  next: qtdeck repo {prop['name']} <owner/name>" if not prop["entry"]["repo"] else f"  next: qtdeck run {prop['name']} surveyor --pr <number>")
+            if not prop["entry"]["repo"]:
+                print(f"  {no_repo_sentence(prop['name'])}")
+                print(f"  see your options: qtdeck repo {prop['name']}")
+                print(f"  next: qtdeck repo {prop['name']} <owner/name>")
+            else:
+                print(f"  next: qtdeck run {prop['name']} surveyor --pr <number>")
         else:
             print("  nothing was changed.")
             print(f"  next: {again} --apply")

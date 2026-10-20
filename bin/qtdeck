@@ -28,11 +28,12 @@ Usage: qtdeck <command>
   connect <service> [--account <label>]
                               connect a service (several accounts of one service are fine); connect list shows them
   run <project> <duty> [...]  run one duty once, for example: run my-app surveyor --pr 12 (reports only unless --apply)
+  ticket new <project> "..."  say what you want built; the planner drafts one to five tickets (--apply files them)
   dashboard [--no-open]       start the dashboard on this machine and open it (--no-open: only print the link)
   doctor                      a quick wiring check: tools, sign-ins, data folder, dashboard, sandbox
   status                      what is registered, what has run
   plan list <project>         sprint plans the planner wrote, and their status
-  cycle <project> --issue <n> one issue through the whole crew, then stop for you
+  cycle <project> --issue <n> one issue through the whole crew, then stop for you (--ticket <n> for a local ticket)
   help [more]                 this list; help more lists every command and flag
 
 Settings: QUARTERDECK_HOME (your data folder, default ~/.quarterdeck), QUARTERDECK_DASHBOARD_PORT (default 7878).
@@ -52,6 +53,19 @@ Usage: qtdeck <command>
   home rollback               switch back to the program folder (nothing is deleted)
   projects                    list registered projects
   repo <project> <owner/name> set the GitHub repo of a registered project
+  repo <project>              a project with no repo: the four ways forward (use yours, make one, sign up first, or stay local)
+  repo create <project> [--private | --public --i-mean-public] [--yes] [--push]
+                              make a GitHub repository with gh and connect it, only after you type yes and only if gh is signed in
+                              (otherwise it says: gh auth login). Pushing the default branch once is a second yes. Never makes an account.
+  ticket new <project> "<what you want>" [--apply] [--local]
+                              the planner drafts one to five tickets (title, body, acceptance checks) and keeps the draft. Report only
+                              without --apply. --apply files GitHub issues, or LOCAL tickets (state/tickets) when the project has no
+                              repo; --local forces local. "-" as the request reads it from standard input.
+  ticket list <project>       the local tickets and the drafts, one line each
+  ticket show <project> <id>  one ticket (a number) or one draft (d1, d2 ...)
+  ticket file <project> <draft-id> [--apply] [--local]
+                              file a draft kept earlier: lists what it would do, --apply does it
+  ticket remove <project> <draft-id>   throw a draft away
   duties                      list available duties
   crew                        list the crew and which panel each sits on
   add [name]                  register a project (infers repo and path from the
@@ -66,6 +80,9 @@ Usage: qtdeck <command>
                               request: file it, build it, inspect it. Runs the
                               same duties you would run by hand, stopping at the
                               first one that refuses.
+  cycle <project> --ticket <n> [--apply]
+                              the same for a LOCAL ticket: purser, dev panel and shipwright, then it stops at a local branch for you to
+                              review (no push, no pull request); the stages that need a pull request are skipped, with the reason.
   cycle <project> --issue <n> [--apply]
                               the whole cycle on one issue, then stop for a person: purser, dev panel, shipwright,
                               assayer, the reviewers side by side, the caulker (at most 3 cycles). Needs "cycle": true in
@@ -93,6 +110,8 @@ Flags for run:
   --apply           actually perform the writes (default is report-only)
   --pr <number>     limit a review duty to one pull request
   --issue <number>  the issue a duty should work from
+  --ticket <number> a local ticket (purser, dev panel, shipwright): works with no GitHub repo; the shipwright commits a local branch only
+  --request "..."   the planner: draft tickets from a plain request (a project with no repo may do this)
   --diff <base>     the infra duty: the checked-out HEAD against a base branch (files only; nothing runs against a cloud)
   --plan <file>     a dev panel's ruling for the shipwright to implement
   --from <file>     a document for the foreman to file
@@ -101,6 +120,7 @@ Flags for the panel duty:
   --panel <name>    which panel sits: design | dev | spec | qa
   --target <path>   limit a design panel to part of the interface
   --issue <number>  the issue a dev panel should plan
+  --ticket <number> the local ticket a dev panel should plan
   --idea "..."      the rough note a spec panel should turn into a spec
   --from <file>     read that note from a file instead
   --seats a,b       override the roster for one run
@@ -145,10 +165,28 @@ cmd="${1:-status}"; shift || true
 case "$cmd" in
   -h|--help|help) if [ "${1:-}" = more ]; then usage_more; else usage; fi; exit 0 ;;
   setup) exec python3 "$SELF/setup.py" "$@" ;;
-  status|doctor|check|home|projects|duties|crew|add|remove|repo|run|spend|fix|cycle|plan|brief|mockup|dashboard|keys|billing|logs|runs|new|attach|connect) ;;
+  status|doctor|check|home|projects|duties|crew|add|remove|repo|run|spend|fix|cycle|plan|brief|mockup|dashboard|keys|billing|logs|runs|new|attach|connect|ticket) ;;
   *) { echo "qtdeck: unknown command '$cmd'"; echo; usage; } >&2; exit 2 ;;
 esac
 source "$SELF/lib.sh"
+
+# local_ticket_run <duty> <args...> — 0 for a duty run that works on a local ticket and so needs no GitHub repo
+local_ticket_run() {
+  local duty=$1 prev="" a ticket=0 dev=0 req=0
+  shift
+  for a in "$@"; do
+    [ "$a" = --ticket ] && ticket=1
+    [ "$a" = --request ] && req=1
+    [ "$prev" = --panel ] && [ "$a" = dev ] && dev=1
+    prev=$a
+  done
+  case "$duty" in
+    purser|shipwright) [ "$ticket" = 1 ] ;;
+    panel) [ "$ticket" = 1 ] && [ "$dev" = 1 ] ;;
+    planner) [ "$req" = 1 ] ;;
+    *) return 1 ;;
+  esac
+}
 
 case "$cmd" in
   status)
@@ -158,6 +196,9 @@ case "$cmd" in
     while read -r p; do
       printf '  %-12s %-28s %s\n' "$p" "$(project_get "$p" repo)" \
         "$(jq -r --arg p "$p" '(.[$p].duties // []) | join(", ")' "$PROJECTS_FILE")"
+    done < <(project_names)
+    while read -r p; do
+      [ -z "$(project_get "$p" repo)" ] && { echo; python3 "$QUARTERDECK_DIR/bin/repo.py" sentence "$p"; }
     done < <(project_names)
     echo
     echo "  duties available: $(duty_names | tr '\n' ' ')"
@@ -288,7 +329,12 @@ case "$cmd" in
     fi ;;
   repo)
     # repo <project> <owner/name>: the GitHub repo a project's duties read and post to; checked the same way attach checks one
-    [ $# = 2 ] || die "usage: qtdeck repo <project> <owner/name>"
+    # repo <project>: what a project with no repo can do   |   repo create <project> [...]: make one with gh, after a yes
+    if [ "${1:-}" = create ] && [ $# -ge 2 ] && [[ "$2" != */* ]]; then
+      shift; exec python3 "$QUARTERDECK_DIR/bin/repo.py" create "$@"
+    fi
+    [ $# = 1 ] && exec python3 "$QUARTERDECK_DIR/bin/repo.py" options "$1"
+    [ $# = 2 ] || die "usage: qtdeck repo <project> <owner/name>   |   qtdeck repo <project>   |   qtdeck repo create <project> --private"
     exec python3 "$QUARTERDECK_DIR/bin/attach.py" set-repo "$1" "$2" ;;
   duties)
     # Two kinds of thing, never again in one list. An agent does a job alone;
@@ -394,14 +440,60 @@ case "$cmd" in
       || die "'$duty' is not enabled for '$project' — add it to duties[] in config/projects.json"
     wdir=$(project_path "$project")
     [ -d "$wdir/.git" ] || die "no git checkout at $wdir"
-    # every duty reads or posts to GitHub, except the infra duty on a local diff
-    if [ -z "$(project_get "$project" repo)" ] && ! { [ "$duty" = infra ] && [[ " $* " == *" --diff "* ]]; }; then
-      die "this project has no GitHub repo set; set it with: qtdeck repo $project <owner/name>"
+    # every duty reads or posts to GitHub, except the infra duty on a local diff and the four ways a LOCAL ticket is worked: the purser, the dev panel
+    # and the shipwright with --ticket, and the planner drafting tickets with --request
+    if [ -z "$(project_get "$project" repo)" ] && ! { [ "$duty" = infra ] && [[ " $* " == *" --diff "* ]]; } && ! local_ticket_run "$duty" "$@"; then
+      python3 "$QUARTERDECK_DIR/bin/repo.py" sentence "$project" >&2
+      exit 1
     fi
     export QUARTERDECK_PROJECT="$project" QUARTERDECK_WORKDIR="$wdir"
     # --fresh: ask the model again even when an earlier answer to the same inputs could be reused (QUARTERDECK_REUSE)
     args=(); for a in "$@"; do if [ "$a" = --fresh ]; then export QUARTERDECK_FRESH=1; else args+=("$a"); fi; done
     exec bash "$QUARTERDECK_DIR/duties/$duty.sh" ${args[@]+"${args[@]}"}
+    ;;
+
+  ticket)
+    # Local tickets and the planner's drafts (bin/tickets.py). Drafting needs neither a repo nor the planner to be switched on for the project;
+    # every write to GitHub still needs --apply.
+    sub="${1:-}"; [ $# -gt 0 ] && shift
+    tproject="" treq="" treqset=0 tflags=() targs=()
+    for a in "$@"; do
+      case "$a" in
+        --apply|--local) tflags+=("$a") ;;
+        --*) die "ticket $sub: unknown flag '$a'" ;;
+        *) if [ -z "$tproject" ]; then tproject="$a"; else targs+=("$a"); fi ;;
+      esac
+    done
+    case "$sub" in
+      new|list|show|file|remove) ;;
+      *) echo "usage: qtdeck ticket new <project> \"<what you want>\" [--apply] [--local]" >&2
+         echo "       qtdeck ticket list <project> | show <project> <id> | file <project> <draft-id> [--apply] [--local] | remove <project> <draft-id>" >&2; exit 2 ;;
+    esac
+    [ -n "$tproject" ] || die "ticket $sub: which project? (see: qtdeck projects)"
+    project_exists "$tproject" || die "unknown project '$tproject' (see: qtdeck projects)"
+    case "$sub" in
+      new)
+        [ ${#targs[@]} = 1 ] || die "usage: qtdeck ticket new $tproject \"<what you want>\" [--apply] [--local]   (the request in quotes, or - to read it from standard input)"
+        wdir=$(project_path "$tproject")
+        [ -d "$wdir/.git" ] || die "no git checkout at $wdir"
+        [ -n "$(project_get "$tproject" repo)" ] || python3 "$QUARTERDECK_DIR/bin/repo.py" sentence "$tproject"
+        duty_exists planner || die "the planner is not installed"
+        export QUARTERDECK_PROJECT="$tproject" QUARTERDECK_WORKDIR="$wdir"
+        exec bash "$QUARTERDECK_DIR/duties/planner.sh" --request "${targs[0]}" ${tflags[@]+"${tflags[@]}"} ;;
+      file)
+        [ ${#targs[@]} = 1 ] || die "usage: qtdeck ticket file $tproject <draft-id> [--apply] [--local]"
+        wdir=$(project_path "$tproject")
+        [ -d "$wdir/.git" ] || die "no git checkout at $wdir"
+        export QUARTERDECK_PROJECT="$tproject" QUARTERDECK_WORKDIR="$wdir"
+        exec bash "$QUARTERDECK_DIR/duties/planner.sh" --file-draft "${targs[0]}" ${tflags[@]+"${tflags[@]}"} ;;
+      list) [ ${#targs[@]} = 0 ] && [ ${#tflags[@]} = 0 ] || die "usage: qtdeck ticket list $tproject"
+            exec python3 "$QUARTERDECK_DIR/bin/tickets.py" list "$tproject" ;;
+      show) [ ${#targs[@]} = 1 ] && [ ${#tflags[@]} = 0 ] || die "usage: qtdeck ticket show $tproject <id>"
+            exec python3 "$QUARTERDECK_DIR/bin/tickets.py" show "$tproject" "${targs[0]}" ;;
+      remove) [ ${#targs[@]} = 1 ] && [ ${#tflags[@]} = 0 ] || die "usage: qtdeck ticket remove $tproject <draft-id>"
+              [[ "${targs[0]}" =~ ^d[1-9][0-9]{0,8}$ ]] || die "only a draft can be removed (d1, d2 ...); a ticket stays on the list"
+              exec python3 "$QUARTERDECK_DIR/bin/tickets.py" remove-draft "$tproject" "${targs[0]}" ;;
+    esac
     ;;
 
   plan)

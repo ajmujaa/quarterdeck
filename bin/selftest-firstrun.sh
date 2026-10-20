@@ -90,7 +90,7 @@ ck "projects lists it without the column tool" 'grep -q "^  tiny" "$T/pj" && ! g
 
 # ---- run: no GitHub repo is said plainly, and exits non-zero ----
 qd "$H" "$P" run tiny surveyor >"$T/r1" 2>&1; rr=$?
-ck "run without a GitHub repo: says so, names the command, exits non-zero" '[ "$rr" != 0 ] && grep -q "has no GitHub repo set" "$T/r1" && grep -qF "qtdeck repo tiny <owner/name>" "$T/r1" && ! grep -q "no open pull requests on" "$T/r1"'
+ck "run without a GitHub repo: says so in one sentence, points at the options, exits non-zero" '[ "$rr" != 0 ] && grep -qF "tiny has no GitHub repo, so the crew cannot open pull requests yet; local tickets still work." "$T/r1" && grep -qF "qtdeck repo tiny" "$T/r1" && ! grep -q "no open pull requests on" "$T/r1"'
 qd "$H" "$P" repo tiny 'x; rm -rf /' >"$T/r2" 2>&1; rq=$?
 qd "$H" "$P" repo tiny me/tiny >"$T/r3" 2>&1; rq2=$?
 ck "repo: refuses what is not owner/name, sets a good one" '[ "$rq" != 0 ] && [ "$rq2" = 0 ] && [ "$(jq -r .tiny.repo "$H/.quarterdeck/config/projects.json")" = me/tiny ]'

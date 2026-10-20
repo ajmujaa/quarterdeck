@@ -462,6 +462,7 @@ def main(argv):
                 print(f"  {no_repo_sentence(prop['name'])}")
                 print(f"  see your options: qtdeck repo {prop['name']}")
                 print(f"  next: qtdeck repo {prop['name']} <owner/name>")
+                print(f"  or keep it on this computer: qtdeck ticket new {prop['name']} \"<what you want built>\"")
             else:
                 print(f"  next: qtdeck run {prop['name']} surveyor --pr <number>")
         else:

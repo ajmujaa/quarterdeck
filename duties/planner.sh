@@ -148,6 +148,12 @@ if [ -n "$REQUEST$FILE_DRAFT" ]; then
 
   if [ "$REQUEST" = - ]; then REQUEST=$(head -c 9000); fi
   printf '%s' "$REQUEST" | python3 "$TK" check-request > "$TMP/request" || die "planner: that request cannot be used (plain text, at most 2000 characters)"
+  # The request goes to the model and is kept with its draft, so a key or a password in it stops here, before either (the tickets the model drafts are scanned again when they are filed).
+  if ! python3 "$QUARTERDECK_DIR/bin/outscan.py" "$TMP/request" >/dev/null 2>&1; then
+    say "quarterdeck: refused: your request looks like it holds a password or a key. Nothing was sent to the model and nothing was kept. Say it again without the secret."
+    record_run "$PROJECT" planner REFUSED "ticket request: looks like it holds a credential; nothing was sent"
+    exit 3
+  fi
   working_on "drafting tickets"
   say "quarterdeck: planner drafting tickets for $PROJECT"
 

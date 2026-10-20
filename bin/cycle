@@ -135,8 +135,12 @@ fi
 if [ -n "$TICKET" ]; then KEY="t$TICKET"; LABEL="ticket #$TICKET"; PLAN_N="ticket$TICKET"; else KEY="$ISSUE"; LABEL="#$ISSUE"; PLAN_N="$ISSUE"; fi
 project_exists "$PROJECT" || die "unknown project '$PROJECT' (see: qtdeck projects)"
 [ "$(jq -r --arg p "$PROJECT" '.[$p].cycle // false' "$PROJECTS_FILE")" = true ] \
-  || die "cycle: '$PROJECT' has not opted in. Add \"cycle\": true to its entry in $PROJECTS_FILE first; a cycle spends real money and opens real pull requests, so it is never on by default."
+  || die "cycle: '$PROJECT' has not opted in. Add \"cycle\": true to its entry in $PROJECTS_FILE first; a cycle spends real money$([ -n "$TICKET" ] || echo ' and opens real pull requests'), so it is never on by default."
 project_has_duty "$PROJECT" shipwright || die "cycle: the shipwright is not enabled for '$PROJECT' (duties[] in the registry); a cycle with nothing to build with has no point"
+if [ -n "$TICKET" ]; then   # a ticket has no pull request to fall back on: without the purser and the dev panel there is no plan for the shipwright to build from
+  missing=""; for d in purser panel; do project_has_duty "$PROJECT" "$d" || missing="$missing $d"; done
+  [ -z "$missing" ] || die "cycle: a ticket goes through the purser, the dev panel and the shipwright, and these are not enabled for '$PROJECT':$missing. Add them to \"duties\" in its entry in $PROJECTS_FILE (attach turns on only the read-only duties and the shipwright)."
+fi
 WORKDIR=$(project_path "$PROJECT")
 [ -d "$WORKDIR/.git" ] || die "cycle: no git checkout at $WORKDIR"
 REPO=$(project_get "$PROJECT" repo)

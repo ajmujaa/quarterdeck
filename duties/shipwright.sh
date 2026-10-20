@@ -374,6 +374,9 @@ if [ -n "$TICKET" ]; then
   say "  keep it:     git -C $SOURCE_REPO_DIR merge $BRANCH        (when you are happy with it)"
   say "  discard it:  git -C $SOURCE_REPO_DIR branch -D $BRANCH"
   say "  checks run:  ${checks_line:-none set}"
+  if jq -es 'any(.[]; .rc == 127)' <<<"$AFTER_CHECKS" >/dev/null 2>&1; then
+    say "  exit 127 means that command was not found. The crew never installs a project's tools: run its install step yourself (for example npm install), or change \"verify\" or \"build\" in the project's entry in $PROJECTS_FILE to a command that needs no install."
+  fi
   say "  to open a pull request for it later: connect a repo with  qtdeck repo $PROJECT"
   record_run "$PROJECT" shipwright BRANCH "$REF → $BRANCH; checks: ${checks_line:-none set}"
   exit 0

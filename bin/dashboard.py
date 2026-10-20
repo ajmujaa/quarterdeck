@@ -3617,6 +3617,8 @@ def _ticket_error(project, kind):
     detail = " ".join(str(row.get("detail") or "").split()) if row else ""
     if row and row.get("verdict") == "NOTHING_TO_DRAFT":
         return "Everything in the draft is already on GitHub." if "tracker" in detail else "The planner found nothing to turn into a ticket from that request. Say more about what you want built."
+    if row and row.get("verdict") == "REFUSED" and detail.startswith("ticket request"):
+        return "Your request looks like it holds a password or a key, so nothing was sent. Take it out of the request and draft again."
     if row and row.get("verdict") == "REFUSED":
         return "A ticket looks like it holds a password or a key, so nothing was sent. Take it out of the request and draft again."
     if row:

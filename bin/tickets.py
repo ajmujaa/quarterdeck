@@ -576,10 +576,11 @@ def main(argv):
                     print(f"    - {t['title']}")
                 print(f"  nothing was changed. To do it: python3 bin/tickets.py file {project} {did} --apply")
                 return 0
+            had = {t["id"] for t in load(project)["tickets"]}
             made = local_add(project, dr["tickets"])
             draft_remove(project, did)
             for t in made:
-                print(f"  ticket {t['id']}: {t['title']}")
+                print(f"  ticket {t['id']}: {t['title']}" + ("  (already on the list, not added again)" if t["id"] in had else ""))
             return 0
         if cmd == "remove-draft" and len(a) == 2:
             draft_remove(a[0], a[1])

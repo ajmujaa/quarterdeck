@@ -225,6 +225,13 @@ nogit = "nocycle"
 os.rename(T + "/nocycle/.git", T + "/nocycle/.git-off")
 chk("a project whose folder is not a git checkout is a 400", post("/api/ticket/draft", {"project": nogit, "request": "x", "confirm": True})[0] == 400)
 os.rename(T + "/nocycle/.git-off", T + "/nocycle/.git")
+n_calls = len(calls())
+DEC3 = "ghp_" + "b" * 36
+st, j = post("/api/ticket/draft", {"project": "tp", "request": "log in with the token " + DEC3 + " and show the todos", "confirm": True})
+time.sleep(0.4)
+r = wait_idle("tp")
+chk("a request that holds a credential shape starts, is refused by the planner before any model call, and the page is told in a plain sentence that never repeats it", st == 200 and len(calls()) == n_calls
+    and r["last_draft_error"].startswith("Your request looks like it holds a password or a key") and DEC3 not in json.dumps(r) and DEC3 not in open(T + "/state/tickets/tp.json").read())
 PY
 pyck "$T/t3.py"
 

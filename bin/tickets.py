@@ -472,15 +472,24 @@ def _fail(msg, code=2):
     return code
 
 
+def _safe(text):
+    """Text for a terminal or a log: a credential shape in it (a model may have copied one from a file it read) is blanked, never printed."""
+    try:
+        import outscan as _o
+        return _o.redact(text)
+    except Exception:       # a scanner that cannot run must not decide what is shown; show nothing it could not check
+        return "(text hidden: the credential scan could not run)"
+
+
 def _show_draft(dr, project):
     print(f"  draft {dr['id']}  ({len(dr['tickets'])} ticket{'s' if len(dr['tickets']) != 1 else ''})  asked: {dr['request'][:100]!r}")
     for i, t in enumerate(dr["tickets"], 1):
         print(f"\n  {i}. {t['title']}")
-        for ln in t["body"].splitlines():
+        for ln in _safe(t["body"]).splitlines():
             print(f"       {ln}")
         print("       Acceptance checks:")
         for a in t["acceptance"]:
-            print(f"         - {a}")
+            print(f"         - {_safe(a)}")
 
 
 def main(argv):

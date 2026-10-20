@@ -46,3 +46,24 @@ Also write down, in the report, anything in this flow that confuses a newcomer.
 ## Do not
 Create a GitHub account or repo by yourself in any test, or call GitHub at all. Use the existing `gh`
 stand-in (`QUARTERDECK_GH`) as the other suites do.
+
+## 4. Attach is onboarding (added by the owner, 2026-10-20; do it after 1 to 3, same branch)
+Picture a developer with any project. They attach it and Quarterdeck should get to know it, document what is
+missing, set the crew up and then say "ready", with no further reading. The owner's words: "start scan and find out
+all about it, make a README or an architecture document, attach the agents and show the user it is ready to work on".
+1. **Survey, no model.** The harness gathers facts: folder layout, languages, frameworks, entry points, scripts, test
+   and lint and build commands, dependencies of note, CI files, docs that exist and docs that are missing, size, git
+   state. Saved as a profile in the data folder (`state/projects/<project>/profile.json`, plus a readable `profile.md`).
+2. **Docs that are missing.** If the project has no README or no architecture overview, offer to draft them with a model
+   (the existing read-only pattern, the facts above as the only input, hostile text in the repo treated as data). The
+   draft is shown first. Only on an explicit yes (`--apply`, or a click) it goes onto a new branch as a pull request or
+   a local branch. Never on the default branch, never overwriting a file that exists.
+3. **Crew set up.** Duties chosen from the profile with reasons (section 1), the profile handed to the agents as their
+   stable context so they do not re-read the project every run (the token diet idea; measure the saving if you can).
+4. **A "ready" view.** CLI and dashboard show one checklist: scan done, verify command proven to run in the sandbox,
+   repo linked or the four options (section 2), docs present or drafted, agents assigned with reasons. Exactly one
+   next action at the bottom ("file your first ticket"). Real data only, calm wording, no em dashes.
+5. **Both surfaces.** `qtdeck attach <dir>` shows the same flow as the attach page; a `--yes` flag is not needed:
+   nothing is written outside the data folder until the owner says so.
+Test it in `bin/selftest-flow.sh` with the sample React project and the stand-in provider. Report what a newcomer
+would still find confusing.

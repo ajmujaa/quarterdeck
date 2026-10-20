@@ -2139,6 +2139,7 @@ DUTY_PLAN = {
     "harbourmaster": {"about": "Reconciles the project board against GitHub reality.", "perm": "github-write"},
     "purser": {"about": "Turns a backlog issue into something a stranger could start from.", "perm": "local-write"},
     "trials": {"about": "Runs the project's own verify command.", "perm": "read-only"},
+    "scribe": {"about": "Drafts the README and architecture overview a project is missing; writes only a new branch, and only on your yes.", "perm": "local-write"},
 }
 PERM_LABEL = {"read-only": "Read-only analysis", "local-write": "Local file changes",
               "github-write": "GitHub writes", "unclassified": "Not yet mapped — read its duty file before approving"}

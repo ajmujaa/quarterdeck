@@ -153,6 +153,7 @@ A run starts cold, reads only what its job needs, and ends with a one-line verdi
 | lookout | Takes screenshots of the running app at three widths and judges them. |
 | pilot | Runs the app and walks through it. |
 | quartermaster | Checks what comes in: dependencies and what they actually are. |
+| scribe | Drafts the README and the architecture overview a project is missing, from the survey. You read the draft; only on your yes does it go onto a new branch. Run it with `qtdeck docs <project>`. |
 | bosun | Reports drift: stale branches, dead settings, docs that name things that are gone. |
 | infra | Reads Terraform, CDK, CloudFormation, SAM, serverless, Vercel and Supabase files and reports risk and how to undo a change. It runs nothing against a cloud and holds no credentials. |
 | brief and mockup | Turn an idea into a one-page design brief you approve, then one static page per screen. |

@@ -105,7 +105,8 @@ OFF_WHY = {"brief": "turns an idea into a one-page design brief when you ask; it
            "mockup": "needs an approved design brief first",
            "panel": "convenes several crew members on a question you put to them; you start it",
            "bosun": "reports stale branches and drift; it needs the GitHub repo to compare against",
-           "logkeeper": "writes a decision record from a panel's ruling; it needs one first"}
+           "logkeeper": "writes a decision record from a panel's ruling; it needs one first",
+           "scribe": "drafts a README or an architecture overview the survey found missing; you ask for it with qtdeck docs, so it needs no switch"}
 
 
 def _cmd_reason(prof, key, cmd):

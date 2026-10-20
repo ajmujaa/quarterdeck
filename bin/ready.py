@@ -35,7 +35,7 @@ def _clip(s, n=160):
 
 
 def _plain_dashes(s):
-    return str(s).replace("—", ", ").replace("–", "-")
+    return str(s).replace(chr(0x2014), ", ").replace(chr(0x2013), "-")
 
 
 # ---- reading what is kept ------------------------------------------------------------------------------------------------------

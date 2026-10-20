@@ -1238,7 +1238,7 @@ untrusted() { # untrusted <label>  (the text on stdin)
     "BEGIN UNTRUSTED $label $nonce" "$text" "END UNTRUSTED $label $nonce"
 }
 
-# profile_block <project> — the facts the survey gathered about a project (bin/survey.py), as one bounded block (at most 3000 characters) for the START
+# profile_block <project>: the facts the survey gathered about a project (bin/survey.py), as one bounded block (at most 3000 characters) for the START
 # of a prompt, where it can be cached. Built by the harness from state/projects/<project>/profile.json: every name that came from the project's files is
 # clipped and made plain there, and the block says in words that these are data. Byte-stable for an unchanged project (no time, no absolute path), so a
 # prompt prefix that carries it is the same from one run to the next. Empty when the project was never surveyed (or this install has no survey.py).

@@ -142,7 +142,8 @@ DUTIES = [("foreman", "Turns a findings document into deduplicated GitHub issues
           ("mockup", "Makes one static page per key screen from an approved brief."),
           ("pilot", "Starts the app from a pull request and tries the main flows."),
           ("planner", "Puts the backlog in order and sizes each issue."),
-          ("quartermaster", "Judges a dependency update: merge, hold or block.")]
+          ("quartermaster", "Judges a dependency update: merge, hold or block."),
+          ("scribe", "Drafts the README and the architecture overview a project is missing.")]
 DRIVEN = {"surveyor", "foreman", "joiner", "shipwright", "panel", "inspector", "harbourmaster", "purser", "trials"}   # the duties the scripted history runs; the rest are enabled but have never run
 
 CREW = [("dockmaster", "design,dev,spec", "chair", "weighs the argument and rules"),

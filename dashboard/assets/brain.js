@@ -123,7 +123,7 @@ function init(){
   stats.setAttribute("role", "group"); stats.setAttribute("aria-label", "Counts by state");
   focusBar = el("div", "brain-focus"); focusBar.hidden = true;
   const hud = el("div", "brain-hud"); hud.append(stats, focusBar);
-  stage.append(canvas, overlay, tip, hud, legend);
+  stage.append(canvas, hud, overlay, tip, legend);       // the counts are at the top of the map: they come first in the document too, so Tab goes top to bottom (the labels on the map, then the areas along the bottom)
   host.append(stage, panel);
 
   renderer = new THREE.WebGLRenderer({canvas, antialias: true, alpha: false});

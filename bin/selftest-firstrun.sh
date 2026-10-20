@@ -68,8 +68,10 @@ printf 'def add(a, b):\n    return a + b\n' > "$A/app.py"; printf 'from app impo
 touch "$T/stamp"; sleep 1
 qd "$H" "$P" attach "$A" >"$T/a1" 2>&1; ra=$?
 ck "attach: a test file is enough to find pytest as the verify command" '[ "$ra" = 0 ] && grep -qE "verify +python -m pytest" "$T/a1"'
+# round 2: the dry run is the whole onboarding (docs, the crew with reasons, the ready checklist), so it is longer than the 16 lines it once was; it is
+# still bounded, and still leaves the long lists (the protected paths, every duty's reason) to --verbose
 ck "attach: short (languages, duties, verify), the protected list only with --verbose, and the exact next command" \
-  '[ "$(wc -l < "$T/a1")" -le 16 ] && grep -q "languages" "$T/a1" && grep -q "duties" "$T/a1" && ! grep -q "package-lock.json" "$T/a1" && grep -qF "next: qtdeck attach $A --apply" "$T/a1"'
+  '[ "$(wc -l < "$T/a1")" -le 40 ] && grep -q "languages" "$T/a1" && grep -q "duties" "$T/a1" && ! grep -q "package-lock.json" "$T/a1" && grep -qF "next: qtdeck attach $A --apply" "$T/a1"'
 qd "$H" "$P" attach "$A" --verbose >"$T/a2" 2>&1
 ck "scan: pytest from its config or test files alone; none for a folder with neither" \
   'PYTHONDONTWRITEBYTECODE=1 python3 -c "import sys, os; sys.path.insert(0, \"$P/bin\"); import scan
@@ -84,13 +86,15 @@ ck "attach changes nothing without --apply" '[ -z "$(changed "$A")" ] && [ "$(ca
 ck "attach on Linux never mentions the macOS sandbox; on a Mac it does" \
   'PYTHONDONTWRITEBYTECODE=1 python3 -c "import sys; sys.path.insert(0, \"$P/bin\"); import attach as a; assert \"macOS\" not in a.warning(\"Linux\") and \"bubblewrap\" in a.warning(\"Linux\") and \"macOS\" in a.warning(\"Darwin\")"'
 qd "$H" "$P" attach "$A" --apply >"$T/a3" 2>&1
-ck "attach --apply registers it and names the next step: the repo, since there is no GitHub remote" 'grep -q "registered .tiny." "$T/a3" && grep -qF "next: qtdeck repo tiny <owner/name>" "$T/a3"'
+# round 2: --apply ends with the checklist and exactly ONE "next:" line; the repo is an offer in the checklist, so the command to connect one is named
+# in the lines above it instead of a first "next:" that a second "next:" then contradicts
+ck "attach --apply registers it, offers the repo (there is no GitHub remote) and ends with exactly one next step" 'grep -q "registered .tiny." "$T/a3" && grep -qF "qtdeck repo tiny <owner/name>" "$T/a3" && [ "$(grep -c "^  next: " "$T/a3")" = 1 ] && [ "$(tail -1 "$T/a3" | cut -c1-8)" = "  next: " ]'
 qd "$H" "$P" projects >"$T/pj" 2>&1
 ck "projects lists it without the column tool" 'grep -q "^  tiny" "$T/pj" && ! grep -q "command not found" "$T/pj" && ! grep -vE "^[[:space:]]*#" "$P/bin/qtdeck" | grep -qE "\| *column( |$)"'
 
 # ---- run: no GitHub repo is said plainly, and exits non-zero ----
 qd "$H" "$P" run tiny surveyor >"$T/r1" 2>&1; rr=$?
-ck "run without a GitHub repo: says so, names the command, exits non-zero" '[ "$rr" != 0 ] && grep -q "has no GitHub repo set" "$T/r1" && grep -qF "qtdeck repo tiny <owner/name>" "$T/r1" && ! grep -q "no open pull requests on" "$T/r1"'
+ck "run without a GitHub repo: says so in one sentence, points at the options, exits non-zero" '[ "$rr" != 0 ] && grep -qF "tiny has no GitHub repo, so the crew cannot open pull requests yet; local tickets still work." "$T/r1" && grep -qF "qtdeck repo tiny" "$T/r1" && ! grep -q "no open pull requests on" "$T/r1"'
 qd "$H" "$P" repo tiny 'x; rm -rf /' >"$T/r2" 2>&1; rq=$?
 qd "$H" "$P" repo tiny me/tiny >"$T/r3" 2>&1; rq2=$?
 ck "repo: refuses what is not owner/name, sets a good one" '[ "$rq" != 0 ] && [ "$rq2" = 0 ] && [ "$(jq -r .tiny.repo "$H/.quarterdeck/config/projects.json")" = me/tiny ]'

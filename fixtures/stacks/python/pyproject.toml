@@ -1,0 +1,15 @@
+[tool.poetry]
+name = "python-fixture"
+version = "0.1.0"
+description = "A small API"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+fastapi = "^0.110"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0"
+ruff = "^0.4"
+
+[tool.ruff]
+line-length = 100

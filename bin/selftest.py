@@ -267,9 +267,9 @@ check("the Notes view is in the rail, the Home card links to it, edits and promo
       all(w in _idx_html for w in ('id:"notes", label:"Notes"', "notes:viewNotes", 'act("go", "notes")', 'action: "edit"', 'action: "promote"', "confirm: kind === \"plan\"", 'case "notedone"', 'case "promote"', 'case "notes"', "on this Mac. The file is only ever added to"))
       and "—" not in _nj and "document." not in _nj and "fetch(" not in _nj)
 _tlj = (ROOT / "dashboard" / "assets" / "timeline.js").read_text()
-check("the Timeline view is in the rail with windows, lanes, legend, filters remembered per browser, hover/focus detail and click to the Ledger; the Home strip shows 12 events",
-      all(w in _idx_html for w in ('id:"timeline", label:"Timeline"', "timeline:viewTimeline", "quarterdeck.timeline", 'actOn("hover", "tlHover", T.el)', 'actOn("focus", "tlHover", T.el)', "openEvent", "recentStrip(", "/api/timeline?window=", "tl-legend"))
-      and "—" not in _tlj and "document." not in _tlj and "fetch(" not in _tlj and "animation" not in _ui[_ui.index(".tl-strip{"):_ui.index(".c-bad{")])
+check("the Timeline view is in the rail with windows, lanes, legend, filters remembered per browser, hover/focus detail and click to the Ledger; Home shows the same lanes for every project over the last 24 hours",
+      all(w in _idx_html for w in ('id:"timeline", label:"Timeline"', "timeline:viewTimeline", "quarterdeck.timeline", 'actOn("hover", "tlHover", T.el)', 'actOn("focus", "tlHover", T.el)', "openEvent", "tl.buildLanes(", "/api/timeline?window=", "tl-legend", "function homeTimeline("))
+      and "—" not in _tlj and "document." not in _tlj and "fetch(" not in _tlj and "animation" not in _ui[_ui.index(".tl-legend{"):_ui.index(".note{")])
 _sj = (ROOT / "dashboard" / "assets" / "suggest.js").read_text()
 check("the suggestion bar is quiet and kept in this browser: Snooze, Dismiss, What changed, speaking off by default and never while Helm is busy; the module has no DOM, network or em dashes",
       all(w in _idx_html for w in ('id="suggest"', "sgDo(kind)", "Snooze 1 hour", "openWhatChanged", "quarterdeck.suggest", "quarterdeck.sgSpeak", 'id="sg-say"', "helmState !== \"idle\" || micMode === \"push\" || busy", "shouldSpeak("))
@@ -2843,7 +2843,7 @@ with _tf.TemporaryDirectory() as _ad:
     _e4 = _rv({"forbidden_paths": ["db/"]}); _e5 = _rv({"guardrails": []}); _e6 = _rv({"duties": ["shipwright"], "verify": ""}); _e7 = _rv({"name": "x"})
     check("attach review: unknown duties, shell characters in verify, paths outside the project, dropping protected paths or the merge and push rules, a Shipwright with no verify, and other fields are all refused",
           all(c == 400 for c, _ in (_e1, _e2, _e3, _e4, _e5, _e6, _e7)))
-    _ok = d.attach_api({"path": str(_app), "edits": {"duties": ["surveyor"], "verify": "npm run check", "guardrails": _attach.GUARDRAILS[:2],
+    _ok = d.attach_api({"path": str(_app), "edits": {"duties": ["surveyor"], "verify": "npm run check", "guardrails": _attach.GUARDRAILS[:3],
                         "forbidden_paths": _b3["proposal"]["entry"]["forbidden_paths"] + ["secrets-here"]}})
     check("attach review: a valid edit comes back in the proposal and registers nothing", _ok[0] == 200 and _ok[1]["proposal"]["entry"]["duties"] == ["surveyor"] and _ok[1]["proposal"]["entry"]["verify"] == "npm run check" and "edited-app" not in d.PROJECTS_FILE.read_text())
     _ag = d.attach_api({"path": str(_app), "apply": True, "name": "edited-app", "agents_md": True, "edits": {"duties": ["surveyor"]}})
@@ -3427,7 +3427,59 @@ _r = _mcy({**_cy, "status": "needs-human", "final": "3 finding(s) are still open
 check("cycle: a hand-over to a person shows the Seal group as the blocked one", _r["state"] == "blocked" and _states(_r)[3] == "blocked" and "still open" in _r["blocker"]["cause"])
 check("cycle: a report-only record is done and claims no stage it did not run",
       _states(_mcy({**_cy, "status": "report-only", "apply": False, "final": "report only", "pr": None, "stages": _cy["stages"][:2]
-                    + [{**_cst("shipwright", "Shipwright", "shipwright", "would", "WOULD", 0), "state": "would"}]}))[2:] == ["notstarted"] * 3)
+                    + [{**_cst("shipwright", "Shipwright", "shipwright", "would", "WOULD", 0), "state": "would"}]}))[2:] == ["skipped"] * 3)   # was "notstarted": a Done mission never shows Not started steps
+# ---- mission steps by kind: a finished mission never shows "Not started" steps; the steps its kind does not need are Skipped with the reason, and one plain sentence says what Done means ----
+_nostart = lambda m: [n["id"] for n in (m["pipeline"] or []) if n["state"] == "notstarted"]
+_tx_done = {**_tx, "ruling": [{"title": "Fix one", "kind": "change", "tier": "routine", "claim": "c", "where": "w", "action": "a"},
+                              {"title": "Fix two", "kind": "change", "tier": "routine", "claim": "c", "where": "w", "action": "a"}]}
+_mp = lambda tx, fixes=None: d.compose_mission("panel:pp", lambda i: tx if i == "pp" else None, {} if fixes is None else fixes, [], [], {})
+_r = _mp(_tx_done)
+check("steps: a done design-panel mission has only its own steps, Build, Verify and Review are Skipped (Not needed for a design panel mission), none Not started",
+      _r["state"] == "done" and _states(_r) == ["done", "done", "skipped", "skipped", "skipped"] and not _nostart(_r)
+      and all(n["note"] == "Not needed for a design panel mission" for n in _r["pipeline"][2:]))
+check("steps: the line under Done is the panel sentence with the real count and the project, and names the Work tab",
+      _r["line"] == "The panel ruled on 2 items; fixing them is optional, start it from the Work tab. They would be fixed in alpha."
+      and _mp({**_tx_done, "ruling": _tx_done["ruling"][:1]})["line"].startswith("The panel ruled on 1 item; fixing them is optional")
+      and "ruled nothing worth doing" in _mp({**_tx_done, "ruling": []})["line"] and "in " not in _mp({**_tx_done, "project": None})["line"].split("Work tab.")[1])
+_r = _mp(_tx_done, {"pp#1": {**_fx["pp#1"]}})
+check("steps: a panel with a fix started from one of its items shows that fix's steps (Build active) and says so in its line, still without a Not started step under Done",
+      _r["state"] == "done" and _r["pipeline"][2]["state"] == "active" and _r["pipeline"][3]["state"] in ("active", "skipped") and not _nostart(_r) and "1 fix has been started" in _r["line"])
+_r = _mp({**_tx_done, "status": "running"})
+check("steps: a panel still arguing is running, its Panel step is Active, and it has no line yet", _r["state"] == "running" and _r["pipeline"][1]["state"] == "active" and _r["line"] == "")
+_r = _m("fix:pp#1")
+check("steps: a running fix still shows its pending steps as Not started, and has no line", _r["state"] == "running" and _nostart(_r) == ["verify", "review"] and _r["line"] == "")
+_fxd = lambda st, **kw: _m("fix:pp#1", {"pp#1": {**_fx["pp#1"], "status": st, "step": None, "plan": None, "issue": None, "pr": None, "verdict": None, **kw}})
+_r = _fxd("nothing", detail="the code already does it")
+check("steps: a fix with nothing to build is done, every step Skipped with the reason, and the line says nothing more happens",
+      _r["state"] == "done" and not _nostart(_r) and set(_states(_r)) == {"skipped"} and _r["pipeline"][0]["note"] == "Not needed: nothing to build" and "nothing to build" in _r["line"])
+_r = _fxd("taken")
+check("steps: a fix someone else took is done with no Not started step, and says who", _r["state"] == "done" and not _nostart(_r) and "Someone else" in _r["line"] and _r["pipeline"][2]["note"] == "Not needed: taken by someone else")
+_r = _m("fix:pp#1", {"pp#1": {**_pr, "status": "merged"}})
+check("steps: a merged fix is done at every step and says the pull request was merged", _states(_r) == ["done"] * 5 and not _nostart(_r) and _r["line"].startswith("The pull request was merged"))
+_r = _m("fix:pp#1", {"pp#1": {**_pr, "status": "closed"}})
+check("steps: a fix closed without merging keeps Review as Skipped and says so", _r["state"] == "done" and not _nostart(_r) and _states(_r)[4] == "skipped" and "closed without merging" in _r["line"])
+_r = _mcy({**_cy, "status": "nothing", "pr": None, "final": "nothing to build", "stages": _cy["stages"][:2]})
+check("steps: a cycle with nothing to build is done, its later groups Skipped with the reason, and the line says nothing is waiting",
+      _r["state"] == "done" and not _nostart(_r) and _states(_r)[2:] == ["skipped"] * 3 and _r["pipeline"][2]["note"] == "Not needed: nothing to build" and "nothing is waiting" in _r["line"])
+_r = _mcy(_cy)
+check("steps: a cycle waiting for review keeps its not-yet-reached group as Not started (it is still to come), and its line is the existing review sentence",
+      _r["state"] == "awaiting" and _nostart(_r) == ["seal"] and "Review the branch" not in _r["line"] and _r["line"].startswith("u is open"), _r["line"])
+_r = _mcy({**_cy, "ticket": 2, "branch": "ticket/2-x", "review": "git diff main..ticket/2-x", "pr": None, "final": "built"})
+check("steps: a ticket cycle waiting for review says what is next in its line", _r["state"] == "awaiting" and "Review the branch ticket/2-x" in _r["line"])
+_r = _mcy({**_cy, "status": "running", "finished": None, "final": "", "pr": None, "stages": _cy["stages"][:2] + [_cst("shipwright", "Shipwright", "shipwright", "running", "", 0)]})
+check("steps: a running cycle shows its pending groups as Not started", _r["state"] == "running" and _nostart(_r) == ["review", "seal", "human"] and _r["line"] == "")
+_bm = lambda st, ms: d.compose_mission("brief:x", None, {}, [], [], {}, get_brief=lambda i: {"id": "b1", "status": st, "mockups": {"state": ms}, "brief": None, "idea": "i", "project": "alpha"})
+_r = _bm("approved", "none")
+check("steps: an approved brief with no mock-ups is done, the mock-up steps are Skipped (optional) and the line is the approval state",
+      _r["state"] == "done" and not _nostart(_r) and _states(_r) == ["done", "done", "skipped", "skipped"] and _r["pipeline"][2]["note"] == "Optional, not made" and "approved" in _r["line"].lower())
+check("steps: a brief waiting for you, or still drafting, keeps its later steps as Not started and has no line",
+      all(_nostart(_bm(a, b)) and _bm(a, b)["line"] == "" for a, b in (("proposed", "none"), ("drafting", "none"))))
+_pl = d.compose_mission("plan:p1", None, {}, [], [], {}, get_plan=lambda i: {"id": "p1", "project": "alpha", "status": "approved", "sprint": [1], "moves": [{"issue": 1, "result": "moved", "from": "Backlog"}], "plan": [], "created": "2026-01-01T00:00:00Z"})
+check("steps: a plan whose cards all moved is done at every step, with the plan's own sentence for a line", _pl["state"] == "done" and not _nostart(_pl) and "moved" in _pl["line"])
+_r = _m("run:2026-01-01T00:00:00Z|alpha|surveyor", runs=[{**_run, "verdict": "CLEAN", "detail": "all fine"}])
+check("steps: a finished ledger run has no steps to show and a one-line sentence saying nothing is waiting", _r["state"] == "done" and _r["pipeline"] is None and "Nothing is waiting" in _r["line"])
+check("steps: no state of any kind shows both the Done state and a Not started step (every kind, every status the demo world and the fixtures produce)",
+      all(not (m["state"] == "done" and _nostart(m)) for m in [_mp(_tx_done), _fxd("nothing"), _fxd("taken"), _bm("approved", "none"), _bm("approved", "ready"), _mcy({**_cy, "status": "nothing", "stages": _cy["stages"][:2]}), _pl]))
 check("cycle: unknown, malformed and path-like cycle ids name nothing; without a reader there is nothing to show",
       all(_mcy(_cy, x) is None for x in ("cycle:nope", "cycle:../x", "cycle:", "cycle:a/b")) and d.compose_mission("cycle:cyc-a-7-1", lambda i: None, {}, [], [], {}) is None)
 _td = _tf.mkdtemp()
@@ -3449,7 +3501,7 @@ check("cycle: the dashboard cannot start one: a cycle is not a duty, so no run b
       "cycle" not in {x["name"] for x in d.duty_list()} and not (ROOT / "duties" / "cycle.sh").exists())
 _dw = _dm.World(clock=lambda: 1000.0); _dst = _dw.state()
 check("cycle: the demo world has invented cycle records, listed in the state, with the project flag and no real names",
-      len(_dst["cycles"]) == 2 and any(c["status"] == "awaiting-review" for c in _dst["cycles"]) and any(c["status"] == "stopped-cap" for c in _dst["cycles"])
+      len(_dst["cycles"]) == 3 and any(c["status"] == "awaiting-review" for c in _dst["cycles"]) and any(c["status"] == "stopped-cap" for c in _dst["cycles"])
       and any(p["cycle"] for p in _dst["projects"]) and all(c["project"] in _dm.PROJECTS for c in _dst["cycles"]))
 _dc = next(c for c in _dst["cycles"] if c["status"] == "awaiting-review")
 _rd = d.compose_mission("cycle:" + _dc["id"], _dw.panel_transcript, _dst["fixes"], _dst["runs"], _dst["inbox"], _dst["fixqueue"], get_cycle=_dw.cycle_record)
@@ -3594,8 +3646,8 @@ check("Brain and My rhythm are two modes of one workspace: one toolbar with a Ma
       'sl-button-group label="Brain view"' in _bb and 'act("setBrainMode", "map")' in _bb and 'act("setBrainMode", "rhythm")' in _bb and 'act("leaveBrain")' in _bb
       and "function setBrainMode" in _pg2 and "brainMode = \"map\"" in _pg2 and "createElement(\"sl-button\")" not in _rui and "#brain-bar .bb-tools" not in _pg2
       and "container:bbar/inline-size" in _ui and "@container bbar (max-width:1160px)" in _ui and "sl-dropdown" in _bb and 'data-k="more"' in _bb)
-check("the Brain toolbar has no project filter, My rhythm's project choice is the app's one scope (the same `sel`) in the toolbar, and the top bar's selector is the only other one",
-      "brainProject" not in _pg2 and 'id: "brain-proj"' not in _pg2 and "function rhythmScope" in _pg2 and "sel = v; localStorage.setItem(\"quarterdeck.project\", v)" in _pg2
+check("the Brain toolbar has no project filter, My rhythm's project choice is the app's one scope (the same kept project, setKept) in the toolbar, and the top bar's selector is the only other one",
+      "brainProject" not in _pg2 and 'id: "brain-proj"' not in _pg2 and "function rhythmScope" in _pg2 and "if(v === sel) return;\n  setKept(v);" in _pg2
       and _pg2.count('id="proj-switch"') == 1 and "proj-switch" not in _bb)
 check("no view carries a project filter of its own: Timeline and Notes use the top bar's project, and a project inside a form is a labelled field",
       "tlUi.project" not in _pg2 and "noteUi.project" not in _pg2 and 'label: "Show one project"' not in _pg2
@@ -3725,6 +3777,9 @@ if _nodeok.path():
     _hr = _sp.run(["node", "--no-warnings", str(ROOT / "bin" / "selftest-handlers.mjs")], capture_output=True, text=True)
     check("handlers under node: hostile ids and text (quotes, backticks, </script>, &#39;, line separators, ${}) only ever round-trip as JSON data, and only names in the table run",
           _hr.returncode == 0, (_hr.stderr or _hr.stdout)[-400:])
+    _rt = _sp.run(["node", "--no-warnings", str(ROOT / "bin" / "selftest-route.mjs")], capture_output=True, text=True)
+    check("the router under node (dashboard/assets/route.js): every page, project and add-on round-trips through the address; hostile ids, bad and over-long addresses are Home and never throw",
+          _rt.returncode == 0, (_rt.stderr or _rt.stdout)[-400:])
 else:
     print("  skip  handlers under node: node is not installed")
 
@@ -3789,7 +3844,7 @@ _basefs = float(_r4.search(r"\nbody\{[^}]*font:400 (\d+)px", _css4).group(1)); _
 _calmpad = float(_r4.search(r"\.calm \.card-b\{padding:\d+px (\d+)px", _css4).group(1)); _basepad = float(_r4.search(r"\n\.card-b\{padding:\d+px (\d+)px", _css4).group(1))
 check("Calm measured: body font 14 to 16.5 (at least +2px), card side padding 20 to 28, spacing tokens and control height raised, one column for split/home/mission/settings, 800px reading width",
       _calmfs - _basefs >= 2 and _calmpad - _basepad >= 6 and ":root.calm{--s2:10px;--s3:16px;--s4:22px;--s5:36px" in _cm and "--ctl-h:44px" in _cm
-      and all(c in _cm for c in (".calm .split", ".calm .home-grid", ".calm .home-row", ".calm .mission-grid", ".calm .set-row", ".calm .page{max-width:800px}")), (_basefs, _calmfs, _basepad, _calmpad))
+      and all(c in _cm for c in (".calm .split", ".calm .home-row", ".calm .mission-grid", ".calm .set-row", ".calm .page{max-width:800px}")), (_basefs, _calmfs, _basepad, _calmpad))
 check("Calm folds away a named list of secondary things with data-calm=\"hide\" (Home cards, stats rows, side columns, Notes search, Needs you intro, Crew detail lines) until Show everything",
       _ix4.count('data-calm="hide"') + _ix4.count("calmHide(") >= 12 and '.calm:not(.calm-all) [data-calm="hide"]{display:none}' in _css4 and 'id="calm-all"' in _ix4 and "function calmShowAll" in _ix4 and "Calm is keeping" in _ix4)
 _q = _cm.split(".calm .pill.running")[1].split("}")[0]
@@ -4312,6 +4367,40 @@ check("L18 the browser probe of the shell selftests is bin/browse.mjs's own laun
       'browse.mjs" probe' in (ROOT / "bin" / "selftest-lib.sh").read_text() and 'cmd === "probe"' in (ROOT / "bin" / "browse.mjs").read_text()
       and "chromiumSandbox: true" in (ROOT / "bin" / "browse.mjs").read_text() and "skipped: no usable browser" in (ROOT / "bin" / "selftest-lib.sh").read_text())
 check("L19 the self-tests leave no config/projects.json in the program folder", _had_projects_json or not (ROOT / "config" / "projects.json").exists())
+
+# ---- the Projects page's per-project summary (project_overview) ----
+_po_t, _po_w = ago(hours=3), ago(days=6)
+_po_projects = {"alpha": {}, "beta": {}, "gamma": {}}
+_po_inbox = [{"id": "local:alpha:shipwright:1", "project": "alpha", "duty": "shipwright", "severity": "ERROR", "text": "verify failed", "at": ago(minutes=30), "acknowledged": False},
+             {"id": "local:alpha:purser:1", "project": "alpha", "duty": "purser", "severity": "NEEDS_HUMAN", "text": "which timezone?", "at": ago(minutes=90), "acknowledged": False},
+             {"id": "local:alpha:old", "project": "alpha", "duty": "x", "severity": "ERROR", "text": "acknowledged one", "at": ago(minutes=5), "acknowledged": True},
+             {"id": "local:beta:purser:1", "project": "beta", "duty": "purser", "severity": "NEEDS_HUMAN", "text": "decide", "at": ago(minutes=10), "acknowledged": False},
+             {"id": "relay:1", "source": "relay", "addon": "relay", "severity": "BLOCKED", "text": "sign in again", "at": ago(minutes=5), "acknowledged": False}]
+_po_runs = [{"at": ago(hours=5), "project": "alpha", "duty": "surveyor", "verdict": "CLEAN"}, {"at": ago(hours=1), "project": "alpha", "duty": "shipwright", "verdict": "ERROR"},
+            {"at": ago(hours=2), "project": "beta", "duty": "trials", "verdict": "DRY-RUN"}]
+_po_spend = [{"at": ago(minutes=20), "project": "alpha", "cost": 1.25}, {"at": ago(days=3), "project": "alpha", "cost": 2.0}, {"at": ago(days=9), "project": "alpha", "cost": 50.0},
+             {"at": ago(minutes=40), "project": "beta", "cost": 0.5}, {"at": ago(minutes=40), "project": "", "cost": 9.0}]
+_po_fixes = {"p#1": {"project": "alpha", "status": "pr"}, "p#2": {"project": "alpha", "status": "failed"}, "p#3": {"project": "beta", "status": "running"}, "p#4": {"project": "beta", "status": "merged"}}
+_po_cycles = [{"project": "alpha", "status": "awaiting-review"}, {"project": "beta", "status": "done"}]
+_po_panels = [{"project": "beta", "status": "done"}, {"project": "beta", "status": "done", "superseded_by": "x"}, {"project": "gamma", "status": "running"}]
+_po_agents = [{"project": "gamma", "status": "running"}, {"project": "gamma", "status": "idle"}]
+_po = {o["name"]: o for o in d.project_overview(_po_projects, _po_agents, _po_runs, _po_inbox, _po_fixes, _po_cycles, _po_panels, [{"project": "beta", "status": "proposed"}],
+                                               [{"project": "alpha", "status": "done"}], _po_spend, ago(hours=1), _po_w, lambda n: "Python with pytest" if n == "alpha" else "")}
+check("overview: one entry per registered project, in name order", list(_po) == ["alpha", "beta", "gamma"])
+check("overview: needs counts the project's own unacknowledged inbox items (not an acknowledged one, not an add-on's) and names the newest as top",
+      _po["alpha"]["needs"] == 2 and _po["alpha"]["top"]["id"] == "local:alpha:shipwright:1" and _po["beta"]["needs"] == 1 and _po["gamma"]["needs"] == 0 and _po["gamma"]["top"] is None, _po["alpha"])
+check("overview: state is blocked for a failed run waiting, needs you for a decision, running for a live agent, and idle otherwise",
+      (_po["alpha"]["state"], _po["beta"]["state"], _po["gamma"]["state"]) == ("blocked", "needs you", "running"), [o["state"] for o in _po.values()])
+check("overview: last run is the newest row of the ledger for the project, with its duty and verdict; none when it never ran",
+      _po["alpha"]["last_run"] == {"at": _po_runs[1]["at"], "duty": "shipwright", "verdict": "ERROR"} and _po["gamma"]["last_run"] is None)
+check("overview: spend is summed from the ledger rows that name the project, today and over seven days (a row from nine days ago and a row with no project do not count)",
+      _po["alpha"]["spend_today"] == 1.25 and _po["alpha"]["spend_week"] == 3.25 and _po["beta"]["spend_week"] == 0.5 and _po["gamma"]["spend_week"] == 0, (_po["alpha"], _po["beta"]))
+check("overview: mission counts use the page's states (a pull request waiting, a cycle awaiting review and a running fix are open; a superseded panel is not counted)",
+      (_po["alpha"]["missions_open"], _po["alpha"]["missions_done"]) == (3, 1) and (_po["beta"]["missions_open"], _po["beta"]["missions_done"]) == (2, 3)
+      and (_po["gamma"]["missions_open"], _po["gamma"]["missions_done"]) == (1, 0), [(o["missions_open"], o["missions_done"]) for o in _po.values()])
+check("overview: the stack sentence comes from the survey's profile, empty when there is none", _po["alpha"]["stack"] == "Python with pytest" and _po["beta"]["stack"] == "")
+check("overview: no registered project gives an empty list", d.project_overview({}, [], [], [], {}, [], [], [], [], [], "", "") == [])
+check("overview: the real state and the Demo state both carry it", '"overview": _safe(lambda: project_overview(' in (ROOT / "bin" / "dashboard.py").read_text() and 'st["overview"] = project_overview(' in (ROOT / "bin" / "dashboard.py").read_text())
 
 print()
 if FAILS:

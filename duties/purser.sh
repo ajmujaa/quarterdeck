@@ -21,6 +21,8 @@
 #
 #   qtdeck run <p> purser --issue 204            # report only
 #   qtdeck run <p> purser --issue 204 --apply    # write it, move the card
+#   qtdeck run <p> purser --ticket 3 --apply     # a LOCAL ticket (qtdeck ticket): the requirements go into the ticket's own record in the data
+#                                                # folder; no GitHub, no card
 #
 # Contract:
 #   REQUIREMENTS_JSON: {"summary","requirements":[{"what","accept"}],"out_of_scope":[]}
@@ -43,28 +45,44 @@ LOG_FILE="$QUARTERDECK_HOME/logs/purser-$PROJECT.log"
 REPO=$(project_get "$PROJECT" repo)
 GH="${QUARTERDECK_GH:-gh}"   # a seam for the self-test: lib.sh puts the real gh first on PATH
 
-ISSUE="" APPLY=0
+ISSUE="" APPLY=0 TICKET=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --issue) ISSUE="${2:-}"; need_num "--issue" "$ISSUE"; shift ;;
+    --ticket) TICKET="${2:-}"; need_num "--ticket" "$TICKET"; shift ;;
     --apply) APPLY=1 ;;
     *) die "purser: unknown argument '$1'" ;;
   esac
   shift
 done
 [ "${QUARTERDECK_DRY_RUN:-1}" = 0 ] && APPLY=1
-[[ "$ISSUE" =~ ^[0-9]+$ ]] || die "purser: which issue? --issue <number>"
+[ -z "$ISSUE" ] || [ -z "$TICKET" ] || die "purser: --issue and --ticket are two different jobs; give one"
+[[ "$ISSUE" =~ ^[0-9]+$ ]] || [ -n "$TICKET" ] || die "purser: which issue? --issue <number> (or --ticket <number> for a local ticket)"
 
 acquire_lock "purser-$PROJECT"
-export QUARTERDECK_RUN_ID="$(tr '/' '_' <<<"$REPO")-purser-$ISSUE-$(date +%s)"
-
-meta=$(guard 60 "$GH" issue view "$ISSUE" -R "$REPO" --json number,title,body,state 2>>"$LOG_FILE") \
-  || die "purser: could not read issue #$ISSUE in $REPO"
-[ "$(jq -r .state <<<"$meta")" = OPEN ] || die "purser: #$ISSUE is not open"
-title=$(jq -r .title <<<"$meta")
-body=$(jq -r .body <<<"$meta")
-working_on "issue #$ISSUE — $title"
-say "quarterdeck: purser on $REPO#$ISSUE — $title"
+if [ -n "$TICKET" ]; then
+  # A local ticket: the text is in the data folder (bin/tickets.py), nothing is read from GitHub, and nothing is written to it.
+  ticket_load "$PROJECT" "$TICKET"
+  export QUARTERDECK_RUN_ID="$(tr '/' '_' <<<"$PROJECT")-purser-t$TICKET-$(date +%s)"
+  title=$TK_TITLE
+  body=$(jq -r '.body + "\n\nAcceptance checks:\n" + (.acceptance | map("- " + .) | join("\n"))' <<<"$TK_JSON")
+  WHAT="ticket #$TICKET"; WHERE="local ticket $TICKET of $PROJECT"
+  working_on "ticket #$TICKET: $title"
+  say "quarterdeck: purser on $PROJECT, local ticket #$TICKET: $title"
+else
+  export QUARTERDECK_RUN_ID="$(tr '/' '_' <<<"$REPO")-purser-$ISSUE-$(date +%s)"
+  meta=$(guard 60 "$GH" issue view "$ISSUE" -R "$REPO" --json number,title,body,state 2>>"$LOG_FILE") \
+    || die "purser: could not read issue #$ISSUE in $REPO"
+  [ "$(jq -r .state <<<"$meta")" = OPEN ] || die "purser: #$ISSUE is not open"
+  title=$(jq -r .title <<<"$meta")
+  body=$(jq -r .body <<<"$meta")
+  WHAT="#$ISSUE"; WHERE="$REPO#$ISSUE"
+  working_on "issue #$ISSUE — $title"
+  say "quarterdeck: purser on $REPO#$ISSUE — $title"
+fi
+SUBJECT_N=${TICKET:-$ISSUE}
+if [ -n "$TICKET" ]; then SUBJECT_BLOCK=$(printf '#%s %s\n\n%s\n' "$SUBJECT_N" "$title" "$body" | untrusted "ticket text")
+else SUBJECT_BLOCK=$(printf '#%s %s\n\n%s\n' "$SUBJECT_N" "$title" "$body" | untrusted "issue text"); fi
 
 MARK_OPEN='<!-- quarterdeck:requirements -->'
 MARK_CLOSE='<!-- /quarterdeck:requirements -->'
@@ -78,9 +96,9 @@ prompt="$(preamble "$PROJECT")
 
 $(crew_role purser)
 
---- THE ISSUE ---
+--- THE $([ -n "$TICKET" ] && echo TICKET || echo ISSUE) ---
 
-$(printf '#%s %s\n\n%s\n' "$ISSUE" "$title" "$body" | untrusted "issue text")
+$SUBJECT_BLOCK
 
 --- YOUR JOB ---
 
@@ -128,25 +146,25 @@ result=$(claude_run "$WORKDIR" "$prompt"); rc=$?
 case $rc in
   0) : ;;
   2) say "quarterdeck: usage limit reached — nothing written"; exit 0 ;;
-  3) say "quarterdeck: stopped at the per-call cap — nothing written"; record_run "$PROJECT" purser ERROR "#$ISSUE hit the per-call cap"; exit 1 ;;
-  *) record_run "$PROJECT" purser ERROR "#$ISSUE the model call failed"; exit 1 ;;
+  3) say "quarterdeck: stopped at the per-call cap: nothing written"; record_run "$PROJECT" purser ERROR "$WHAT hit the per-call cap"; exit 1 ;;
+  *) record_run "$PROJECT" purser ERROR "$WHAT the model call failed"; exit 1 ;;
 esac
-[ -n "$result" ] || { record_run "$PROJECT" purser ERROR "#$ISSUE empty reply"; exit 1; }
+[ -n "$result" ] || { record_run "$PROJECT" purser ERROR "$WHAT empty reply"; exit 1; }
 
-DOC="$QUARTERDECK_HOME/workspace/${PROJECT}-requirements-${ISSUE}.md"
+DOC="$QUARTERDECK_HOME/workspace/${PROJECT}-requirements-${TICKET:+ticket}${SUBJECT_N}.md"
 
 if grep -q '^RESULT: NEEDS_HUMAN' <<<"$result"; then
   why=$(grep -o '^RESULT: NEEDS_HUMAN.*' <<<"$result" | tail -1 | sed 's/^RESULT: NEEDS_HUMAN *//')
   {
-    echo "# #$ISSUE — $title"
+    echo "# $WHAT: $title"
     echo
-    echo "The purser could not write requirements for this yet. Nothing was posted to the issue."
+    echo "The purser could not write requirements for this yet. Nothing was $([ -n "$TICKET" ] && echo 'saved to the ticket' || echo 'posted to the issue')."
     echo
     echo "**Needs a person.** $why"
   } > "$DOC"
   say "  needs a person: $why"
   say "  written to $(basename "$DOC")"
-  record_run "$PROJECT" purser NEEDS_HUMAN "#$ISSUE — $why"
+  record_run "$PROJECT" purser NEEDS_HUMAN "$WHAT: $why"
   exit 0
 fi
 
@@ -159,7 +177,7 @@ if ! grep -q '^RESULT: READY' <<<"$result" || ! jq -e '
       <<<"${json:-null}" >/dev/null 2>&1; then
   log "$PROJECT: purser contract did not parse — logs/runs/$QUARTERDECK_RUN_ID.json"
   say "quarterdeck: the purser's reply did not parse — nothing written"
-  record_run "$PROJECT" purser ERROR "#$ISSUE unparseable contract"
+  record_run "$PROJECT" purser ERROR "$WHAT unparseable contract"
   exit 1
 fi
 json=$(jq -c '.requirements |= .[0:8]' <<<"$json")
@@ -170,7 +188,7 @@ while IFS= read -r a; do printf '%s' "$a" | python3 "$QUARTERDECK_DIR/bin/behavi
 if [ "$acts" = 0 ]; then
   log "$PROJECT: purser: every acceptance check only looks for something to exist — logs/runs/$QUARTERDECK_RUN_ID.json"
   say "quarterdeck: every acceptance check only proves that something exists (a grep, a selector, a string); at least one has to exercise the behaviour — nothing written"
-  record_run "$PROJECT" purser ERROR "#$ISSUE acceptance checks only prove existence"
+  record_run "$PROJECT" purser ERROR "$WHAT acceptance checks only prove existence"
   exit 1
 fi
 n=$(jq '.requirements | length' <<<"$json")
@@ -182,29 +200,40 @@ block=$(jq -r --arg o "$MARK_OPEN" --arg c "$MARK_CLOSE" '
   + ([.requirements | to_entries[] | "\(.key + 1). \(.value.what)\n   - **Accept when:** \(.value.accept)"] | join("\n"))
   + (if ((.out_of_scope // []) | length) > 0 then "\n\n**Out of scope**\n" + ([.out_of_scope[] | "- " + .] | join("\n")) else "" end)
   + "\n" + $c' <<<"$json")
-{ echo "# #$ISSUE — $title"; echo; echo "$block"; } > "$DOC"
+{ echo "# $WHAT: $title"; echo; echo "$block"; } > "$DOC"
 say "  $n requirement(s), written to $(basename "$DOC")"
 
 if [ "$APPLY" != 1 ]; then
   say ""
   sed 's/^/  /' <<<"$block" >&2
   say ""
-  say "quarterdeck: report only — pass --apply to add this to the issue and move its card to Ready"
-  record_run "$PROJECT" purser "DRY-RUN" "#$ISSUE — $n requirement(s)"
+  if [ -n "$TICKET" ]; then say "quarterdeck: report only: pass --apply to keep this in the local ticket"
+  else say "quarterdeck: report only: pass --apply to add this to the issue and move its card to Ready"; fi
+  record_run "$PROJECT" purser "DRY-RUN" "$WHAT: $n requirement(s)"
+  exit 0
+fi
+
+# A local ticket keeps the requirements in its own record, between nothing and nobody: no GitHub, no card.
+if [ -n "$TICKET" ]; then
+  if ! sed '1d;$d' <<<"$block" | python3 "$TICKETS_PY" set "$PROJECT" "$TICKET" requirements=- 2>>"$LOG_FILE"; then
+    record_run "$PROJECT" purser ERROR "$WHAT could not save the requirements"; die "purser: could not save the requirements in ticket #$TICKET (see $LOG_FILE)"
+  fi
+  say "  requirements saved in local ticket #$TICKET"
+  record_run "$PROJECT" purser READY "$WHAT: $n requirement(s), saved in the local ticket"
   exit 0
 fi
 
 # The issue may have been edited while the model was thinking. Read it again
 # and rebuild from that, so a change made in the meantime is not overwritten.
 fresh=$(guard 60 "$GH" issue view "$ISSUE" -R "$REPO" --json body --jq .body 2>>"$LOG_FILE") \
-  || { record_run "$PROJECT" purser ERROR "#$ISSUE could not re-read the issue"; exit 1; }
+  || { record_run "$PROJECT" purser ERROR "$WHAT could not re-read the issue"; exit 1; }
 # (No EXIT trap for the temp file: acquire_lock's trap releases the lock, and a
 # second trap would replace it.)
 tmp=$(mktemp)
 printf '%s\n\n%s\n' "$(without_block <<<"$fresh")" "$block" > "$tmp"
 gh_post 60 issue edit "$ISSUE" -R "$REPO" --body-file "$tmp" >/dev/null 2>>"$LOG_FILE"; rc=$?
 rm -f "$tmp"
-[ $rc = 0 ] || { record_run "$PROJECT" purser ERROR "#$ISSUE could not update the issue"; die "purser: could not update #$ISSUE (see $LOG_FILE)"; }
+[ $rc = 0 ] || { record_run "$PROJECT" purser ERROR "$WHAT could not update the issue"; die "purser: could not update #$ISSUE (see $LOG_FILE)"; }
 say "  requirements added to #$ISSUE"
 
 # The card moves only out of Backlog: an issue already being worked on is not

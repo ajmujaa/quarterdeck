@@ -52,8 +52,7 @@ export QUARTERDECK_RUN_ID="$(tr '/' '_' <<<"$REPO")-foreman-$(date +%s)"
 # What is already filed. Given to the model so it can dedupe against reality
 # rather than guess — the most common failure of an issue-filing agent is
 # re-filing something that has been open for a month.
-existing=$(guard 60 "$GH" issue list -R "$REPO" --state all --limit 100 \
-  --json number,title,state --jq '[.[] | "#\(.number) [\(.state)] \(.title)"] | join("\n")' 2>>"$LOG_FILE")
+existing=$(existing_issues "$REPO")
 [ -n "$existing" ] || existing="(none)"
 
 working_on "filing from $(basename "$FROM")"
@@ -137,30 +136,10 @@ if [ "$APPLY" != 1 ]; then
   exit 0
 fi
 
-filed=0
-made='[]'   # what this document actually became, so it can be traced back
-while read -r item; do
-  [ -n "$item" ] || continue
-  title=$(jq -r .title <<<"$item")
-  body=$(jq -r .body <<<"$item")
-  labels=$(jq -r '(.labels // []) | join(",")' <<<"$item")
-  # Labels that don't exist make `gh issue create` fail outright and lose the
-  # issue, so they are best-effort: retry once without them.
-  if url=$(gh_post 60 issue create -R "$REPO" --title "$title" --body "$body" \
-             ${labels:+--label "$labels"} 2>>"$LOG_FILE"); then
-    :
-  elif url=$(gh_post 60 issue create -R "$REPO" --title "$title" --body "$body" 2>>"$LOG_FILE"); then
-    log "filed without labels: $title"
-  else
-    log "FAILED to file: $title"
-    say "  ✗ $title"
-    continue
-  fi
-  filed=$((filed + 1))
-  made=$(jq -c --arg u "$url" --arg t "$title" \
-           '. + [{number: ($u | split("/") | last | tonumber? // 0), url: $u, title: $t}]' <<<"$made")
-  say "  ✓ $url  $title"
-done < <(jq -c '.[]' <<<"$issues")
+# The filing itself (labels best effort, every post through gh_post's credential scan) is bin/lib.sh file_issues, shared with the planner's tickets.
+file_issues "$REPO" "$issues"
+filed=$FILED
+made=$MADE
 
 # Record which document became which issues. Without this nobody can answer the
 # only question that matters when looking at a report weeks later — "did we

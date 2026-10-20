@@ -117,7 +117,7 @@ def _all(check, tmp):
     check("integrations: ga4 sends its token in a header, never in the URL",
           all("AT-ga" not in c[1] for c in fk.calls) and any(c[2].get("Authorization") == "Bearer AT-ga" for c in fk.calls))
     check("integrations: ga4 without a property id says what to set",
-          _fails(lambda: ga4.fetch(common.load_env(), {"ga4": {}}), "property_id"))
+          _fails(lambda: ga4.fetch(common.load_env(), {"ga4": {}}), "GA4 property id"))
     if shutil.which("openssl"):
         k = tmp / "k.pem"
         subprocess.run(["openssl", "genrsa", "-out", str(k), "2048"], capture_output=True)

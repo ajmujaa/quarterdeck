@@ -217,6 +217,10 @@ Gmail or Mac Mail, team chat, web analytics, the numbers for your posts on Faceb
 
 Each service has a help icon that says what it reads and never reads, how to get what it needs, the steps, the permissions to grant, how to revoke access and what was tested. Nothing is claimed as tested against a real service unless its file says so. Quarterdeck never posts to a social account. A service is one small JSON file, so adding another does not mean touching the core.
 
+You can connect more than one account of the same service, for example a work and a personal Gmail. Each account has a label: lowercase letters, digits and dashes, at most 24 (`work`, `personal`; the account every install already has is `default`). On the Connections page each card has **Add another account**, and every extra account has its own switch, fields, **Test** and **Remove account**. From a terminal, `bin/qtdeck connect gmail --account work` asks for that account's credentials (typed with nothing shown, or piped in on standard input, never taken from an argument), `bin/qtdeck connect list` shows every account and when it last refreshed, and `bin/qtdeck connect remove gmail --account work` forgets one. The Brain and Helm show each account under its own name and never add two accounts together. Calendar, LinkedIn and Mac Mail stay one account each.
+
+Credentials belong to one account. A second Gmail account needs its own Google client id and client secret, entered once for that label (they may be the same values as the first account's, but you enter them again), and its own sign-in: `python3 bin/integrations/google_oauth.py gmail --account work`. A labelled account never uses the default account's credentials. Its data is refreshed into `state/connectors/gmail/work/`, on the same schedule as the service. An install made before accounts existed keeps working as the `default` account, with nothing to migrate.
+
 ![Connections, in demo mode](images/connections.png)
 
 ### Helm, the optional voice

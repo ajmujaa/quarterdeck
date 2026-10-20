@@ -259,7 +259,8 @@ def summary(prof, prop, path):
     print(f"  {n}  ({path})")
     print(f"    languages     {langs}")
     print(f"    duties        {', '.join(e['duties'])}")
-    print(f"    verify        {e['verify'] + '   (' + prop['reasons']['verify'] + ')' if e['verify'] else 'none found; set it with --verify \"<command that runs the tests>\"'}")
+    verify = e['verify'] + '   (' + prop['reasons']['verify'] + ')' if e['verify'] else 'none found; set it with --verify "<command that runs the tests>"'
+    print(f"    verify        {verify}")
     print(f"    repo          {e['repo'] or 'none (no GitHub remote); set it after --apply with: qtdeck repo ' + n + ' <owner/name>'}")
     print(f"    protected     {len(e['forbidden_paths'])} paths the crew may not change (--verbose lists them)")
     if prof["secret_files"]:

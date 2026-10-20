@@ -20,6 +20,9 @@ const mins = ms => Math.round(ms / 60000);
 const span = ms => { const m = mins(ms); return m < 120 ? m + " min" : m < 2880 ? Math.round(m / 60) + " h" : Math.round(m / 1440) + " days"; };
 const ledgerKey = r => [r.at, r.project, r.duty].join("|");
 const conn = (S, name) => ((S && S.connectors) || []).find(c => c && c.name === name && c.connected);
+// Every connected account of a service (one entry each when a service has several accounts: each has `account` and a unique `key`).
+const conns = (S, name) => ((S && S.connectors) || []).filter(c => c && c.name === name && c.connected);
+const connKey = c => c.key || c.name;
 const https = u => (typeof u === "string" && u.startsWith("https://") ? u : null);
 
 const ev = (id, kind, sev, title, why, now, action, live) => ({id, kind, sev, title: clip(title, 90), why: clip(why, 140), at: new Date(now).toISOString(), action: action || null, live: !!live});
@@ -56,23 +59,21 @@ export function detect(prev, cur, now = Date.now()) {
   }
 
   // 4. Mail or a Slack message that has waited over a day.
-  for (const name of ["gmail", "slack"]) {
-    const c = conn(S, name);
-    if (!c || !(c.unread > 0) || !(c.items || []).length) continue;
+  for (const name of ["gmail", "slack"]) for (const c of conns(S, name)) {
+    if (!(c.unread > 0) || !(c.items || []).length) continue;
     const old = (c.items || []).filter(i => t(i.at)).sort((a, b) => t(a.at) - t(b.at))[0];
     if (old && now - t(old.at) > WAITING_HOURS * 3600e3)
-      out.push(ev(`waiting:${name}:${old.at}`, "waiting", 2, `${c.label || name}: something has waited ${span(now - t(old.at))}`,
-        `${c.unread} waiting. The oldest: ${old.title}${old.sub ? " (" + old.sub + ")" : ""}`, now, {label: "Open " + (c.label || name), type: "brain", node: "c:" + name}, true));
+      out.push(ev(`waiting:${c.account ? connKey(c) : name}:${old.at}`, "waiting", 2, `${c.label || name}: something has waited ${span(now - t(old.at))}`,
+        `${c.unread} waiting. The oldest: ${old.title}${old.sub ? " (" + old.sub + ")" : ""}`, now, {label: "Open " + (c.label || name), type: "brain", node: "c:" + connKey(c)}, true));
   }
 
   // 5. An analytics page that doubled in views against last week.
-  for (const name of ["ga4", "analytics"]) {
-    const c = conn(S, name);
-    for (const i of (c && c.items) || []) {
+  for (const name of ["ga4", "analytics"]) for (const c of conns(S, name)) {
+    for (const i of c.items || []) {
       const m = /([\d,]+) views, \+(\d+)% vs last week/.exec(i.sub || ""), views = m && Number(m[1].replace(/,/g, "")), pct = m && Number(m[2]);
       if (m && pct >= 100 && views >= 100)
         out.push(ev(`doubled:${i.title}:${new Date(now).toISOString().slice(0, 10)}`, "doubled", 1, `${clip(i.title, 60)} doubled`, `${views.toLocaleString("en-US")} views, up ${pct}% on last week`, now,
-          https(i.url) ? {label: "Open the page", type: "url", url: i.url} : {label: "Open analytics", type: "brain", node: "c:" + name}, true));
+          https(i.url) ? {label: "Open the page", type: "url", url: i.url} : {label: "Open analytics", type: "brain", node: "c:" + connKey(c)}, true));
     }
   }
 
@@ -95,7 +96,7 @@ export function detect(prev, cur, now = Date.now()) {
   // 8. A feed that has stopped refreshing.
   for (const [name, st] of Object.entries(S.integrations || {})) {
     if (st && st.ok === false) {
-      const label = (((S.connectors || []).find(c => c.name === name) || {}).label) || name;
+      const label = (((S.connectors || []).find(c => c && connKey(c) === name) || {}).label) || name.replace(/@(.+)$/, " ($1)");
       out.push(ev(`feed:${name}:${st.error_short}`, "feed-broke", 2, `${label} stopped refreshing`, st.error_short || "It reported an error.", now, {label: "Open " + label, type: "brain", node: "c:" + name}, true));
     }
   }

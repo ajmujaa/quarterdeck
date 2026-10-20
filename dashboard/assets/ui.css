@@ -447,6 +447,8 @@ blockquote{margin:8px 0;padding:2px 12px;border-left:3px solid var(--line-2);col
 .conn-h h2{font:500 16px var(--font-ui);flex:1;min-width:140px}
 .conn-end{display:flex;align-items:center;gap:var(--s2);margin-left:auto}.conn-end sl-icon-button{font-size:20px}
 .conn-body{margin-top:var(--s2);color:var(--ink-2);font-size:13px}
+.conn-acct{margin-top:var(--s4);padding-top:var(--s3);border-top:1px solid var(--line)}.conn-acct .conn-h h3{font:500 14px var(--font-ui);flex:1;min-width:120px}
+.conn-more{margin-top:var(--s3)}
 .conn-cred{margin:var(--s3) 0;display:grid;grid-template-columns:minmax(0,1fr);gap:6px}
 .conn-cred .field-row sl-input{flex:1}
 .set-row{display:grid;grid-template-columns:200px minmax(0,1fr);gap:2px 16px;padding:12px 0;border-top:1px solid var(--line)}

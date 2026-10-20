@@ -719,8 +719,15 @@ class World:
             arrivals = [(s, it) for s, c, it in SCENARIO_DROPS if c == name and t >= s]
             newest = [{"title": it["title"], "sub": it["sub"], "at": self.at(s), "new": True, "url": None} for s, it in reversed(arrivals)]
             items = newest + items
-            out.append({"name": name, "label": labels[name], "connected": True, "updated": self.at(arrivals[-1][0]) if arrivals else self.ago(minutes=7),
-                        "unread": (len(arrivals) + len(fixed[name])) if name in ("gmail", "slack") else None, "items": items[:12]})
+            entry = {"name": name, "label": labels[name], "connected": True, "updated": self.at(arrivals[-1][0]) if arrivals else self.ago(minutes=7),
+                     "unread": (len(arrivals) + len(fixed[name])) if name in ("gmail", "slack") else None, "items": items[:12]}
+            out.append(entry)
+            if name == "gmail":      # two invented Gmail accounts, so the feature can be seen; each says which account it is (the work one comes first)
+                personal = [{"title": ti, "sub": sub, "at": self.ago(minutes=m), "new": False, "url": None} for ti, sub, m in (
+                    ("Your order has shipped", "orders@shop.example", 90), ("Dinner on Saturday?", "Alex", 240), ("Library books are due", "library@town.example", 600))]      # none has waited a day: the scripted tour's one "waiting" suggestion is the work account's
+                entry.update({"label": "Gmail (work)", "account": "work", "key": "gmail@work"})
+                out.append({"name": name, "label": "Gmail (personal)", "connected": True, "updated": self.ago(minutes=9), "unread": len(personal), "items": personal,
+                            "account": "personal", "key": "gmail@personal"})
         return out
 
     # ---- memory ----
@@ -853,7 +860,7 @@ class World:
             "agenda_status": {"events": 4, "reminders": 4, "at": self.ago(minutes=4)},
             "integrations": {n: {"ok": not (n == "facebook" and t >= FEED_BREAKS), "at": self.ago(minutes=m), "seconds": 2,
                                  "error_short": "token expired" if n == "facebook" and t >= FEED_BREAKS else ""}
-                             for n, m in (("ga4", 11), ("gmail", 6), ("slack", 3), ("linkedin", 55), ("facebook", 19), ("instagram", 19))},
+                             for n, m in (("ga4", 11), ("gmail@work", 6), ("gmail@personal", 9), ("slack", 3), ("linkedin", 55), ("facebook", 19), ("instagram", 19))},
             "connectors": self.connectors(t), "memory": self.memory(),
         }
         for x in self.EXT:
@@ -1041,14 +1048,19 @@ class World:
 
     def connections(self):
         """Invented services in each state, so the page can be seen full."""
-        def row(i, label, what, state, ago, error="", cred=True, local=False):
-            return {"id": i, "label": label, "what": what, "minutes": 10, "local": local, "steps": ["Made-up step one: open the service's settings.", "Made-up step two: create a read-only token.", "Made-up step three: paste it here and switch the service on."], "settings": [],
+        def row(i, label, what, state, ago, error="", cred=True, local=False, others=()):
+            r = {"id": i, "label": label, "what": what, "minutes": 10, "local": local, "steps": ["Made-up step one: open the service's settings.", "Made-up step two: create a read-only token.", "Made-up step three: paste it here and switch the service on."], "settings": [],
                     "reads": ["Made-up: a count and a few titles."], "not_reads": ["Made-up: nothing else is read."], "scopes": ["Made-up: read only."], "revoke": "Made-up: remove the token in the service's settings.",
                     "tested": "Demo text. Nothing here is tested because nothing here is real.", "verified": False, "links": [],
                     "credentials": [] if local else [{"key": i.upper() + "_TOKEN", "label": "Access token", "secret": True, "help": "Made-up help text.", "looks": "A made-up string of letters", "optional": False, "present": cred}], "enabled": state != "off" or local,
                     "state": state, "missing": [] if cred or local else [i.upper() + "_TOKEN"], "last_at": self.at(self.elapsed() - ago) if ago is not None else None, "error": error}
+            keys = ("label", "enabled", "state", "missing", "last_at", "error", "credentials")
+            default = {"label": "default", **{k: r[k] for k in keys[1:]}}
+            extra = [{"label": lab, "enabled": True, "state": "ok", "missing": [], "last_at": self.at(self.elapsed() - mins * 60),
+                      "error": "", "credentials": [{**r["credentials"][0], "present": True, "stored": "file"}]} for lab, mins in others]
+            return {**r, "multi": not local and bool(r["credentials"]), "accounts": [default] + extra}
         return {"services": [row("calendar", "Calendar and reminders", "Today's events and what is due.", "ok", 120, local=True),
-                             row("mail", "Mail", "How many messages are waiting.", "ok", 300),
+                             row("mail", "Mail", "How many messages are waiting.", "ok", 300, others=(("work", 360), ("personal", 540))),
                              row("analytics", "Site analytics", "Visitors and top pages.", "ok", 2400),
                              row("chat", "Team chat", "Unread mentions.", "failing", 5400, "The token was rejected. Paste a new one."),
                              row("social", "Social page", "Comments and messages.", "needs set-up", None, cred=False),

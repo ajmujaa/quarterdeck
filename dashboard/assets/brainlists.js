@@ -17,7 +17,7 @@ const DOCS = {
 export const NODE_DOCS = {};      // add-ons say where their own nodes are explained: node id -> the line to show
 export const docPointer = n => {
   const feed = n && n.ref && n.ref.feed;
-  if (feed) return "README: " + (DOCS[feed] || "Dashboard, Brain, Setting up the connections");
+  if (feed) return "README: " + (DOCS[String(feed).split("@")[0]] || "Dashboard, Brain, Setting up the connections");
   return (n && NODE_DOCS[n.id]) || "";
 };
 

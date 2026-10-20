@@ -21,7 +21,7 @@ def _when(raw):
 
 
 def fetch(env, cfg):
-    auth = {"Authorization": "Bearer " + google_oauth.access_token(env, "gmail")}
+    auth = {"Authorization": "Bearer " + google_oauth.access_token(env, "gmail", cfg.get("account", "default"))}
     lst = common.request("GET", API, headers=auth, params={"q": QUERY, "maxResults": common.MAX_ITEMS})
     ids = [m.get("id") for m in lst.get("messages", []) if isinstance(m, dict) and m.get("id")]
     unread = lst.get("resultSizeEstimate", len(ids)) if lst.get("nextPageToken") else len(ids)

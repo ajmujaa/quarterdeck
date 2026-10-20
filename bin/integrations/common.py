@@ -16,6 +16,7 @@ from urllib.parse import urlencode
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import home as _home
+from integrations import accounts
 
 ROOT = Path(__file__).resolve().parents[2]              # the program
 HOME = _home.resolve()                                   # your data (bin/home.py)
@@ -91,16 +92,42 @@ def write_private(path, text):
         raise
 
 
-def write_snapshot(name, items, unread=None):
-    """state/connectors/<name>.json in the shape brain_connectors() reads."""
+def write_snapshot(name, items, unread=None, service=None, label="default"):
+    """The snapshot brain_connectors() reads: state/connectors/<service>/<label>/<name>.json for every account, and for the default account also the
+    older state/connectors/<name>.json, so a reader written before accounts existed keeps working. <service> is the service id (it is the snapshot
+    name unless one service writes several, like meta)."""
+    label = accounts.norm(label)
     clean = [make_item(i.get("title"), i.get("sub"), i.get("at"), i.get("new"), i.get("url"))
              for i in items[:MAX_ITEMS]]
     d = {"updated": now_iso(), "items": clean}
     if isinstance(unread, int):
         d["unread"] = unread
+    text = json.dumps(d, indent=2)
     d_dir = STATE / "connectors"
     d_dir.mkdir(parents=True, exist_ok=True)
-    write_private(d_dir / f"{name}.json", json.dumps(d, indent=2))
+    acct = accounts.snapshot_dir(STATE, service or name, label)
+    for folder in (acct.parent, acct):
+        folder.mkdir(exist_ok=True)
+        os.chmod(folder, 0o700)
+    write_private(acct / f"{name}.json", text)
+    if label == accounts.DEFAULT:
+        write_private(d_dir / f"{name}.json", text)
+
+
+def read_snapshot(name, service=None, label="default"):
+    """One account's snapshot as a dict, or None. The account folder first; the default account falls back to the older flat file when it has no
+    folder entry yet. The two are never mixed."""
+    label = accounts.norm(label)
+    paths = [accounts.snapshot_file(STATE, service or name, name, label)]
+    if label == accounts.DEFAULT:
+        paths.append(accounts.legacy_file(STATE, name))
+    for p in paths:
+        try:
+            d = json.loads(p.read_text())
+        except (OSError, ValueError):
+            continue
+        return d if isinstance(d, dict) else None
+    return None
 
 
 def status_path():
@@ -115,14 +142,26 @@ def read_status():
         return {}
 
 
-def record_status(name, ok, error_short="", seconds=0.0):
+def record_status(name, ok, error_short="", seconds=0.0, label="default"):
     STATE.mkdir(parents=True, exist_ok=True)
     with open(STATE / "integrations-status.lock", "w") as lk:
         fcntl.flock(lk, fcntl.LOCK_EX)           # sources run in separate processes
         d = read_status()
-        d[name] = {"ok": bool(ok), "at": now_iso(), "error_short": clip(error_short, 120),
-                   "seconds": round(float(seconds), 1)}
+        d[accounts.status_key(name, label)] = {"ok": bool(ok), "at": now_iso(), "error_short": clip(error_short, 120),
+                                               "seconds": round(float(seconds), 1)}
         write_private(status_path(), json.dumps(d, indent=2))
+
+
+def forget_status(names):
+    """Drop status records by their full key (used when an account is removed)."""
+    STATE.mkdir(parents=True, exist_ok=True)
+    with open(STATE / "integrations-status.lock", "w") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        d = read_status()
+        if any(n in d for n in names):
+            for n in names:
+                d.pop(n, None)
+            write_private(status_path(), json.dumps(d, indent=2))
 
 
 # ---- credentials and config ---------------------------------------------------
@@ -140,16 +179,33 @@ def store_kind():
     return "keychain" if isinstance(d, dict) and d.get("credential_store") == "keychain" else "file"
 
 
-def load_env():
+class Env(dict):
+    """The credentials of one account, by their base names. It remembers its label so a missing key is reported as KEY@label."""
+    label = accounts.DEFAULT
+
+
+def load_env(label="default"):
+    """The credentials of ONE account, keyed by the base names every service module asks for. A labelled account sees only its own KEY@label
+    entries: it never falls back to the default account's keys."""
+    label = accounts.norm(label)
+    out = Env()
+    out.label = label
     if store_kind() != "keychain":
-        return read_env_file()
+        for k, v in read_env_file().items():
+            base, lab = accounts.split_key(k)
+            if lab == label:
+                out[base] = v
+        return out
     from integrations import keychain, manifest          # lazy: manifest imports this module
     try:
-        out = {k: v for k in sorted(manifest.known_keys()) for v in [keychain.get(k)] if v}
+        for k in sorted(manifest.known_keys()):
+            v = keychain.get(accounts.cred_key(k, label))
+            if v:
+                out[k] = v
     except keychain.KeychainError as e:
         raise IntegrationError(f"the credential store is the macOS Keychain: {e}")
     if not out:
-        raise IntegrationError("needs credentials: none are saved in the macOS Keychain (Connections page)")
+        raise IntegrationError("needs credentials: none are saved in the macOS Keychain" + (f" for the account {label}" if label != accounts.DEFAULT else "") + " (Connections page)")
     return out
 
 
@@ -187,7 +243,8 @@ def unquote(v):
 def need(env, key):
     v = env.get(key, "")
     if not v:
-        raise IntegrationError(f"needs credentials: add {key} to ~/.config/quarterdeck/{ENV_NAME}")
+        stored = accounts.cred_key(key, getattr(env, "label", accounts.DEFAULT))
+        raise IntegrationError(f"needs credentials: add {stored} to ~/.config/quarterdeck/{ENV_NAME}")
     return v
 
 
@@ -200,7 +257,10 @@ def load_config():
     if isinstance(d, dict):
         for name, v in (d.get("sources") or {}).items():
             if isinstance(v, dict):
-                cfg["sources"].setdefault(name, {}).update(v)
+                cfg["sources"].setdefault(name, {}).update({k: x for k, x in v.items() if k != "accounts"})
+                if isinstance(v.get("accounts"), dict):            # the other accounts of this service: {label: {"enabled": bool}}
+                    cfg["sources"][name]["accounts"] = {l: {"enabled": a.get("enabled") is True} for l, a in v["accounts"].items()
+                                                        if accounts.valid(l) and l != accounts.DEFAULT and isinstance(a, dict)}
         if isinstance(d.get("ga4"), dict):
             cfg["ga4"].update(d["ga4"])
     return cfg

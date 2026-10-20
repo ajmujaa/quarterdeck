@@ -1,7 +1,8 @@
 """Slack: direct messages and mentions newer than your last-read marker, with a short preview.
 
-User token (xoxp-), read scopes only: im:read im:history mpim:read mpim:history channels:read
-channels:history groups:read groups:history users:read search:read. Written from Slack's method
+User token (xoxp-), read scopes only, the narrowest set the calls below need: im:read im:history mpim:read
+mpim:history (direct messages), channels:read groups:read (conversations.info on a channel where you were
+mentioned), users:read, search:read. No channels:history or groups:history: no channel history is ever read. Written from Slack's method
 docs as remembered, not tested against a live workspace; a wrong field shows up as a short error.
 """
 import re

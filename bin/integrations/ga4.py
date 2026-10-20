@@ -76,9 +76,9 @@ def _dims(row):
 
 
 def fetch(env, cfg):
-    prop = str(cfg["ga4"].get("property_id", "")).strip()
+    prop = str(env.get("GA4_PROPERTY_ID") or cfg["ga4"].get("property_id", "")).strip()      # the field on the Connections page wins over the config file
     if not prop.isdigit():
-        raise common.IntegrationError("needs credentials: set ga4.property_id in config/integrations.json")
+        raise common.IntegrationError("needs the GA4 property id: enter it on the Connections page (digits only)")
     site = str(cfg["ga4"].get("site_url") or "").rstrip("/")             # no site address set: the items carry no link at all
     auth = {"Authorization": "Bearer " + access_token(env)}
     url = API.format(prop)

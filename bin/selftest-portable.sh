@@ -34,5 +34,27 @@ ck 'no declare -A, mapfile, readarray, local -n, [[ -v ]], &>>, |&: bash 4 only'
 ck 'no head -0 or head -n -N: BSD head rejects them'                            'head +-0|head +-n +-[0-9]'
 ck 'no \b, \s or \d in a regex handed to git grep, grep or sed (not portable)'  '(git( +-C +[^ ]+)? +grep|grep +-[A-Za-z]*E|sed +-E)[^|]*\\[bsd]'
 ck 'no immediate process check after a run: wait with st_gone'                  'pgrep +-f' 'st_gone\(\)|pgrep -f "[$]1" >/dev/null 2>&1 [|][|] return 0'
+# python files: every one must compile on the oldest supported Python (README says 3.10). Before 3.12 an f-string expression may not hold a backslash
+# or the quote that encloses it; a newer interpreter accepts both, so look for them in the source too (attach.py broke 3.10 and 3.11 this way).
+pyhits=$(python3 - bin/*.py bin/integrations/*.py <<'PY'
+import ast, sys
+for f in sys.argv[1:]:
+    src = open(f, encoding="utf-8").read()
+    try:
+        tree = ast.parse(src, f)
+    except SyntaxError as e:
+        print(f"{f}:{e.lineno}: {e.msg}"); continue
+    for js in (n for n in ast.walk(tree) if isinstance(n, ast.JoinedStr)):
+        whole = ast.get_source_segment(src, js) or ""
+        body = whole.lstrip("rbfRBF")
+        q = body[:1]
+        for fv in (n for n in ast.walk(js) if isinstance(n, ast.FormattedValue)):
+            seg = ast.get_source_segment(src, fv.value) or ""
+            if "\\" in seg or (q and q in seg and not isinstance(fv.value, ast.Constant)):
+                print(f"{f}:{js.lineno}: f-string expression holds a backslash or its own quote (Python before 3.12 rejects it)"); break
+PY
+)
+if [ -z "$pyhits" ]; then printf '  ok    %s\n' "every bin/*.py compiles, and no f-string expression holds a backslash or its own quote (Python 3.10 and 3.11)"
+else printf '  FAIL  %s\n' "a python file would not compile on Python before 3.12"; printf '%s\n' "$pyhits" | head -5 | sed 's/^/          /'; fails=$((fails+1)); fi
 echo
 [ "$fails" = 0 ] && echo "  all checks passed" || { echo "  $fails check(s) failed"; exit 1; }

@@ -22,6 +22,7 @@
     "macOS Calendars and Reminders access. macOS names the level Full Access, but the helper only reads."
   ],
   "steps": [
+    "This helper is for a Mac. On Linux there is no calendar helper, and this service stays off.",
     "You need the Xcode command line tools. If you do not have them, run: xcode-select --install",
     "In a terminal in the Quarterdeck folder run: bash tools/agenda/build.sh",
     "It builds the helper app at ~/Applications/QuarterdeckAgenda.app and signs it with its own identity.",

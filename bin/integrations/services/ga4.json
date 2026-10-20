@@ -14,6 +14,14 @@
       "secret": false,
       "help": "The path to the JSON key file on this computer. Only the path is stored. The file is read by the feed and never shown.",
       "looks": "A path such as /Users/you/keys/analytics.json"
+    },
+    {
+      "key": "GA4_PROPERTY_ID",
+      "label": "GA4 property id",
+      "secret": false,
+      "optional": true,
+      "help": "The numeric id of the property. In Google Analytics open Admin, then Property settings (or Property details). It is not the G- Measurement ID.",
+      "looks": "Digits only, such as 123456789"
     }
   ],
   "settings": [
@@ -36,8 +44,9 @@
     "Create a service account and download its key as a JSON file. Keep the file outside the Quarterdeck folder.",
     "In Google Analytics open Admin, then Property access management, and add the service account's email as a Viewer.",
     "Enter the path to the key file here and save it.",
-    "Put your numeric property id in config/integrations.json under ga4.property_id. Admin, then Property details, shows it.",
-    "Switch Site analytics on. The openssl command is needed. It is already on a Mac."
+    "Enter your numeric property id in the GA4 property id field here and save it. Admin, then Property settings, shows it. It is plain digits, not the G- Measurement ID.",
+    "Optional: to make each item link to your site, set ga4.site_url (for example https://example.com) in {data_folder}/config/integrations.json. A ga4.property_id set in that same file works too, and the field here wins when both are set.",
+    "Switch Site analytics on. The openssl command is needed. It is already on a Mac and on most Linux systems."
   ],
   "revoke": "In Google Analytics remove the service account from Property access management. Delete the key in Google Cloud, then remove the path here.",
   "tested": "Parsing tested against sample data only; not tested against the real service.",

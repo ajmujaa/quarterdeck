@@ -428,11 +428,12 @@ for p, b in W:
     st, j = rawpost(p, b2)
     if st != 400 or "confirm" not in json.dumps(j): bad.append((p, st, j))
 chk("without confirm: true each write is a 400 that says confirm, and nothing started", not bad and not ready()["running"]["prove"] and not ready()["running"]["docs"], bad)
-at0 = json.load(open(T + "/state/projects/" + P + "/verify.json"))["at"]
+vj = T + "/state/projects/" + P + "/verify.json"
+at0 = json.load(open(vj))["at"] if os.path.exists(vj) else ""      # the browser part makes the first proof; without a browser there is none yet
 time.sleep(1.1)
 st, j = post("/api/ready/prove", {"project": P, "confirm": True})
 chk("POST /api/ready/prove starts the verify command detached and answers started", st == 200 and j == {"started": True}, (st, j))
-j = wait(lambda r: not r["running"]["prove"] and json.load(open(T + "/state/projects/" + P + "/verify.json"))["at"] != at0)
+j = wait(lambda r: not r["running"]["prove"] and os.path.exists(vj) and json.load(open(vj))["at"] != at0)
 v = json.load(open(T + "/state/projects/" + P + "/verify.json"))
 chk("  it ran once in the sandbox and kept the result: verify.json has {at, command, exit, seconds, sandbox, first_line}, the item is done and the one next action is a mission from ticket 1",
     set(v) == {"at", "command", "exit", "seconds", "sandbox", "first_line"} and v["exit"] == 0 and v["command"] == "node --test" and j["items"][1]["state"] == "done" and j["ready"] is True

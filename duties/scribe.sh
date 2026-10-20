@@ -147,7 +147,7 @@ if [ -z "$keys" ]; then
   record_run "$PROJECT" scribe NOTHING_TO_DRAFT "nothing missing to draft"
   exit 0
 fi
-want_files=$(for k in $keys; do case "$k" in readme) echo "README.md" ;; architecture) echo "docs/ARCHITECTURE.md" ;; esac; done)
+want_files=$(for k in $keys; do if [ "$k" = readme ]; then echo "README.md"; elif [ "$k" = architecture ]; then echo "docs/ARCHITECTURE.md"; fi; done)    # no case inside $( ): bash 3.2 (macOS) ends it at the first pattern
 working_on "drafting $(tr '\n' ' ' <<<"$want_files" | sed 's/ *$//')"
 say "quarterdeck: scribe drafting for $PROJECT: $(tr '\n' ' ' <<<"$want_files" | sed 's/ *$//')"
 

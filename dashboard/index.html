@@ -1152,7 +1152,7 @@ function viewMissions(){
   const panels = S.panels.filter(mine).filter(p => p.status === "done" && !p.superseded_by && hit(p.project,p.discipline,p.subject,p.headline)).sort((a,b)=>(b.started||"").localeCompare(a.started||""));
   const intro = card(null, `<h2 class="card-t">Give the fleet an objective.</h2>
       <p class="hint" style="margin-top:6px">A draft here is a real record: it survives a refresh and a restart, and you can attach panels to it as evidence. What is not built yet is the rest: turning a draft into a scoped plan, assigning agents, and running it. Saving or editing a draft never starts an agent or writes to GitHub.</p>
-      <div class="btns" style="margin-top:14px">${btn(missionOpen ? "Cancel" : "New mission draft", {variant: "primary", click: act("toggleMissionForm")})}${btn("Browse panels", {click: act("go", "panels")})}</div>`,
+      <div class="btns" style="margin-top:14px">${btn(missionOpen ? "Cancel" : "New mission draft", {variant: sel ? "" : "primary", click: act("toggleMissionForm")})}${btn("Browse panels", {click: act("go", "panels")})}</div>`,
       {kicker: `${missions.length} ${plural(missions.length, "draft")} saved · no execution yet`});
   const list = missions.length ? missions.map(m => `<button class="mission-li" ${act("openMission", m.id)}><span class="t">${esc(m.objective)}</span>
         ${pill("idle", m.status)}<span class="sub">${esc(m.project)} · updated ${ago(m.updated_at)} · ${m.links.panels.length} ${plural(m.links.panels.length, "panel")} linked as evidence</span></button>`).join("")
@@ -1161,7 +1161,7 @@ function viewMissions(){
         sub: `${esc(p.project)} · ${esc(p.discipline)} · ${esc(p.status)} · ${ago(p.started)}`})).join("")
       : emptyState({inline: true, title: "No current panels in this scope.", body: "Open Panels to inspect historical work or run a new review."}),
       {kicker: "Available evidence", label: "Available evidence"});
-  return `<div class="stack">${intro}<div id="missionform"></div><div class="mission-list">${list}</div>${ev}</div>`;
+  return `<div class="stack">${repoOptionsCard(sel)}${ticketsCard(sel)}${intro}<div id="missionform"></div><div class="mission-list">${list}</div>${ev}</div>`;
 }
 function viewInbox(){
   const alerts = obsAttention().filter(x => hit(x.source,x.text,x.kind));
@@ -1206,7 +1206,7 @@ function recentMissions(){
   const pn = S.panels.filter(mine).filter(p => !p.superseded_by).map(p => ({id: "panel:" + p.id, title: p.headline || p.subject || p.discipline + " panel", project: p.project,
     state: p.status === "running" ? "running" : p.status === "done" ? "done" : "blocked", when: p.finished || p.started || ""}));
   // a cycle (qtdeck cycle) is one mission too; the page reads its record. The only thing it can do is start one (Start a full cycle), never resume or stop it
-  const cy = (S.cycles || []).filter(mine).map(c => ({id: "cycle:" + c.id, title: `Cycle · #${c.issue} ${c.title || ""}`.trim(), project: c.project,
+  const cy = (S.cycles || []).filter(mine).map(c => ({id: "cycle:" + c.id, title: `Cycle · ${Number.isInteger(c.ticket) ? "ticket #" + c.ticket : "#" + c.issue} ${c.title || ""}`.trim(), project: c.project,
     state: c.status === "running" ? "running" : c.status === "awaiting-review" ? "awaiting" : ["needs-human", "failed", "stopped-cap", "stopped-ceiling"].includes(c.status) ? "blocked" : "done",
     when: c.finished || c.started || ""}));
   // a design brief or a sprint plan waiting for you is a mission too; a brief for a new idea has no project and shows whatever is picked
@@ -1224,8 +1224,187 @@ function missionList(){
       ${pill(x.state, MSTATE[x.state][0])}</button>`).join("")}</div>`
     : emptyState({kicker: "No mission selected", title: "No missions yet.", body: "A fix, a panel or a run shows up here once one has started.", label: "Open the Ledger", click: act("go", "ledger")});
 }
+/* ---- Tickets: say what you want built, check the draft, file it; and the ways forward for a project with no GitHub repo. ----
+   ticketsCard(project) and repoOptionsCard(project) each take a project name and return a string, and read their data from TK (GET /api/tickets),
+   so a later page can move them whole. Every write is a POST with confirm:true (bin/dashboard.py, "tickets and the GitHub repo, on the page"). */
+const TK = {project: "", data: null, at: 0, loading: false, request: "", drafting: false, filing: null, baseDrafts: [], error: "", repoName: "", repoMsg: "", repoBusy: false};
+const TK_LIMIT = 2000;
+const TK_REPO = /^[A-Za-z0-9_.][A-Za-z0-9_.-]{0,38}\/[A-Za-z0-9_.][A-Za-z0-9_.-]{0,99}$/;
+const TK_STATUS = {open: ["", "open"], building: ["running", "building"], review: ["awaiting", "review"], done: ["done", "done"]};
+const tkData = project => TK.data && TK.data.project === project ? TK.data : null;
+const tkTyping = () => !!document.activeElement?.matches("#view :is(input, select, textarea, sl-input, sl-select, sl-textarea, sl-checkbox, sl-switch)");
+const tkCount = n => `${n} of ${TK_LIMIT} characters`;
+function tkScope(p){        // a different project starts with a clean box: nothing typed for one is shown under another
+  if(TK.project === p) return;
+  Object.assign(TK, {project: p, data: null, at: 0, request: "", drafting: false, filing: null, baseDrafts: [], error: "", repoName: "", repoMsg: "", repoBusy: false});
+}
+async function loadTickets(force){
+  const p = sel;
+  if(!p || TK.loading) return;
+  tkScope(p);
+  const d = tkData(p), quick = TK.drafting || TK.filing || (d && d.running);
+  if(!force && d && Date.now() - TK.at < (quick ? 1800 : 15000)) return;
+  TK.loading = true; TK.at = Date.now();
+  try{
+    const r = await fetch("/api/tickets?project=" + encodeURIComponent(p));
+    if(r.status === 401){ showUnpaired(); return; }
+    const j = r.ok ? await r.json() : null;
+    if(j && sel === p){
+      const before = JSON.stringify(TK.data);
+      TK.data = j;
+      const changed = ticketsSettle(j) || JSON.stringify(j) !== before;
+      if(changed && view === "missions" && !tkTyping()) render();
+    }
+  }catch(e){ /* the next poll asks again */ }
+  finally{ TK.loading = false; }
+}
+function ticketsSettle(j){        // a draft or a filing the page started has ended: say how it went, once
+  let ch = false;
+  if(TK.drafting && !j.running){
+    TK.drafting = false; ch = true;
+    const fresh = j.drafts.filter(x => !TK.baseDrafts.includes(x.id));
+    if(fresh.length){
+      const n = fresh[0].tickets.length;
+      TK.request = ""; TK.error = "";
+      announce(`Draft ready: ${n} ${plural(n, "ticket")}. Nothing is filed yet.`); focusSoon("#tk-file-" + fresh[0].id);
+    }else{
+      TK.error = j.last_draft_error || "The planner finished without a draft. Try again with a little more detail.";
+      announce(TK.error);
+    }
+  }
+  if(TK.filing && !j.running){
+    const f = TK.filing; TK.filing = null; ch = true;
+    if(j.last_file_error){ TK.error = j.last_file_error; announce(TK.error); }
+    else{ TK.error = ""; toast(`Filed ${f.n} ${plural(f.n, "issue")} on ${f.repo}.`); focusSoon("#tk-list"); }
+  }
+  return ch;
+}
+function tkRequest(v){
+  TK.request = String(v);
+  const c = $("#tk-count"), b = $("#tk-draft");
+  if(c) c.textContent = tkCount(TK.request.length);
+  if(b) b.disabled = !TK.request.trim() || TK.drafting;
+}
+async function tkDraft(){
+  const p = sel, d = tkData(p), text = TK.request.trim();
+  if(!d || TK.drafting || d.running) return;
+  if(!text) return fieldError($("#tk-request"), "Say what you want built.");
+  if(text.length > TK_LIMIT) return fieldError($("#tk-request"), `That is ${text.length} characters; the limit is ${TK_LIMIT}.`);
+  TK.baseDrafts = d.drafts.map(x => x.id); TK.error = "";
+  const j = await post("/api/ticket/draft", {project: p, request: text, confirm: true});
+  if(!j) return;                                              // the toast already said why (in Demo mode: that nothing is drafted)
+  TK.drafting = true; TK.at = 0;
+  announce("The planner is drafting. This can take a minute and costs a few cents; nothing is filed yet.");
+  render(); loadTickets(true);
+}
+async function tkFile(did, local){
+  const p = sel, d = tkData(p), dr = d && d.drafts.find(x => x.id === did);
+  if(!dr) return;
+  const n = dr.tickets.length, toGithub = d.has_repo && !local;
+  if(toGithub && !await confirmDlg(`This creates ${n} GitHub ${plural(n, "issue")} in ${d.repo}. Anyone who can see that repository can see ${n === 1 ? "it" : "them"}.`,
+      {title: "File on GitHub", ok: `File ${n} ${plural(n, "issue")}`})) return;
+  const j = await post("/api/ticket/file", {project: p, draft: did, local: !toGithub, confirm: true});
+  if(!j) return;
+  TK.error = "";
+  if(j.started){ TK.filing = {n, repo: d.repo}; TK.at = 0; announce(`Filing ${n} ${plural(n, "issue")} on ${d.repo}.`); render(); loadTickets(true); return; }
+  toast(`Saved ${n} ${plural(n, "ticket")} on this computer.`);
+  await loadTickets(true); focusSoon("#tk-list");
+}
+async function tkDiscard(did){
+  if(!await confirmDlg("Discard this draft? It is gone for good, and asking again costs a few cents.", {title: "Discard draft", ok: "Discard draft", danger: true})) return;
+  if(!await post("/api/ticket/discard", {project: sel, draft: did, confirm: true})) return;
+  toast("Draft discarded.");
+  await loadTickets(true); focusSoon("#tk-request");
+}
+function tkRepoName(v){ TK.repoName = String(v); }
+async function tkRepoSave(){
+  const p = sel, v = TK.repoName.trim();
+  if(TK.repoBusy) return;
+  if(!TK_REPO.test(v) || v.includes("..")) return fieldError($("#tk-repo"), "Write it as owner/name, like octocat/hello-world.");
+  TK.repoBusy = true; TK.repoMsg = ""; render();
+  const j = await post("/api/repo", {project: p, action: "set", repo: v, confirm: true});
+  TK.repoBusy = false;
+  if(!j){ render(); return; }
+  toast(`${p} now uses ${v}.`);
+  await tick(); loadTickets(true); focusSoon("#tk-request");
+}
+async function tkRepoCreate(){
+  const p = sel;
+  if(TK.repoBusy) return;
+  if(!await confirmDlg(`This creates a PRIVATE repository ${p} on your GitHub account and connects it. Nothing is pushed yet.`, {title: "Create a private GitHub repo", ok: "Create the repo"})) return;
+  await new Promise(r => setTimeout(r, 350));                 // the first dialog finishes closing before the second opens
+  const push = await confirmDlg("Push your default branch once so pull requests have a base? Choose Cancel to create the repo without pushing.", {title: "Push once?", ok: "Push once"});
+  TK.repoBusy = true; TK.repoMsg = ""; render(); announce("Creating the private repository.");
+  const j = await post("/api/repo", {project: p, action: "create", push, confirm: true});
+  TK.repoBusy = false;
+  if(j && j.ok){ toast(j.message); await tick(); loadTickets(true); focusSoon("#tk-request"); return; }
+  TK.repoMsg = j ? j.message : lastPostError; announce(TK.repoMsg); render();
+}
+function tkMission(n, issue){ openCycleDialog(sel, n, issue); }
+function tkTicketHtml(t){
+  return `<div class="tk-ticket"><h3 class="tk-t">${esc(t.title)}</h3><p>${esc(t.body)}</p><p class="sub">Acceptance checks</p><ul>${t.acceptance.map(a => `<li>${esc(a)}</li>`).join("")}</ul></div>`;
+}
+function tkDraftHtml(dr, d, first, busy){
+  const n = dr.tickets.length, repo = d.has_repo;
+  const label = repo ? `File ${n} ${plural(n, "issue")} on ${d.repo}` : `Save ${n} ${plural(n, "ticket")} on this computer`;
+  return `<div class="tk-draft" role="group" aria-label="Draft ${esc(dr.id)}"><p class="sub">Draft ${esc(dr.id)}${dr.request ? ` · you asked: “${esc(clip(dr.request, 100))}”` : ""}</p>
+    ${dr.tickets.map(tkTicketHtml).join("")}
+    <div class="btns">${btn(esc(label), {variant: first ? "primary" : "", click: act("tkFile", dr.id, !repo), disabled: busy, attrs: `id="tk-file-${esc(dr.id)}"`})}
+      ${repo ? calmHide(btn("Save on this computer only", {size: "small", click: act("tkFile", dr.id, true), disabled: busy})) : ""}
+      ${btn("Discard draft", {size: "small", variant: "text", click: act("tkDiscard", dr.id), disabled: busy})}</div></div>`;
+}
+function tkRowHtml(t, d){
+  const [tone, word] = TK_STATUS[t.status] || ["", String(t.status)];
+  const where = t.source === "github" ? (t.url ? `<a href="${esc(safeUrl(t.url))}" target="_blank" rel="noopener">issue #${esc(t.issue)} ↗</a>` : `issue #${esc(t.issue)}`)
+    : t.branch ? `branch <code class="tk-sel">${esc(t.branch)}</code>` : "kept on this computer";
+  const review = t.status === "review" && t.source === "local"
+    ? `<span class="tk-review">${t.review ? `Review it with <code class="tk-sel">${esc(t.review)}</code>. ` : ""}What now: review it, merge it yourself, or connect a repo to run the reviewers.</span>` : "";
+  const go = t.status === "open" && d.cycle ? btn("Start a mission", {size: "small", click: t.source === "github" ? act("tkMission", null, t.issue) : act("tkMission", t.id, null)}) : "";
+  return li({title: `<span class="mono">#${esc(t.id)}</span> ${esc(t.title)}`, sub: `${where}${review ? `<br>${review}` : ""}`, end: `${pill(tone, word)}${go}`});
+}
+function ticketsCard(project){
+  tkScope(project || "");
+  if(!project){
+    const ps = S.projects || [];
+    return card("New ticket", ps.length ? `<p class="hint">Choose a project to add tickets.</p><div class="btns">${slSelect({id: "tk-pick", label: "Project", value: "",
+        options: [["", "Choose a project"], ...ps.map(p => [p.name, p.name])], change: actOn("change", "selectProject", T.sel)})}</div>`
+      : `<p class="hint">Add a project first, then you can add tickets to it.</p>`, {kicker: "Tickets", label: "New ticket"});
+  }
+  const d = tkData(project);
+  if(!d) return card("New ticket", `<sl-skeleton effect="sheen" style="height:84px"></sl-skeleton>`, {kicker: "Tickets · " + project, label: "New ticket"});
+  const busy = TK.drafting || !!TK.filing || d.running, drafts = d.drafts.slice().reverse(), tickets = d.tickets.slice().sort((a, b) => b.id - a.id);
+  const status = busy ? callout("running", TK.filing ? "Filing" : "Drafting", TK.filing ? `Filing ${TK.filing.n} ${plural(TK.filing.n, "issue")} on ${esc(TK.filing.repo)}. This takes a few seconds.`
+      : "The planner is reading the project and drafting. This can take a minute and costs a few cents; nothing is filed yet.", {}).replace("<div ", `<div role="status" `) : "";
+  const err = TK.error && !busy ? callout("blocked", "Nothing was kept", esc(TK.error)) : "";
+  const box = `${calmHide(`<p class="hint">Say what you want built, in your own words. The planner reads the project and drafts one to five tickets for you to check. Nothing is filed until you click.${d.stack ? ` It sees this stack: ${esc(d.stack)}` : ""}</p>`)}
+    ${slTextarea({id: "tk-request", label: "What do you want built?", rows: 4, value: TK.request, attrs: `maxlength="${TK_LIMIT}" ${busy ? "disabled" : ""} ${actOn("input", "tkRequest", T.value)}`})}
+    <p class="sub" id="tk-count">${tkCount(TK.request.length)}</p>
+    <div class="btns">${btn("Draft tickets", {variant: drafts.length ? "" : "primary", click: act("tkDraft"), disabled: busy || !TK.request.trim(), attrs: 'id="tk-draft"'})}
+      <span class="sub">Costs a few cents. Nothing is filed.</span></div>`;
+  const draftsHtml = drafts.length ? `<div class="sec-h">${drafts.length === 1 ? "A draft" : drafts.length + " drafts"} to check, nothing filed yet</div>${drafts.map((dr, i) => tkDraftHtml(dr, d, i === 0, busy)).join("")}` : "";
+  const open = tickets.some(t => t.status === "open");
+  const cycleNote = open && !d.cycle ? `<div class="note-line">To start a mission from a ticket, switch on full cycles for ${esc(project)}: add <code>"cycle": true</code> to its entry in <code>config/projects.json</code>. Quarterdeck does not edit that file for you.</div>` : "";
+  const list = `<div class="sec-h">Tickets${tickets.length ? " · " + tickets.length : ""}</div>${cycleNote}<div id="tk-list" tabindex="-1" role="group" aria-label="Tickets">${tickets.length ? tickets.map(t => tkRowHtml(t, d)).join("")
+    : `<p class="hint">No tickets yet. Draft some above.</p>`}</div>`;
+  return card("New ticket", box + status + err + draftsHtml + list, {kicker: "Tickets · " + project, label: "New ticket", cls: "tk-card"});
+}
+function repoOptionsCard(project){
+  const d = project ? tkData(project) : null;
+  if(!d || d.has_repo) return "";
+  const o = Object.fromEntries((d.options || []).map(x => [x.key, x])), busy = TK.repoBusy;
+  const row = (key, title, body) => `<div class="tk-opt"><h3 class="tk-t"><span class="tk-key" aria-hidden="true">${key}</span> ${esc(title)}</h3>${body}</div>`;
+  const a = row("a", (o.a || {}).title || "I already have a GitHub repo", `<div class="tk-form">${slInput({id: "tk-repo", label: "GitHub repo (owner/name)", placeholder: "octocat/hello-world", value: TK.repoName,
+      input: actOn("input", "tkRepoName", T.value), keydown: actOn("keydown", "onEnter", "tkRepoSave")})}${btn("Save", {click: act("tkRepoSave"), disabled: busy})}</div>`);
+  const b = row("b", (o.b || {}).title || "I have a GitHub account", `<p>Quarterdeck can make a private repository named <b>${esc(project)}</b> on your GitHub account and connect it. It asks you first, and it works only when GitHub is signed in on this computer.</p>
+    <div class="btns">${btn("Create a private GitHub repo", {click: act("tkRepoCreate"), disabled: busy})}</div>
+    ${TK.repoMsg ? `<div class="callout blocked" role="alert"><p>${esc(TK.repoMsg)}</p></div>` : ""}`);
+  const c = row("c", (o.c || {}).title || "I have no GitHub account", `<p>${esc((o.c || {}).note || "A person has to do this: Quarterdeck never creates an account and never touches a password.")}</p>
+    <ol class="tk-steps">${((o.c || {}).steps || []).map(s => `<li>${esc(s)}</li>`).join("")}</ol>`);
+  const dd = row("d", (o.d || {}).title || "Not now", `<p>The tickets box below keeps tickets on this computer. The crew can build one on a local branch that you review. Nothing goes to GitHub unless you connect a repo and click.</p>`);
+  return card("No GitHub repo yet", `<p class="hint">${esc(d.sentence)}</p><div class="tk-opts">${a}${b}${c}${dd}</div>`, {kicker: "Tickets · " + project, label: "No GitHub repo yet", cls: "tk-card"});
+}
 /* ---- Start a full cycle: only for a project that opted in (cycle: true). The dialog says what it costs and what it does; only its Start button posts. ---- */
-let cycleDlg = {project: "", issue: "", est: null, busy: false};
+let cycleDlg = {project: "", issue: "", ticket: null, ticketTitle: "", est: null, busy: false};
 const cycleOptedIn = () => (S.projects || []).filter(p => p.cycle);
 function cycleCard(quiet){
   const p = (S.projects || []).find(x => x.name === sel), ok = cycleOptedIn();
@@ -1238,12 +1417,14 @@ function cycleCard(quiet){
     <div class="btns" style="margin-top:var(--s3)">${btn("Start a full cycle", {variant: "primary", click: act("openCycleDialog", who)})}</div>`,
     {kicker: "Full cycle" + (who ? " · " + who : ""), label: "Start a full cycle", cls: "cycle-card"});
 }
-function openCycleDialog(project){
+function openCycleDialog(project, ticket, issue){      // a ticket (a local ticket's number) or an issue number may arrive filled in, from the Tickets card
   const ok = cycleOptedIn();
-  cycleDlg = {project: project || (ok[0] || {}).name || "", issue: "", est: null, busy: false, pick: !project && ok.length > 1};
+  const tk = ticket ? (((tkData(project) || {}).tickets) || []).find(x => x.id === ticket) : null;
+  cycleDlg = {project: project || (ok[0] || {}).name || "", issue: issue ? String(issue) : "", ticket: tk ? tk.id : null, ticketTitle: tk ? tk.title : "", est: null, busy: false, pick: !project && ok.length > 1};
   $("#cycle-body").innerHTML = `${cycleDlg.pick ? slSelect({id: "cycle-proj", label: "Project", value: cycleDlg.project, options: ok.map(p => [p.name, p.name]),
       change: actOn("change", "cycleProject", T.sel)}) : `<p class="sub">Project</p><p><b>${esc(cycleDlg.project)}</b></p>`}
-    ${slInput({id: "cycle-issue", label: "Issue number", type: "number", placeholder: "for example 29", attrs: 'min="1" step="1" inputmode="numeric"', input: actOn("input", "cycleIssue", T.value)})}
+    ${cycleDlg.ticket ? `<p class="sub">Local ticket</p><p><b>#${cycleDlg.ticket}</b> ${esc(cycleDlg.ticketTitle)}</p>`
+      : slInput({id: "cycle-issue", label: "Issue number", type: "number", value: cycleDlg.issue, placeholder: "for example 29", attrs: 'min="1" step="1" inputmode="numeric"', input: actOn("input", "cycleIssue", T.value)})}
     <div id="cycle-facts"></div>`;
   paintCycleFacts();
   $("#cycle-dlg").show();
@@ -1257,7 +1438,7 @@ async function loadCycleEstimate(){
     if(cycleDlg.project === pr){ cycleDlg.est = j; paintCycleFacts(); }
   }catch(e){ if(cycleDlg.project === pr){ cycleDlg.est = {error: true}; paintCycleFacts(); } }
 }
-const cycleOkIssue = () => /^[1-9]\d{0,6}$/.test(String(cycleDlg.issue).trim());
+const cycleOkIssue = () => !!cycleDlg.ticket || /^[1-9]\d{0,6}$/.test(String(cycleDlg.issue).trim());
 function paintCycleFacts(){
   const box = $("#cycle-facts"), e = cycleDlg.est;
   if(!box) return;
@@ -1275,20 +1456,23 @@ function paintCycleFacts(){
   }
   box.innerHTML = `<dl class="cycle-facts"><dt>Expected cost</dt><dd>${cost}</dd>${ceil ? `<dt>Ceiling</dt><dd>${ceil}</dd><dt>Budget left today</dt><dd>${daily}</dd>` : ""}</dl>
     <p class="sub">What it will do</p>
-    <ol class="cycle-list"><li>Rewrites the issue into requirements a stranger could build from.</li><li>A panel of agents plans the change.</li><li>Builds it on a new branch and opens a pull request.</li>
+    ${cycleDlg.ticket ? `<ol class="cycle-list"><li>Rewrites the ticket into requirements a stranger could build from.</li><li>A panel of agents plans the change.</li><li>Builds it on a new local branch in your project folder.</li>
+      <li>Stops for you. There is no pull request, so the test writer and the reviewers do not run.</li></ol>
+    ${callout("awaiting", "It writes a local branch, and it spends money.", "It never pushes, opens a pull request or merges. You review the branch yourself.")}` : `<ol class="cycle-list"><li>Rewrites the issue into requirements a stranger could build from.</li><li>A panel of agents plans the change.</li><li>Builds it on a new branch and opens a pull request.</li>
       <li>A separate agent writes tests from the requirements alone, without seeing the change.</li><li>Five reviewers read the pull request; fixes only what they found, in at most three rounds.</li><li>Stops for you.</li></ol>
-    ${callout("awaiting", "It writes a branch and a pull request, and it spends money.", "It never merges, approves or pushes to the main branch. You read the pull request and merge it yourself.")}`;
+    ${callout("awaiting", "It writes a branch and a pull request, and it spends money.", "It never merges, approves or pushes to the main branch. You read the pull request and merge it yourself.")}`}`;
   const yes = $("#cycle-yes"); if(yes){ yes.disabled = !(e && !e.error) || !cycleOkIssue() || spent || cycleDlg.busy; yes.loading = cycleDlg.busy; }
 }
 async function startCycle(){
   if(!cycleOkIssue() || cycleDlg.busy) return;
   cycleDlg.busy = true; paintCycleFacts();
-  const j = await post("/api/cycle/start", {project: cycleDlg.project, issue: Number(String(cycleDlg.issue).trim()), confirm: true});
+  const body = cycleDlg.ticket ? {project: cycleDlg.project, ticket: cycleDlg.ticket, confirm: true} : {project: cycleDlg.project, issue: Number(String(cycleDlg.issue).trim()), confirm: true};
+  const j = await post("/api/cycle/start", body);
   cycleDlg.busy = false; paintCycleFacts();
   if(!j) return;                                            // the toast already said why
   $("#cycle-dlg").hide();
-  toast(`Cycle started on ${cycleDlg.project} #${cycleDlg.issue}.`);
-  tick();
+  toast(`Cycle started on ${cycleDlg.project} ${cycleDlg.ticket ? "ticket #" + cycleDlg.ticket : "#" + cycleDlg.issue}.`);
+  tick(); loadTickets(true);
   if(j.id) openMissionPage("cycle:" + j.id); else go("missions");
 }
 function missionEmpty(){
@@ -1322,10 +1506,20 @@ function missionActions(m){
   return parts.length ? `<div class="btns mission-actions" style="margin-top:14px">${parts.join("")}</div>` : "";
 }
 const TONE = {running: "running", blocked: "blocked", awaiting: "awaiting", done: "done", idle: ""};
+// A cycle on a local ticket: the crew's steps as the record holds them (a stage that did not apply is "Skipped" with its reason, never a failure), the local
+// branch and the command that shows it as plain selectable text, and one line of what comes next.
+function ticketMission(m){
+  const t = m.ticket, word = v => ({SKIPPED: "Skipped", WAITING: "Waiting for you"})[String(v || "").toUpperCase()] || String(v || "");
+  const steps = (m.history || []).map(h => li({title: esc(h.duty), sub: esc(h.detail || ""), end: pill(String(h.verdict).toUpperCase() === "SKIPPED" ? "" : verdictClass(h.verdict), word(h.verdict))})).join("");
+  return `<div class="sec-h">The crew's steps</div><div role="group" aria-label="The crew's steps">${steps}</div>
+    <dl class="mdl tk-facts"><dt>Ticket</dt><dd>#${esc(t.n)}</dd>${t.branch ? `<dt>Local branch</dt><dd><code class="tk-sel">${esc(t.branch)}</code></dd>` : ""}${t.review ? `<dt>Review it</dt><dd><code class="tk-sel">${esc(t.review)}</code></dd>` : ""}</dl>
+    ${t.next ? `<p class="hint">What is next: ${esc(t.next)}</p>` : ""}`;
+}
 function missionSummary(m){
   const b = m.blocker, d = m.decision, ev = m.evidence;
   const main = (m.pipeline ? pipelineHtml(m.pipeline) : "")
     + callout(TONE[m.state], esc(m.detail.title), esc(m.detail.body), {}).replace(/<\/div>$/, missionActions(m) + "</div>")
+    + (m.ticket ? ticketMission(m) : "")
     + (b ? callout("blocked", b.cls ? "Blocked" : "Why it stopped", esc(b.cause) + (b.cls === "config" ? `<br><span class="sub">Running it again will not fix this. It needs a configuration change first.</span>` : ""), {}).replace("<h3>", `<h3>`) : "")
     + (ev && ev.proof && m.state === "done" ? `<div class="callout done"><h3>Proof</h3><p>${esc(ev.proof)}</p></div>` : "");
   const side = (d ? callout("awaiting", `Open decision: ${esc(d.title)}`, esc(d.body || "") + (d.ask ? `<br><span class="sub">The panel's note: ${esc(d.ask)}</span>` : "") + `<br><span class="sub">The panel did not list options for this one. Decide it, then record the choice where the project keeps its decisions.</span>`)
@@ -4197,8 +4391,8 @@ function pageMeta(v){
     sub = `${n} ${plural(n, "agent")} ${where}: ${run ? run + " running" : "none running"}, ${att ? att + " " + plural(att, "needs", "need") + " attention" : "none need attention"}. A run only reports unless you switch on Write for real.`;
   } else if(v.id === "spend") sub = v.sub + " Figures shown are fleet-wide regardless of project selection.";
   else if(v.id === "board" && p && p.board && boardFor === sel && board && board.fetched) sub = v.sub + "  ·  read " + ago(board.fetched);
-  if(p) acts = `<a class="pill blue" href="https://github.com/${esc(p.repo)}" target="_blank" rel="noopener">${esc(p.repo)} ↗</a>
-       <a class="pill" href="https://github.com/${esc(p.repo)}/issues" target="_blank" rel="noopener">issues ↗</a>
+  if(p) acts = `${p.repo ? `<a class="pill blue" href="https://github.com/${esc(p.repo)}" target="_blank" rel="noopener">${esc(p.repo)} ↗</a>
+       <a class="pill" href="https://github.com/${esc(p.repo)}/issues" target="_blank" rel="noopener">issues ↗</a>` : pill("", "no GitHub repo")}
        ${p.board ? `<a class="pill" href="${esc(safeUrl(p.board))}" target="_blank" rel="noopener">project board ↗</a>` : ""}
        ${p.cycle ? pill("", "cycle: opted in") : ""}
        ${(p.guardrails||[]).length ? btn(p.guardrails.length + " guardrails", {size: "small", click: act("showGuardrails")}) : ""}`;
@@ -4257,6 +4451,7 @@ function render(){
   renderSelBar();
   if(v.id === "log") loadLog();
   if(v.id === "timeline") loadTimeline();
+  if(v.id === "missions") loadTickets();
   if(v.id === "fleet") loadFleet();
   if(v.id === "connections") loadConnections();
   if(v.id === "settings") loadSettings();
@@ -4403,6 +4598,7 @@ const ACTIONS = {
   selectPlace, selectProject, setBilling, setBrainMode, setCapSave, setFleetView, setHandsFree, setKeyRemove, setKeySave, setLens, setSizeBy, setTheme, sgSpeakToggle, showGuardrails, showLog, showPrivacy,
   startCycle, startMissionPanel, stopRun, talkSubmit, thinkToggle, tlClick, tlHover, tlSet, toggleCalm, toggleDemo, toggleLedger,
   toggleMissionForm, toggleMobileMenu, toggleOld, toggleReplay, toggleSched, toggleSel, toggleShowcaseForm, unpublishShowcase, unqueue, workOn,
+  tkRequest, tkDraft, tkFile, tkDiscard, tkRepoName, tkRepoSave, tkRepoCreate, tkMission,
   ...EXT.actions,                                   // an add-on's own (assets/ext-*.js), by name
 };
 

@@ -409,6 +409,17 @@ def ticket_text(t):
     return s
 
 
+def review_command(project, branch, kind="diff"):
+    """The real command that shows (or, for kind merge, keeps) a ticket's local branch, from the registry: the project's folder and its default branch."""
+    try:
+        ent = json.loads((home() / "config" / "projects.json").read_text()).get(project) or {}
+    except (OSError, ValueError, AttributeError):
+        ent = {}
+    path = os.path.expanduser(str(ent.get("path") or "<project folder>"))
+    base = str(ent.get("default_branch") or "main")
+    return f"git -C {path} diff {base}...{branch}" if kind == "diff" else f"git -C {path} merge {branch}"
+
+
 def line(t):
     where = f"GitHub issue #{t['issue']}" if t.get("issue") else "local"
     extra = f"  branch {t['branch']}" if t.get("branch") else ""
@@ -565,7 +576,8 @@ def main(argv):
             if t["source"] == "local" and t["status"] == "open":
                 print(f"\n  next: qtdeck cycle {a[0]} --ticket {t['id']}")
             elif t.get("branch"):
-                print(f"\n  review it: git diff <base>...{t['branch']}   (qtdeck cycle --status shows the exact command)")
+                print(f"\n  review it: {review_command(a[0], t['branch'])}")
+                print(f"  keep it:   {review_command(a[0], t['branch'], 'merge')}        (when you are happy with it)")
             return 0
         if cmd == "file" and len(a) >= 2:
             project, did = a[0], a[1]

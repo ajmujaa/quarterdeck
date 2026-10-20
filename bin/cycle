@@ -53,19 +53,36 @@ CEILING="${QUARTERDECK_CYCLE_BUDGET:-15}"
 PANEL_ROUNDS="${QUARTERDECK_CYCLE_PANEL_ROUNDS:-1}"
 REVIEWERS="surveyor marshal lookout pilot inspector"
 
-PROJECT="" ISSUE="" TICKET="" APPLY=0 RESUME="" STATUS_ID="" WANT_STATUS=0
+PROJECT="" ISSUE="" TICKET="" APPLY=0 RESUME="" STATUS_ID="" WANT_STATUS=0 WANT_RESUME=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --issue)  ISSUE="${2:-}"; need_num "--issue" "$ISSUE"; shift ;;
     --ticket) TICKET="${2:-}"; need_num "--ticket" "$TICKET"; shift ;;
     --apply)  APPLY=1 ;;
-    --resume) RESUME="${2:-}"; shift ;;
-    --status) WANT_STATUS=1; case "${2:-}" in ""|--*) ;; *) STATUS_ID="$2"; shift ;; esac ;;
+    # --resume and --status take a cycle id, or a project (with --ticket n): then the latest cycle of that project (of that ticket) is meant
+    --resume) WANT_RESUME=1; case "${2:-}" in ""|--*) ;; *) if [ -f "$CYCLES/$2.json" ] || ! project_exists "$2"; then RESUME="$2"; else PROJECT="$2"; fi; shift ;; esac ;;
+    --status) WANT_STATUS=1; case "${2:-}" in ""|--*) ;; *) if [ -f "$CYCLES/$2.json" ] || ! project_exists "$2"; then STATUS_ID="$2"; else PROJECT="$2"; fi; shift ;; esac ;;
     -*) die "cycle: unknown argument '$1'" ;;
     *)  [ -z "$PROJECT" ] && PROJECT="$1" || die "cycle: one project at a time" ;;
   esac
   shift
 done
+
+# latest_cycle <project> [<ticket>]: the id of the newest cycle record of that project (and ticket), else nothing
+latest_cycle() {
+  local f
+  for f in $(ls -t "$CYCLES"/*.json 2>/dev/null); do
+    jq -e --arg p "$1" --arg t "${2:-}" 'select(.kind == "cycle" and .project == $p and ($t == "" or ((.ticket // "") | tostring) == $t))' "$f" >/dev/null 2>&1 && { basename "$f" .json; return 0; }
+  done
+  return 1
+}
+if [ -z "$STATUS_ID$RESUME" ] && { [ "$WANT_STATUS" = 1 ] || [ "$WANT_RESUME" = 1 ]; } && [ -n "$PROJECT" ]; then
+  project_exists "$PROJECT" || die "unknown project '$PROJECT' (see: qtdeck projects)"
+  cid=$(latest_cycle "$PROJECT" "$TICKET") || die "cycle: no cycle on record for $PROJECT${TICKET:+ ticket $TICKET}"
+  if [ "$WANT_STATUS" = 1 ]; then STATUS_ID=$cid; else RESUME=$cid; fi
+  PROJECT=""; ISSUE=""; TICKET=""
+fi
+[ "$WANT_RESUME" = 0 ] || [ -n "$RESUME" ] || die "cycle: --resume needs a cycle id, or <project> [--ticket n] for the latest one"
 
 num_ok() { [[ "${1:-}" =~ ^[0-9]+(\.[0-9]+)?$ ]]; }
 gt() { awk -v a="$1" -v b="$2" 'BEGIN { exit !(a + 0 > b + 0) }'; }

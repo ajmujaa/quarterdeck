@@ -5,6 +5,14 @@
     bin/attach.py PATH [--name NAME] [--verify "CMD"] [--build "CMD"] [--lint "CMD"] --apply       register it in your registry and keep the profile and a record of what was proposed
     bin/attach.py set-repo NAME OWNER/REPO                         set the GitHub repo of a registered project
 
+Attaching is onboarding: the scan is followed by a survey (bin/survey.py: layout, entry points, scripts, dependencies of note, documents present and
+missing, size, git), the duties are chosen with reasons, and the ready checklist (bin/ready.py) says what is done and the one thing to do next. The dry run
+shows all of that and changes nothing. --apply registers, keeps the survey in state/projects/<name>/ and ends with the real checklist. For a project that
+is ALREADY registered, `attach DIR` surveys again and refreshes that profile (your data folder only) and says what changed since the last survey.
+
+    bin/attach.py enable PROJECT DUTY... | cycle        turn duties on (cycle also allows full cycles and turns on the purser and the panel)
+    bin/attach.py disable PROJECT DUTY... | cycle       turn duties off
+
 --verify sets the command that proves a change works when the scan found none (or found the wrong one); --build and --lint do the same for the build and
 lint commands, which are proposed next to it. --verbose shows the whole scan (every fact with its file), the reason each duty is on or off, and every
 protected path.
@@ -33,6 +41,8 @@ import scan as _scan
 import packs as _packs
 import protect as _protect
 import safegit as _safegit
+import survey as _survey
+import ready as _ready
 
 READ_ONLY_DUTIES = ["surveyor", "foreman", "inspector"]
 GUARDRAILS = ["Never merge a pull request.", "Never push to the default branch; every change goes on its own branch.",
@@ -310,7 +320,18 @@ def load_registry(p):
         return {}
 
 
-def apply(prop, prof, reg=None, proposed=None, by="owner, with --apply"):
+def write_registry(cur, reg=None):
+    """The registry, atomically, 0600."""
+    reg = Path(reg or registry_path())
+    reg.parent.mkdir(parents=True, exist_ok=True)
+    tmp = reg.with_suffix(".tmp")
+    tmp.write_text(json.dumps(cur, indent=2) + "\n")
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, reg)
+    return reg
+
+
+def apply(prop, prof, reg=None, proposed=None, by="owner, with --apply", sv=None):
     """Register the proposal and keep the profile and the record. Refuses a name already registered. Returns the registry path."""
     name = prop["name"]
     if not re.fullmatch(r"[a-z0-9][a-z0-9_.-]{0,60}", name):
@@ -325,7 +346,9 @@ def apply(prop, prof, reg=None, proposed=None, by="owner, with --apply"):
     tmp.write_text(json.dumps(cur, indent=2) + "\n")
     os.chmod(tmp, 0o600)
     os.replace(tmp, reg)
-    _scan.save(prof, name)
+    _scan.save(prof, name)           # state/profiles/<name>.json: the older record, still read by existing code; the survey below is the one new code reads
+    if sv is not None:
+        _survey.save(name, dict(sv, name=name))
     rec = _scan.profile_dir() / f"{name}.attach.json"
     rec.write_text(json.dumps({"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "proposed": (proposed or prop)["entry"], "reasons": prop["reasons"], "stack": prop.get("stack", ""), "suggested": prop.get("suggested", []), "duty_reasons": prop.get("duty_reasons", {}), "approved": prop["entry"], "approved_by": by}, indent=2) + "\n")
     os.chmod(rec, 0o600)
@@ -348,6 +371,88 @@ def set_repo(name, repo, reg=None):
     return reg
 
 
+STANDING = {"guardrails", "guardrail", "rules", "never-merge", "never-push", "never-merging", "never-pushing"}
+CYCLE_DUTIES = ("purser", "panel")
+
+
+def _log(line):
+    try:
+        d = _home.resolve() / "logs"
+        d.mkdir(parents=True, exist_ok=True)
+        with open(d / "quarterdeck.log", "a") as f:
+            f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {line}\n")
+    except OSError:
+        pass                                  # a note that could not be written never undoes the change
+
+
+def set_duties(name, add=(), remove=(), cycle=None, reg=None):
+    """Turn duties on or off for a registered project, through the same validation as the review (edit(), known_duties()), atomically, 0600. `cycle` True
+    allows full cycles ("cycle": true, and the purser and the panel on); False takes the permission away and leaves the duties as they are. The standing
+    rules (never merge, never push to the default branch) are not duties and cannot be touched. Returns {"duties": [...], "cycle": bool, "added", "removed", "notes"}.
+    The log names the project and the duties, never a value."""
+    reg = Path(reg or registry_path())
+    cur = load_registry(reg)
+    if name not in cur or not isinstance(cur[name], dict):
+        raise ValueError(f"'{name}' is not registered (see: qtdeck projects)")
+    add, remove = list(dict.fromkeys(add)), list(dict.fromkeys(remove))
+    for d in add + remove:
+        if d.lower() in STANDING:
+            raise ValueError("the standing rules (never merge, never push to the default branch) are not duties and cannot be turned off")
+    entry = cur[name]
+    duties = list(entry.get("duties", []))
+    notes = []
+    if cycle is True:
+        for d in CYCLE_DUTIES:
+            if d not in add and d not in duties:
+                add.append(d)
+                notes.append(f"{d} turned on, since a cycle goes through it")
+    want = [d for d in duties if d not in remove] + [d for d in add if d not in duties]
+    if not want:
+        raise ValueError("at least one duty has to stay on")
+    out = edit({"entry": entry}, {"duties": want})["entry"]          # unknown duty names and "shipwright without a verify command" are refused here
+    out["duties"] = want
+    if cycle is True:
+        out["cycle"] = True
+        notes.append("full cycles are allowed (a cycle spends model money; it is never started by a schedule)")
+    elif cycle is False:
+        out.pop("cycle", None)
+        notes.append("full cycles are no longer allowed")
+    cur[name] = {**entry, "duties": out["duties"], **({"cycle": True} if out.get("cycle") else {})}
+    if cycle is False:
+        cur[name].pop("cycle", None)
+    write_registry(cur, reg)
+    added, removed = [d for d in want if d not in duties], [d for d in duties if d not in want]
+    _log(f"duties {name}: on {','.join(added) or '-'} off {','.join(removed) or '-'}" + (f" cycle {'on' if cycle else 'off'}" if cycle is not None else ""))
+    return {"duties": want, "cycle": cur[name].get("cycle") is True, "added": added, "removed": removed, "notes": notes}
+
+
+def update_commands(name, edits, reg=None):
+    """Set verify, build, lint or typecheck of a registered project (the same limits as the review). Returns the registry path."""
+    reg = Path(reg or registry_path())
+    cur = load_registry(reg)
+    if name not in cur or not isinstance(cur[name], dict):
+        raise ValueError(f"'{name}' is not registered (see: qtdeck projects)")
+    out = edit({"entry": cur[name]}, edits)["entry"]
+    cur[name] = {**cur[name], **{k: out[k] for k in edits if k in out}}
+    write_registry(cur, reg)
+    _log(f"commands {name}: set {','.join(sorted(edits))}")
+    return reg
+
+
+def registered_as(root, name=None, cur=None):
+    """The registry name this folder is already attached under: the entry with the same path, else None. A different folder that happens to carry a
+    registered name is not that project (attach --apply refuses its name)."""
+    cur = load_registry(registry_path()) if cur is None else cur
+    want = Path(root).resolve()
+    for n, e in cur.items():
+        try:
+            if isinstance(e, dict) and e.get("path") and Path(os.path.expanduser(e["path"])).resolve() == want:
+                return n
+        except (OSError, RuntimeError):
+            continue
+    return None
+
+
 SHORT_ON = {"surveyor": "reads pull requests", "foreman": "files issues from findings", "inspector": "checks a change does what it says", "shipwright": "a verify command exists"}
 
 
@@ -356,7 +461,25 @@ def cmd_line(e, prop, key, flag):
     return v + "   (" + prop["reasons"].get(key, "") + ")" if v else f'none found; set it with --{flag} "<command>"'
 
 
-def summary(prof, prop, path):
+def docs_line(sv):
+    """One line: the documents that are there and the ones that are not."""
+    pr, ms = sv["docs"]["present"], sv["docs"]["missing"]
+    have = [w for k, w in (("readme", "README"), ("architecture", "architecture overview"), ("contributing", "CONTRIBUTING"), ("license", "LICENSE"), ("changelog", "CHANGELOG")) if pr.get(k)]
+    gone = [w for k, w in (("readme", "README"), ("architecture", "architecture overview")) if k in ms]
+    return ("present: " + (", ".join(have) or "none")) + ("; missing: " + ", ".join(gone) + "  (qtdeck docs <name> drafts them; nothing is written until you say so)" if gone else "")
+
+
+def preview_items(prop, sv, path):
+    """The ready checklist as it would be right after attaching (nothing is saved or run)."""
+    return _ready.build(prop["name"], prop["entry"], sv, {"duty_reasons": prop.get("duty_reasons", {})}, None, None, path=path, preview=True)
+
+
+def _clip_line(s, n=96):
+    s = " ".join(str(s).split())
+    return s if len(s) <= n else s[:n - 3] + "..."
+
+
+def summary(prof, prop, path, sv=None):
     """The short version: what was found, what would run, how a change is proved, and what to do next."""
     e, n = prop["entry"], prop["name"]
     langs = ", ".join(f"{l['name']} ({l['evidence'][0].split(' ', 1)[0]})" for l in prof["languages"][:4]) or "none recognised"
@@ -364,17 +487,27 @@ def summary(prof, prop, path):
     print(f"  {n}  ({path})")
     print(f"    languages     {langs}")
     print(f"    stack         {prop.get('stack') or langs}")
+    if sv:
+        print(f"    docs          {docs_line(sv).replace('<name>', n)}")
     print(f"    verify        {cmd_line(e, prop, 'verify', 'verify')}")
+    hint = _ready.install_hint(path, e.get("verify", ""), sv)
+    if hint:
+        print(f"                  note: {hint}")
     print(f"    build         {cmd_line(e, prop, 'build', 'build')}")
     print(f"    lint          {cmd_line(e, prop, 'lint', 'lint')}")
     print(f"    duties        " + ", ".join(d + (f" ({SHORT_ON[d]})" if d in SHORT_ON else "") for d in e["duties"]))
     if prop.get("suggested"):
         print(f"    also fit this stack (off): {', '.join(prop['suggested'])}   (not on until you say so; --verbose says why)")
+        for d in prop["suggested"][:6]:
+            print(f"      {d:<14}{_clip_line(plan.get(d, {}).get('why', ''))}   [qtdeck enable {n} {d}]")
     print(f"    repo          {e['repo'] or 'none (no GitHub remote); set it after --apply with: qtdeck repo ' + n + ' <owner/name>'}")
     print(f"    protected     {len(e['forbidden_paths'])} paths the crew may not change (--verbose lists them)")
     if prof["secret_files"]:
         print(f"    secret files  {len(prof['secret_files'])} found, never opened, on the protected list")
     print(f"  WARNING  {prop['warning']}")
+    if sv:
+        print("\n  the checklist as it would be right after you attach:")
+        print("\n".join(_ready.item_lines(preview_items(prop, sv, path))))
 
 
 def say(prop):
@@ -401,7 +534,63 @@ def say(prop):
             print(f"      {d:<14}{state}{' (suggested)' if v['suggested'] and d not in e['duties'] else ''}  {v['why']}")
 
 
+def reattach(regname, path, prof, sv, edits, do):
+    """A folder that is already registered: survey it again and refresh the profile (the data folder only), say what changed since the last survey.
+    New verify, build or lint commands are written to the registry only with --apply."""
+    old = _survey.load(regname)
+    sv = dict(sv, name=regname)
+    _survey.save(regname, sv)
+    _scan.save(prof, regname)
+    print(f"  {regname} is already registered. Its survey was refreshed in your data folder; nothing in the project or the registry was changed.")
+    ch = _survey.changes(old, sv)
+    if not old:
+        print("  there was no survey of it before, so there is nothing to compare with.")
+    elif ch:
+        print("  changed since the last survey (" + str(old.get("surveyed_at", "?")) + "):")
+        for c in ch:
+            print(f"    - {c}")
+    else:
+        print(f"  nothing changed since the last survey ({old.get('surveyed_at', '?')}).")
+    if edits:
+        if do:
+            update_commands(regname, edits)
+            print("  registry updated: " + ", ".join(f"{k} = {v or '(none)'}" for k, v in edits.items()))
+        else:
+            print("  would set " + ", ".join(f"{k} = {v or '(none)'}" for k, v in edits.items()) + "; nothing was changed. Add --apply to do it.")
+    return regname
+
+
+def finish(name):
+    """The real checklist of a registered project and the one next action."""
+    print()
+    v = _ready.view(name)
+    print("\n".join(_ready.lines(v["items"], v["next"])))
+
+
 def main(argv):
+    if argv[:1] in (["enable"], ["disable"]):
+        on = argv[0] == "enable"
+        names = argv[1:]
+        if len(names) < 2:
+            print(f"usage: qtdeck {argv[0]} <project> <duty>... | cycle")
+            return 2
+        project, rest = names[0], names[1:]
+        cyc = "cycle" in rest
+        duties = [d for d in rest if d != "cycle"]
+        try:
+            r = set_duties(project, add=duties if on else (), remove=() if on else duties, cycle=(on if cyc else None))
+        except ValueError as e:
+            print(f"  {e}")
+            return 2
+        word = "turned on" if on else "turned off"
+        if r["added"] or r["removed"] or cyc:
+            print(f"  {project}: {word} {', '.join(duties + (['cycles'] if cyc else []))}.")
+        else:
+            print(f"  {project}: nothing to change; those duties were already {'on' if on else 'off'}.")
+        for n in r["notes"]:
+            print(f"  {n}")
+        print(f"  duties now: {', '.join(r['duties'])}")
+        return 0
     if argv[:1] == ["set-repo"]:
         if len(argv) != 3:
             print("usage: qtdeck repo <project> <owner/name>")
@@ -449,24 +638,34 @@ def main(argv):
             prop = edit(prop, extra)
             for k in extra:
                 prop["reasons"][k] = f"set with --{k}"
+        sv = _survey.survey(path, prop["name"])
+        regname = registered_as(Path(path).resolve(), prop["name"])
+        if regname:
+            edits = ({"verify": verify} if verify is not None else {}) | extra
+            reattach(regname, path, prof, sv, edits, do)
+            finish(regname)
+            return 0
         if verbose:
             _scan.say(prof)
             say(prop)
+            print(f"    docs            {docs_line(sv).replace('<name>', prop['name'])}")
+            print("\n  the checklist as it would be right after you attach:")
+            print("\n".join(_ready.item_lines(preview_items(prop, sv, path))))
         else:
-            summary(prof, prop, path)
+            summary(prof, prop, path, sv)
         again = f"qtdeck attach {shlex.quote(path)}" + (f" --name {shlex.quote(name)}" if name else "") + (f" --verify {shlex.quote(verify)}" if verify else "") + "".join(f" --{k} {shlex.quote(v)}" for k, v in extra.items())
         if do:
-            reg = apply(prop, prof)
-            print(f"  registered '{prop['name']}'" + (f" in {reg}; the profile and a record of this proposal are in {_scan.profile_dir()}" if verbose else " in your data folder"))
+            reg = apply(prop, prof, sv=sv)
+            print(f"\n  registered '{prop['name']}'" + (f" in {reg}; the profile and a record of this proposal are in {_scan.profile_dir()}" if verbose else " in your data folder"))
+            print(f"  the survey is kept in {_survey.folder(prop['name'])} (profile.md is the readable one)")
             if not prop["entry"]["repo"]:
                 print(f"  {no_repo_sentence(prop['name'])}")
                 print(f"  see your options: qtdeck repo {prop['name']}")
-                print(f"  next: qtdeck repo {prop['name']} <owner/name>")
+                print(f"  to connect a repo you already have: qtdeck repo {prop['name']} <owner/name>")
                 print(f"  or keep it on this computer: qtdeck ticket new {prop['name']} \"<what you want built>\"")
-            else:
-                print(f"  next: qtdeck run {prop['name']} surveyor --pr <number>")
+            finish(prop["name"])
         else:
-            print("  nothing was changed.")
+            print("\n  nothing was changed.")
             print(f"  next: {again} --apply")
     except ValueError as e:
         print(f"  {e}")

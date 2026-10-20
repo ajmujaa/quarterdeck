@@ -24,7 +24,8 @@ usage() {   # the day-one commands; `qtdeck help more` lists the rest
 Usage: qtdeck <command>
 
   setup                       check the tools you need and say how to install what is missing (installs nothing)
-  attach <dir> [--apply]      scan a project folder and propose a set-up; --apply registers it
+  attach <dir> [--apply]      get to know a project folder: survey, missing docs, the crew with reasons, a ready checklist; --apply registers it
+  ready <project>             the checklist (scan, verify, repo, docs, agents, cycles) and the one next step; --prove runs the verify command once
   connect <service> [--account <label>]
                               connect a service (several accounts of one service are fine); connect list shows them
   run <project> <duty> [...]  run one duty once, for example: run my-app surveyor --pr 12 (reports only unless --apply)
@@ -61,6 +62,15 @@ Usage: qtdeck <command>
                               the planner drafts one to five tickets (title, body, acceptance checks) and keeps the draft. Report only
                               without --apply. --apply files GitHub issues, or LOCAL tickets (state/tickets) when the project has no
                               repo; --local forces local. "-" as the request reads it from standard input.
+  ready <project> [--prove] [--details]
+                              the ready checklist and the one next step. --prove runs the verify command ONCE in the sandbox, on a throwaway
+                              copy of the default branch, and keeps the result in your data folder. --details shows each item in full.
+  docs <project> [readme|architecture] [--apply]
+                              the scribe drafts the README and the architecture overview the survey found missing, from the survey's facts, and
+                              keeps the draft (nothing is written to your project). --apply puts them on a NEW branch (a pull request when the
+                              project has a GitHub repo); never on the default branch, never over a file that exists.
+  enable <project> <duty>... | cycle      turn duties on; "cycle" also allows full cycles and turns on the purser and the panel
+  disable <project> <duty>... | cycle     turn duties off
   ticket list <project>       the local tickets and the drafts, one line each
   ticket show <project> <id>  one ticket (a number) or one draft (d1, d2 ...)
   ticket file <project> <draft-id> [--apply] [--local]
@@ -165,7 +175,7 @@ cmd="${1:-status}"; shift || true
 case "$cmd" in
   -h|--help|help) if [ "${1:-}" = more ]; then usage_more; else usage; fi; exit 0 ;;
   setup) exec python3 "$SELF/setup.py" "$@" ;;
-  status|doctor|check|home|projects|duties|crew|add|remove|repo|run|spend|fix|cycle|plan|brief|mockup|dashboard|keys|billing|logs|runs|new|attach|connect|ticket) ;;
+  status|doctor|check|home|projects|duties|crew|add|remove|repo|run|spend|fix|cycle|plan|brief|mockup|dashboard|keys|billing|logs|runs|new|attach|connect|ticket|ready|docs|enable|disable) ;;
   *) { echo "qtdeck: unknown command '$cmd'"; echo; usage; } >&2; exit 2 ;;
 esac
 source "$SELF/lib.sh"
@@ -324,8 +334,11 @@ case "$cmd" in
       echo "  no projects yet. Run 'qtdeck add' inside a repository, or copy config/projects.example.json to $QUARTERDECK_HOME/config/projects.json and edit it."
     else
       # printf, not column: a bare Linux has no column, and the list came out empty
-      jq -r 'to_entries[] | "\(.key)\t\(.value.repo // "" | if . == "" then "(no GitHub repo)" else . end)\t\(.value.summary // "")"' "$PROJECTS_FILE" \
-        | while IFS=$'\t' read -r pn pr ps; do printf '  %-20s %-34s %s\n' "$pn" "$pr" "$ps"; done
+      jq -r 'to_entries[] | "\(.key)\t\(.value.repo // "" | if . == "" then "(no GitHub repo)" else . end)\t\(.value.summary // "")\t\(.value.verify // "")\t\(.value.build // "")\t\(.value.lint // "")"' "$PROJECTS_FILE" \
+        | while IFS=$'\t' read -r pn pr ps pv pb pl; do
+            printf '  %-20s %-34s %s\n' "$pn" "$pr" "$ps"
+            printf '  %-20s verify: %s   build: %s   lint: %s\n' "" "${pv:-(none)}" "${pb:-(none)}" "${pl:-(none)}"
+          done
     fi ;;
   repo)
     # repo <project> <owner/name>: the GitHub repo a project's duties read and post to; checked the same way attach checks one
@@ -451,6 +464,30 @@ case "$cmd" in
     args=(); for a in "$@"; do if [ "$a" = --fresh ]; then export QUARTERDECK_FRESH=1; else args+=("$a"); fi; done
     exec bash "$QUARTERDECK_DIR/duties/$duty.sh" ${args[@]+"${args[@]}"}
     ;;
+
+  ready)
+    # ready <project> [--prove] [--details]: the checklist and the one next step. Reads files; --prove runs the verify command once, in the sandbox.
+    rproject="${1:-}"; [ $# -gt 0 ] && shift
+    [ -n "$rproject" ] || die "usage: qtdeck ready <project> [--prove] [--details]"
+    project_exists "$rproject" || die "unknown project '$rproject' (see: qtdeck projects)"
+    prove=0; rargs=()
+    for a in "$@"; do case "$a" in --prove) prove=1 ;; --details) rargs+=("$a") ;; *) die "ready: unknown argument '$a'" ;; esac; done
+    [ "$prove" = 1 ] && exec bash "$QUARTERDECK_DIR/bin/prove" "$rproject"
+    exec python3 "$QUARTERDECK_DIR/bin/ready.py" show "$rproject" ${rargs[@]+"${rargs[@]}"} ;;
+
+  docs)
+    # docs <project> [readme|architecture] [--apply]: the scribe. It runs without the "has a repo" and "duty enabled" gates, like ticket new.
+    dproject="${1:-}"; [ $# -gt 0 ] && shift
+    [ -n "$dproject" ] || die "usage: qtdeck docs <project> [readme|architecture] [--apply]"
+    project_exists "$dproject" || die "unknown project '$dproject' (see: qtdeck projects)"
+    duty_exists scribe || die "the scribe is not installed"
+    wdir=$(project_path "$dproject")
+    [ -d "$wdir/.git" ] || [ -f "$wdir/.git" ] || die "no git checkout at $wdir"
+    export QUARTERDECK_PROJECT="$dproject" QUARTERDECK_WORKDIR="$wdir"
+    exec bash "$QUARTERDECK_DIR/duties/scribe.sh" "$@" ;;
+
+  enable|disable)
+    exec python3 "$QUARTERDECK_DIR/bin/attach.py" "$cmd" "$@" ;;
 
   ticket)
     # Local tickets and the planner's drafts (bin/tickets.py). Drafting needs neither a repo nor the planner to be switched on for the project;

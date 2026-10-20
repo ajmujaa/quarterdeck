@@ -1,0 +1,48 @@
+#!/bin/bash
+# qtdeck ready <project> --prove: run the project's verify command ONCE, the way the shipwright's checks run it, and keep the result.
+#
+# Same path as bin/lib.sh run_checks: project_exec in check mode (a throwaway clone, a scratch HOME, a minimal environment, the operating-system sandbox,
+# a time limit). It runs on a throwaway worktree of the default branch, never in your working tree, and only because you asked. The result goes to
+# state/projects/<project>/verify.json (your data folder, nothing in the project). A sandbox that cannot start is not a failed command: nothing is kept then.
+set -uo pipefail
+SELF="${BASH_SOURCE[0]}"
+while [ -L "$SELF" ]; do d="$(cd "$(dirname "$SELF")" && pwd)"; SELF="$(readlink "$SELF")"; case "$SELF" in /*) ;; *) SELF="$d/$SELF" ;; esac; done
+source "$(cd "$(dirname "$SELF")" && pwd)/lib.sh"
+
+PROJECT="${1:-}"
+[ -n "$PROJECT" ] || die "usage: qtdeck ready <project> --prove"
+project_exists "$PROJECT" || die "unknown project '$PROJECT' (see: qtdeck projects)"
+verify=$(project_get "$PROJECT" verify)
+[ -n "$verify" ] || die "$PROJECT has no verify command to prove. Set one: qtdeck attach $(project_get "$PROJECT" path) --verify \"<command>\" --apply"
+SRC=$(project_path "$PROJECT")
+[ -d "$SRC/.git" ] || [ -f "$SRC/.git" ] || die "no git checkout at $SRC"
+BASE=$(project_get "$PROJECT" default_branch main)
+LOG_FILE="$QUARTERDECK_HOME/logs/prove-$PROJECT.log"
+WT="$QUARTERDECK_HOME/workspace/wt-$PROJECT-prove"
+mkdir -p "$QUARTERDECK_HOME/workspace" "$QUARTERDECK_HOME/logs"
+acquire_lock "prove-$PROJECT"
+cleanup_wt() { safe_git -C "$SRC" worktree remove --force "$WT" >/dev/null 2>&1 || true; rm -rf "$WT" "$WT.gitpin" "$WT.nmlink" "$WT.ignored-before"; }
+trap 'cleanup_wt; rm -rf "$QUARTERDECK_LOCK"' EXIT
+
+ref=""
+for r in "$BASE" "origin/$BASE"; do safe_git -C "$SRC" rev-parse --verify -q "$r^{commit}" >/dev/null 2>&1 && { ref=$r; break; }; done
+[ -n "$ref" ] || die "the default branch '$BASE' has no commit yet in $SRC; commit once, then prove the command"
+worktree_at "$SRC" "$WT" "$ref" || die "could not make a throwaway worktree of $ref"
+
+say "  proving the verify command once: $verify"
+say "  it runs in the sandbox, in a throwaway copy of $ref; your working tree is not used and nothing is installed."
+start=$(date +%s)
+project_exec check "${QUARTERDECK_CHECK_TIMEOUT:-900}" "$WT" "$verify"; rc=$?
+secs=$(( $(date +%s) - start ))
+if [ "$rc" = 126 ]; then
+  say "  not run: ${EXEC_OUT:-the sandbox could not start}"
+  say "  Nothing was kept: a command that was not run is not a failed command."
+  exit 1
+fi
+first=$(printf '%s\n' "$EXEC_OUT" | grep -v '^[[:space:]]*$' | head -1 | cut -c1-200)
+python3 "$QUARTERDECK_DIR/bin/ready.py" record-verify "$PROJECT" "$verify" "$rc" "$secs" "${RUN_SANDBOX:-none}" "$first" >/dev/null 2>>"$LOG_FILE" || die "could not keep the result"
+log "prove $PROJECT: verify exit $rc in ${secs}s"
+if [ "$rc" = 0 ]; then say "  passed: exit 0 in ${secs}s [sandbox: ${RUN_SANDBOX:-none}]"
+else say "  failed: exit $rc in ${secs}s [sandbox: ${RUN_SANDBOX:-none}]"; fi
+say ""
+exec python3 "$QUARTERDECK_DIR/bin/ready.py" show "$PROJECT"

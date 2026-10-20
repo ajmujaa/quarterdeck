@@ -5201,6 +5201,17 @@ class Handler(BaseHTTPRequestHandler):
                     [r["cost"] for r in w.cycle_records().values() if r["project"] == pr and r["status"] == "awaiting-review"], 15.0, 25.0, w.spend(w.elapsed())["today"])}))
             if u.path == "/api/project-agents":     # the made-up projects have no folders: none, and nothing is read from disk
                 return self._demo_reply((200, {"project": (q.get("project") or [""])[0], "agents": [], "coverage": projagents.coverage([])}))
+            if u.path == "/api/ready":              # invented inputs, the real checklist code
+                import ready as _ready
+                pr = (q.get("project") or [""])[0]
+                got = DEMO["world"].ready_inputs(pr)
+                if got is None:
+                    return self._demo_reply((400, {"error": "unknown project"}))
+                entry, sv, vrec, record, tk = got
+                items = _ready.build(pr, entry, sv, record, vrec, None, path=entry["path"])
+                return self._demo_reply((200, {"project": pr, "items": items, "next": _ready.next_action(pr, entry, items, tk), "ready": _ready.is_ready(items), "preview": False,
+                                               "draft": None, "running": {"prove": False, "docs": False}, "last_error": {"prove": "", "docs": ""}, "has_repo": bool(entry["repo"]),
+                                               "default_branch": "main", "demo": True}))
             if u.path == "/api/mockup":             # a made-up page, still served the strict way
                 return self._mockup_page((q.get("brief") or [""])[0], (q.get("name") or [""])[0])
             return self._demo_reply(DEMO["world"].get(u.path, q))

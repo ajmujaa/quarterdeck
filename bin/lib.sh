@@ -369,13 +369,13 @@ gh_post() {
 }
 
 # ---- filing issues -----------------------------------------------------------------------------------------------------
-# existing_issues <repo> [state] — one "#n [STATE] title" line per issue already on the tracker (state: all by default), the list the foreman
+# existing_issues <repo> [state]: one "#n [STATE] title" line per issue already on the tracker (state: all by default), the list the foreman
 # gives its model so it can dedupe against reality. The planner's ticket drafts are checked against the same list.
 existing_issues() {
   guard 60 "${QUARTERDECK_GH:-gh}" issue list -R "$1" --state "${2:-all}" --limit 100 \
     --json number,title,state --jq '[.[] | "#\(.number) [\(.state)] \(.title)"] | join("\n")' 2>>"${LOG_FILE:-$QUARTERDECK_HOME/logs/quarterdeck.log}"
 }
-# issues_scan <issues-json-array> — 0 when no title, body or label holds a credential; otherwise says which ticket (its number, never its text) and returns 3.
+# issues_scan <issues-json-array>: 0 when no title, body or label holds a credential; otherwise says which ticket (its number, never its text) and returns 3.
 # file_issues scans each post too (gh_post); this is the check made BEFORE the first one, so a secret in the fourth ticket posts none of the four.
 issues_scan() {
   local n=0 item tmp bad=0
@@ -391,7 +391,7 @@ issues_scan() {
   rm -f "$tmp"
   [ "$bad" = 0 ] || return 3
 }
-# file_issues <repo> <issues-json-array of {title, body, labels}> [<callback>] — files each one with gh_post, so the credential scan runs on every
+# file_issues <repo> <issues-json-array of {title, body, labels}> [<callback>]: files each one with gh_post, so the credential scan runs on every
 # title and body. Labels that do not exist make `gh issue create` fail outright, so they are best effort: one retry without them (not after a scan
 # refusal). Sets FILED (how many) and MADE (a JSON array of {number, url, title}); calls <callback> <index> <url> <title> for each issue made.
 # Returns 3 when the scan refused any, else 0.
@@ -425,7 +425,7 @@ file_issues() {
 # A ticket the owner or the planner wrote down on this computer: the purser, the dev panel and the shipwright take --ticket <n> where they take
 # --issue <n>. None of that touches GitHub. A ticket that was filed there (source "github") is its issue: --issue <number> is the way in.
 TICKETS_PY="$QUARTERDECK_DIR/bin/tickets.py"
-ticket_load() { # ticket_load <project> <n> — sets TK_JSON, TK_TITLE and TK_TEXT; dies for a missing ticket and for one that is a GitHub issue
+ticket_load() { # ticket_load <project> <n>: sets TK_JSON, TK_TITLE and TK_TEXT; dies for a missing ticket and for one that is a GitHub issue
   local n=$2 iss
   need_num "--ticket" "$n"
   TK_JSON=$(python3 "$TICKETS_PY" show --json "$1" "$n" 2>/dev/null) || die "there is no local ticket $n for $1 (see: qtdeck ticket list $1)"

@@ -235,6 +235,11 @@ working_on "$PANEL panel: $SUBJECT"
 say "quarterdeck: $PANEL panel on $SUBJECT — $# seats: $SEATS"
 
 # ---- the brief every seat gets ----------------------------------------------
+BRIEF_BLOCK=""
+if [ "$MODE" = plan ]; then
+  if [ -n "$TICKET" ]; then BRIEF_BLOCK="$(printf '%s\n' "$BRIEF" | untrusted "ticket text")"
+  else BRIEF_BLOCK="$(printf '%s\n' "$BRIEF" | untrusted "issue text")"; fi
+fi
 case "$MODE" in
   findings) ASK="Inspect what this project already has and report what is wrong with it${TARGET:+, restricted to: $TARGET}.
 You cannot run the app, so judge what the code necessarily produces, and say
@@ -244,7 +249,7 @@ argue the approach. Read enough of the codebase to be concrete about which
 files and which existing helpers are involved.
 
 THE $([ -n "$TICKET" ] && echo TICKET || echo ISSUE)
-$(printf '%s\n' "$BRIEF" | untrusted "$([ -n "$TICKET" ] && echo 'ticket text' || echo 'issue text')")" ;;
+$BRIEF_BLOCK" ;;
   backlog)  ASK="Decide what this project should do next, and say what it is not doing.
 
 You are not inventing work: rank what already exists, merge what is duplicated,
@@ -569,7 +574,7 @@ KEPT="$(jq 'length' <<<"$RULING")"
 {
   case "$MODE" in
     findings) echo "# ${PROJECT} — ${PANEL} panel, ${STAMP}" ;;
-    plan)     if [ -n "$TICKET" ]; then echo "# ${PROJECT} — implementation plan for ticket #${TICKET}"; else echo "# ${PROJECT} — implementation plan for issue #${ISSUE}"; fi ;;
+    plan)     if [ -n "$TICKET" ]; then echo "# ${PROJECT}: implementation plan for ticket #${TICKET}"; else echo "# ${PROJECT}: implementation plan for issue #${ISSUE}"; fi ;;
     spec)     echo "# ${PROJECT} — specification: ${SUBJECT}" ;;
     backlog)  echo "# ${PROJECT} — what to do next, ${STAMP}" ;;
     decision) echo "# ${PROJECT} — decision: ${SUBJECT}" ;;

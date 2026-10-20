@@ -99,8 +99,8 @@ cleanup_wt() { safe_git -C "$SOURCE_REPO_DIR" worktree remove --force "$WT" >/de
 trap 'cleanup_wt' EXIT
 
 if [ -n "$TICKET" ]; then
-  working_on "ticket #$TICKET — $title"
-  say "quarterdeck: shipwright on $PROJECT, local ticket #$TICKET — $title"
+  working_on "ticket #$TICKET: $title"
+  say "quarterdeck: shipwright on $PROJECT, local ticket #$TICKET: $title"
 else
   working_on "issue #$ISSUE — $title"
   say "quarterdeck: shipwright on $REPO#$ISSUE — $title"
@@ -176,19 +176,21 @@ if [ -n "$TICKET" ]; then
   WHAT_TO_DO="Build this one ticket. You are in a throwaway worktree on branch $BRANCH; edit
 files here freely. Do not commit, push, or open anything — the harness does that
 after it has checked your work (and only on a local branch)."
-  SUBJECT_HEAD="ticket #$TICKET of $PROJECT"; SUBJECT_KIND="ticket text"
+  SUBJECT_HEAD="ticket #$TICKET of $PROJECT"
+  SUBJECT_BLOCK=$(printf '%s\n\n%s\n' "$title" "$body" | untrusted "ticket text")
 else
   WHAT_TO_DO="Fix this one issue. You are in a throwaway worktree on branch $BRANCH; edit
 files here freely. Do not commit, push, or open anything — the harness does that
 after it has checked your work."
-  SUBJECT_HEAD="$REPO#$ISSUE"; SUBJECT_KIND="issue text"
+  SUBJECT_HEAD="$REPO#$ISSUE"
+  SUBJECT_BLOCK=$(printf '%s\n\n%s\n' "$title" "$body" | untrusted "issue text")
 fi
 prompt="$(preamble "$PROJECT")
 
 $WHAT_TO_DO
 
 === $SUBJECT_HEAD ===
-$(printf '%s\n\n%s\n' "$title" "$body" | untrusted "$SUBJECT_KIND")
+$SUBJECT_BLOCK
 === END ===
 
 ${PLAN_TEXT:+=== THE RULING OF THE DEV PANEL — IMPLEMENT THIS ===
@@ -253,7 +255,7 @@ fi
 
 verdict=$(grep -Eo '^RESULT: (FIXED|NEEDS_HUMAN|NO_CHANGE).*' <<<"$result" | tail -1)
 [ -n "$verdict" ] || {
-  log "$REF: contract did not parse — logs/runs/$QUARTERDECK_RUN_ID.json"
+  log "$REF: contract did not parse: logs/runs/$QUARTERDECK_RUN_ID.json"
   record_run "$PROJECT" shipwright ERROR "$REF unparseable contract"
   die "contract did not parse — nothing pushed"
 }
@@ -272,7 +274,7 @@ esac
 # Final paths of everything changed, one per line. Not `status --porcelain`:
 # its second field is a rename's OLD name, so a file moved into a forbidden
 # path was checked under the name it left.
-changed=$(wt_changed "$WT") || { record_run "$PROJECT" shipwright REFUSED "$REF — the worktree's .git file was changed"; die "refused: the worktree's .git file was changed"; }
+changed=$(wt_changed "$WT") || { record_run "$PROJECT" shipwright REFUSED "$REF: the worktree's .git file was changed"; die "refused: the worktree's .git file was changed"; }
 [ -n "$changed" ] || {
   say "  claimed FIXED but changed nothing"
   record_run "$PROJECT" shipwright ERROR "$REF claimed FIXED with an empty diff"
@@ -296,7 +298,7 @@ done < <(jq -r --arg p "$PROJECT" '(.[$p].forbidden_paths // [])[]' "$PROJECTS_F
 # are the next thing the harness executes, and what they run is exactly what such a change would control.
 if ! why=$(printf '%s\n' "$changed" | model_diff_gate "$PROJECT" "$WT" "$INPUTS_BEFORE" "$PLAN"); then
   say "  REFUSED: $why"
-  record_run "$PROJECT" shipwright REFUSED "$REF — $why"
+  record_run "$PROJECT" shipwright REFUSED "$REF: $why"
   die "refused: $why"
 fi
 
@@ -307,7 +309,7 @@ AFTER_CHECKS="$(run_checks "$PROJECT" "$WT")"
 # The checks ran project code that may write in the worktree: the gate again, on what is there now (S1), before anything can be committed.
 if ! why=$(post_checks_gate "$PROJECT" "$WT" "$INPUTS_BEFORE" "$changed" "$PLAN"); then
   say "  REFUSED: $why"
-  record_run "$PROJECT" shipwright REFUSED "$REF — $why"
+  record_run "$PROJECT" shipwright REFUSED "$REF: $why"
   die "refused: $why"
 fi
 REGRESSIONS="$(check_regressions "$BASE_CHECKS" "$AFTER_CHECKS")"
@@ -319,7 +321,7 @@ if [ "$(jq length <<<"$REGRESSIONS")" != 0 ]; then
   say ""
   say "  worktree kept for inspection: $WT"
   trap - EXIT
-  record_run "$PROJECT" shipwright REFUSED "$REF — $(jq -r '[.[].name] | join(", ")' <<<"$REGRESSIONS") got worse"
+  record_run "$PROJECT" shipwright REFUSED "$REF: $(jq -r '[.[].name] | join(", ")' <<<"$REGRESSIONS") got worse"
   die "refused: nothing is committed when a local check regresses"
 fi
 
@@ -342,13 +344,13 @@ if [ -n "$TF_FOLDERS" ]; then
 fi
 
 say ""
-if [ -n "$TICKET" ]; then say "── $PROJECT ticket #$TICKET — $summary ──"; else say "── $REPO#$ISSUE — $summary ──"; fi
+if [ -n "$TICKET" ]; then say "── $PROJECT ticket #$TICKET: $summary ──"; else say "── $REPO#$ISSUE: $summary ──"; fi
 safe_git -C "$WT" --no-pager diff --cached --stat | sed 's/^/  /' >&2
 
 if [ "$APPLY" != 1 ]; then
   say ""
-  if [ -n "$TICKET" ]; then say "  (report only — re-run with --apply to commit it on the local branch $BRANCH)"
-  else say "  (report only — re-run with --apply to push and open a PR)"; fi
+  if [ -n "$TICKET" ]; then say "  (report only: re-run with --apply to commit it on the local branch $BRANCH)"
+  else say "  (report only: re-run with --apply to push and open a PR)"; fi
   say "  worktree kept for inspection: $WT"
   trap - EXIT   # leave it so the diff can be read
   record_run "$PROJECT" shipwright "DRY-RUN" "$REF $summary"

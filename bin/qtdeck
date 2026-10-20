@@ -170,7 +170,7 @@ case "$cmd" in
 esac
 source "$SELF/lib.sh"
 
-# local_ticket_run <duty> <args...> — 0 for a duty run that works on a local ticket and so needs no GitHub repo
+# local_ticket_run <duty> <args...>: 0 for a duty run that works on a local ticket and so needs no GitHub repo
 local_ticket_run() {
   local duty=$1 prev="" a ticket=0 dev=0 req=0
   shift

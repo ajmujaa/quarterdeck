@@ -198,7 +198,7 @@ finish() { # finish <status> <message> <exit-code> — the one way out after the
     awaiting-review) tok=AWAITING-REVIEW ;; needs-human) tok=NEEDS_HUMAN ;; stopped-cap) tok=STOPPED-CAP ;; stopped-ceiling) tok=STOPPED-CEILING ;;
     failed) tok=FAILED ;; nothing) tok=NOTHING-TO-BUILD ;; report-only) tok=DRY-RUN ;; *) tok=STOPPED ;;
   esac
-  record_run "$PROJECT" cycle "$tok" "$ID — $LABEL: $msg" "$(jq -r '.pr // ""' "$REC")"
+  record_run "$PROJECT" cycle "$tok" "$ID: $LABEL: $msg" "$(jq -r '.pr // ""' "$REC")"
   say ""
   say "── cycle $ID · $status ──"
   say "$msg"
@@ -353,7 +353,7 @@ elif [ -z "$RESUME" ]; then
   rec_set --arg t "$(jq -r .title <<<"$info")" '.title = $t'
 fi
 TITLE=$(jq -r '.title // ""' "$REC")
-say "qtdeck cycle: $PROJECT — $LABEL $TITLE"
+say "qtdeck cycle: $PROJECT: $LABEL $TITLE"
 say "  $ID · $([ "$APPLY" = 1 ] && echo apply || echo 'report only') · ceiling \$$CEILING · $(num_ok "${QUARTERDECK_DAILY_BUDGET:-}" && echo "daily cap \$$QUARTERDECK_DAILY_BUDGET" || echo 'no daily cap')"
 
 # ---- 1. the purser -------------------------------------------------------------------------------------------------
@@ -445,10 +445,10 @@ if [ -n "$TICKET" ]; then
   case "$LV" in
     BRANCH) ;;
     NO_CHANGE) tk_set status=open; finish nothing "the shipwright judged nothing should change: $LD" 0 ;;
-    *) tk_set status=open; finish needs-human "no local branch: the shipwright said $LV${LD:+ — $LD}" 0 ;;
+    *) tk_set status=open; finish needs-human "no local branch: the shipwright said $LV${LD:+: $LD}" 0 ;;
   esac
   TBRANCH=$(python3 "$TICKETS_PY" show --json "$PROJECT" "$TICKET" 2>/dev/null | jq -r '.branch // empty')
-  [ -n "$TBRANCH" ] || finish failed "the shipwright reported a branch but the ticket does not name one. Look at: git -C $WORKDIR branch --list 'ticket/$TICKET-*'" 1
+  [ -n "$TBRANCH" ] || finish failed "the shipwright reported a branch but the ticket does not name one. Look in $WORKDIR for a branch that starts with ticket/$TICKET-" 1
   TBASE=$(project_get "$PROJECT" default_branch main)
   safe_git -C "$WORKDIR" rev-parse --verify -q "refs/remotes/origin/$TBASE" >/dev/null 2>&1 && TBASE="origin/$TBASE"
   rec_set --arg b "$TBRANCH" --arg r "git -C $WORKDIR diff $TBASE...$TBRANCH" '.branch = $b | .review = $r'

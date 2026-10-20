@@ -81,6 +81,8 @@ else
   say "quarterdeck: purser on $REPO#$ISSUE — $title"
 fi
 SUBJECT_N=${TICKET:-$ISSUE}
+if [ -n "$TICKET" ]; then SUBJECT_BLOCK=$(printf '#%s %s\n\n%s\n' "$SUBJECT_N" "$title" "$body" | untrusted "ticket text")
+else SUBJECT_BLOCK=$(printf '#%s %s\n\n%s\n' "$SUBJECT_N" "$title" "$body" | untrusted "issue text"); fi
 
 MARK_OPEN='<!-- quarterdeck:requirements -->'
 MARK_CLOSE='<!-- /quarterdeck:requirements -->'
@@ -96,7 +98,7 @@ $(crew_role purser)
 
 --- THE $([ -n "$TICKET" ] && echo TICKET || echo ISSUE) ---
 
-$(printf '#%s %s\n\n%s\n' "$SUBJECT_N" "$title" "$body" | untrusted "$([ -n "$TICKET" ] && echo 'ticket text' || echo 'issue text')")
+$SUBJECT_BLOCK
 
 --- YOUR JOB ---
 
@@ -144,7 +146,7 @@ result=$(claude_run "$WORKDIR" "$prompt"); rc=$?
 case $rc in
   0) : ;;
   2) say "quarterdeck: usage limit reached — nothing written"; exit 0 ;;
-  3) say "quarterdeck: stopped at the per-call cap — nothing written"; record_run "$PROJECT" purser ERROR "$WHAT hit the per-call cap"; exit 1 ;;
+  3) say "quarterdeck: stopped at the per-call cap: nothing written"; record_run "$PROJECT" purser ERROR "$WHAT hit the per-call cap"; exit 1 ;;
   *) record_run "$PROJECT" purser ERROR "$WHAT the model call failed"; exit 1 ;;
 esac
 [ -n "$result" ] || { record_run "$PROJECT" purser ERROR "$WHAT empty reply"; exit 1; }
@@ -154,7 +156,7 @@ DOC="$QUARTERDECK_HOME/workspace/${PROJECT}-requirements-${TICKET:+ticket}${SUBJ
 if grep -q '^RESULT: NEEDS_HUMAN' <<<"$result"; then
   why=$(grep -o '^RESULT: NEEDS_HUMAN.*' <<<"$result" | tail -1 | sed 's/^RESULT: NEEDS_HUMAN *//')
   {
-    echo "# $WHAT — $title"
+    echo "# $WHAT: $title"
     echo
     echo "The purser could not write requirements for this yet. Nothing was $([ -n "$TICKET" ] && echo 'saved to the ticket' || echo 'posted to the issue')."
     echo
@@ -162,7 +164,7 @@ if grep -q '^RESULT: NEEDS_HUMAN' <<<"$result"; then
   } > "$DOC"
   say "  needs a person: $why"
   say "  written to $(basename "$DOC")"
-  record_run "$PROJECT" purser NEEDS_HUMAN "$WHAT — $why"
+  record_run "$PROJECT" purser NEEDS_HUMAN "$WHAT: $why"
   exit 0
 fi
 
@@ -198,16 +200,16 @@ block=$(jq -r --arg o "$MARK_OPEN" --arg c "$MARK_CLOSE" '
   + ([.requirements | to_entries[] | "\(.key + 1). \(.value.what)\n   - **Accept when:** \(.value.accept)"] | join("\n"))
   + (if ((.out_of_scope // []) | length) > 0 then "\n\n**Out of scope**\n" + ([.out_of_scope[] | "- " + .] | join("\n")) else "" end)
   + "\n" + $c' <<<"$json")
-{ echo "# $WHAT — $title"; echo; echo "$block"; } > "$DOC"
+{ echo "# $WHAT: $title"; echo; echo "$block"; } > "$DOC"
 say "  $n requirement(s), written to $(basename "$DOC")"
 
 if [ "$APPLY" != 1 ]; then
   say ""
   sed 's/^/  /' <<<"$block" >&2
   say ""
-  if [ -n "$TICKET" ]; then say "quarterdeck: report only — pass --apply to keep this in the local ticket"
-  else say "quarterdeck: report only — pass --apply to add this to the issue and move its card to Ready"; fi
-  record_run "$PROJECT" purser "DRY-RUN" "$WHAT — $n requirement(s)"
+  if [ -n "$TICKET" ]; then say "quarterdeck: report only: pass --apply to keep this in the local ticket"
+  else say "quarterdeck: report only: pass --apply to add this to the issue and move its card to Ready"; fi
+  record_run "$PROJECT" purser "DRY-RUN" "$WHAT: $n requirement(s)"
   exit 0
 fi
 
@@ -217,7 +219,7 @@ if [ -n "$TICKET" ]; then
     record_run "$PROJECT" purser ERROR "$WHAT could not save the requirements"; die "purser: could not save the requirements in ticket #$TICKET (see $LOG_FILE)"
   fi
   say "  requirements saved in local ticket #$TICKET"
-  record_run "$PROJECT" purser READY "$WHAT — $n requirement(s), saved in the local ticket"
+  record_run "$PROJECT" purser READY "$WHAT: $n requirement(s), saved in the local ticket"
   exit 0
 fi
 

@@ -85,14 +85,14 @@ if [ -n "$REQUEST$FILE_DRAFT" ]; then
   _remember() { # called by file_issues for each issue made: <index> <url> <title>
     python3 "$TK" record-filed "$PROJECT" "$DID" "${2##*/}" "$2" "$3" 2>>"$LOG_FILE" || say "  (issue made, but not remembered in the ticket list: $3)"
   }
-  file_draft() { # file_draft <draft-id> — lists what would be done, and does it with --apply; sets DID
+  file_draft() { # file_draft <draft-id>: lists what would be done, and does it with --apply; sets DID
     DID=$1
     local issues n made firstid
     if [ "$TO_GITHUB" != 1 ]; then
       if [ -z "$REPO" ]; then say "  no GitHub repo: saved as local tickets on this computer"; else say "  --local: saved as local tickets on this computer, not on GitHub"; fi
       if [ "$APPLY" != 1 ]; then
         python3 "$TK" file "$PROJECT" "$DID" >&2
-        say "quarterdeck: report only — nothing was filed. Add --apply to save the tickets of draft $DID on this computer."
+        say "quarterdeck: report only: nothing was filed. Add --apply to save the tickets of draft $DID on this computer."
         record_run "$PROJECT" planner DRAFTED "draft $DID (report only, nothing filed)"
         return 0
       fi
@@ -111,18 +111,18 @@ if [ -n "$REQUEST$FILE_DRAFT" ]; then
     gone=$(printf '%s\n' "$tracker" | python3 "$TK" dedupe "$PROJECT" "$DID") || die "planner: could not compare the draft with the tracker"
     [ -z "$gone" ] || while IFS= read -r g; do say "  skip: already on the tracker as $g"; done <<<"$gone"
     if ! python3 "$TK" show --json "$PROJECT" "$DID" >/dev/null 2>&1; then
-      say "quarterdeck: every ticket of the draft is already on the tracker — nothing to file"
+      say "quarterdeck: every ticket of the draft is already on the tracker: nothing to file"
       record_run "$PROJECT" planner NOTHING_TO_DRAFT "draft $DID: every ticket is already on the tracker"
       return 0
     fi
     issues=$(python3 "$TK" issues-json "$PROJECT" "$DID") || die "planner: could not read draft $DID"
     n=$(jq length <<<"$issues")
     say ""
-    say "── $REPO — $n issue(s) to file ──"
+    say "── $REPO, $n issue(s) to file ──"
     jq -r '.[] | "  file: \(.title)"' <<<"$issues" >&2
     if [ "$APPLY" != 1 ]; then
       say ""
-      say "quarterdeck: report only — nothing was filed. Add --apply to file $n issue(s) on $REPO."
+      say "quarterdeck: report only: nothing was filed. Add --apply to file $n issue(s) on $REPO."
       record_run "$PROJECT" planner DRAFTED "draft $DID: $n issue(s) would be filed (report only)"
       return 0
     fi
@@ -193,7 +193,7 @@ RESULT: NOTHING_TO_DRAFT"
   case $rc in
     0) : ;;
     2) say "quarterdeck: usage limit reached — nothing written"; exit 0 ;;
-    3) say "quarterdeck: stopped at the per-call cap — nothing written"; record_run "$PROJECT" planner ERROR "ticket draft: hit the per-call cap"; exit 1 ;;
+    3) say "quarterdeck: stopped at the per-call cap: nothing written"; record_run "$PROJECT" planner ERROR "ticket draft: hit the per-call cap"; exit 1 ;;
     *) record_run "$PROJECT" planner ERROR "ticket draft: the model call failed"; exit 1 ;;
   esac
   [ -n "$result" ] || { record_run "$PROJECT" planner ERROR "ticket draft: empty reply"; exit 1; }
@@ -205,7 +205,7 @@ RESULT: NOTHING_TO_DRAFT"
   json=$(grep -o '^TICKETS_JSON: .*' <<<"$result" | tail -1 | sed 's/^TICKETS_JSON: //')
   if ! grep -q '^RESULT: DRAFTED' <<<"$result" || [ -z "$json" ] \
      || ! printf '%s' "$json" | python3 "$TK" validate > "$TMP/draft.json" 2> "$TMP/why"; then
-    log "$PROJECT: ticket draft refused — logs/runs/$QUARTERDECK_RUN_ID.json"
+    log "$PROJECT: ticket draft refused: logs/runs/$QUARTERDECK_RUN_ID.json"
     say "quarterdeck: the planner's reply was refused — nothing written"
     sed 's/^/  /' "$TMP/why" >&2 2>/dev/null
     record_run "$PROJECT" planner ERROR "ticket draft refused: $(head -1 "$TMP/why" 2>/dev/null | sed 's/^ *//' | cut -c1-120)"

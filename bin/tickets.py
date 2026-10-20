@@ -466,6 +466,29 @@ def dedupe(project, did, tracker):
     return gone[::-1]
 
 
+# ---- starting the shell side from a page (the dashboard) --------------------------------------------------------------------------------
+# Drafting and filing to GitHub are done by duties/planner.sh (the model call, gh_post's credential scan, the foreman's filing); a page starts them the
+# way it starts a cycle: one of these argument lists, run detached, with the request on STANDARD INPUT (never in the argument list).
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def argv_new(project, apply=False, local=False):
+    """qtdeck ticket new <project> - [--apply] [--local]  (the request is written to its standard input)."""
+    return [str(ROOT / "bin" / "qtdeck"), "ticket", "new", _project(project), "-"] + (["--apply"] if apply else []) + (["--local"] if local else [])
+
+
+def argv_file(project, did, apply=False, local=False):
+    """qtdeck ticket file <project> <draft-id> [--apply] [--local]."""
+    if not isinstance(did, str) or not DRAFT_OK.fullmatch(did):
+        raise TicketError("a draft id looks like d1")
+    return [str(ROOT / "bin" / "qtdeck"), "ticket", "file", _project(project), did] + (["--apply"] if apply else []) + (["--local"] if local else [])
+
+
+def argv_cycle(project, n, apply=True):
+    """qtdeck cycle <project> --ticket <n> [--apply]."""
+    return [str(ROOT / "bin" / "qtdeck"), "cycle", _project(project), "--ticket", str(_int(n))] + (["--apply"] if apply else [])
+
+
 # ---- the command line --------------------------------------------------------------------------------------------------------------
 def _fail(msg, code=2):
     print(f"  {msg}", file=sys.stderr)

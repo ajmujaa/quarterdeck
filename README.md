@@ -31,7 +31,7 @@ bin/qtdeck setup
 bin/qtdeck dashboard      # switch Demo on to look around with invented data
 ```
 
-`bin/qtdeck attach ~/Projects/my-app` registers your first project. The [guide](GUIDE.md) has the rest.
+`bin/qtdeck attach ~/Projects/my-app` registers your first project. The [guide](GUIDE.md) has the rest. `bin/qtdeck check` runs every test.
 
 ## Why Quarterdeck
 

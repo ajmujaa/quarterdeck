@@ -18,7 +18,7 @@ st_init planner purser panel shipwright
 cp "$REAL"/bin/{tickets.py,repo.py,attach.py,scan.py,packs.py,qtdeck,cycle} "$T/bin/"
 cp -R "$REAL/packs" "$T/packs"
 mkdir -p "$T/home" && export HOME="$T/home" XDG_CONFIG_HOME="$T/home/.config"
-export QUARTERDECK_HOME="$T"; touch "$T/.quarterdeck-home"
+export QUARTERDECK_HOME="$T" REAL; touch "$T/.quarterdeck-home"
 QD="bash $T/bin/qtdeck"
 st_registry '["planner","purser","panel","shipwright"]' '{"cycle":true}'
 st_repo
@@ -465,5 +465,115 @@ OUT=$($QD run tp panel --panel dev --ticket 1 --rounds 1 2>&1); RC=$?
 ck "  and the dev panel with --ticket, but not another panel" '[ "$RC" = 0 ] && [ "$($QD run tp panel --panel design 2>&1 | grep -cF "tp has no GitHub repo")" = 1 ]'
 OUT=$($QD run tp planner --request "build a thing" 2>&1); RC=$?
 ck "  and the planner with --request (but not a bare planner run)" '! grep -qF "tp has no GitHub repo" <<<"$OUT" && [ "$($QD run tp planner 2>&1 | grep -cF "tp has no GitHub repo")" = 1 ]'
+
+# ---- 7. qtdeck cycle --ticket ------------------------------------------------------------------------------------------------------------------
+export QUARTERDECK_DAILY_BUDGET=100 QUARTERDECK_CALL_BUDGET=0.01 QUARTERDECK_CYCLE_BUDGET=15
+crew_replies() { # crew_replies [<the shipwright's reply>] — the stand-in answers for every stage of a cycle
+  st_noreplies
+  st_reply 'REQUIREMENTS_JSON' 'REQUIREMENTS_JSON: {"summary":"Let the counter be reset","requirements":[{"what":"Reset sets the counter to zero","accept":"Call counter_reset(5) and check the result equals 0"}],"out_of_scope":["styling"]}
+RESULT: READY 1 requirement(s)'
+  st_reply 'RULING_JSON' 'HEADLINE: one change
+RULING_JSON: [{"kind":"change","tier":"routine","area":"app","severity":"major","title":"Make counter_reset return zero","claim":"it returns its argument","where":"app.py","why":"the ticket asks for zero","action":"return 0","support":["shipwright"],"overruled":[],"note":""}]
+RESULT: RULED 1'
+  st_reply 'STANCES_JSON' 'STANCES_JSON: [{"id":"shipwright-1","stance":"agree","note":"n"}]
+RESULT: STANCES 1'
+  st_reply 'Build this one ticket' "${1:-RESULT: FIXED the counter resets to zero}"
+  st_reply default 'ITEMS_JSON: [{"area":"app","severity":"major","title":"Make counter_reset return zero","claim":"it returns its argument","where":"app.py","why":"the ticket asks for zero","action":"return 0"}]
+RESULT: ITEMS 1'
+}
+addt() { python3 -c "
+import sys; sys.path.insert(0, '$T/bin'); import tickets as K
+print(K.local_add('tp', [{'title': sys.argv[1], 'body': 'Add a reset function that sets the counter back to zero.', 'acceptance': ['Call counter_reset(5) and the result is 0']}])[0]['id'])" "$1"; }
+cyc() { OUT=$($QD cycle "$@" 2>&1); RC=$?; ID=$(ls -t "$T/state/cycles"/cyc-*.json 2>/dev/null | head -1 | xargs -n1 basename 2>/dev/null | sed 's/\.json$//'); REC="$T/state/cycles/$ID.json"; }
+stg() { jq -r --arg id "$1" ".stages[] | select(.id == \$id) | $2" "$REC"; }
+crew_replies; rm -f "$T/gh-calls"; : > "$T/claude-calls"; echo '[]' > "$T/state/runs.json"
+cyc tp --ticket 1 --apply
+ck "a ticket already in review is not started again: the message names its local branch" '[ "$RC" != 0 ] && grep -q "ticket 1 is review on the local branch ticket/1-add-a-reset-button" <<<"$OUT"'
+cyc tp --ticket 6 --apply
+ck "a ticket that is a GitHub issue is sent to --issue" '[ "$RC" != 0 ] && grep -q "use --issue 77" <<<"$OUT"'
+cyc tp --ticket 1 --issue 3 --apply
+ck "--ticket and --issue together are refused" '[ "$RC" != 0 ] && grep -q "two different jobs" <<<"$OUT"'
+cyc tp --ticket 99 --apply
+ck "a ticket that does not exist is refused" '[ "$RC" != 0 ] && grep -q "there is no local ticket 99" <<<"$OUT"'
+cyc tp --issue 3 --apply
+ck "a cycle on an ISSUE needs a repo: the sentence, and the way to cycle a local ticket" '[ "$RC" != 0 ] && grep -qF "tp has no GitHub repo" <<<"$OUT" && grep -q "qtdeck cycle tp --ticket" <<<"$OUT"'
+cyc tp --apply
+ck "no issue and no ticket: the usage says both" '[ "$RC" != 0 ] && grep -q "which issue" <<<"$OUT" && grep -q "ticket" <<<"$OUT"'
+st_registry '["planner","purser","panel","shipwright"]' '{"repo":"","verify":"PYTHONPATH=. python3 -c \"import app\"","forbidden_paths":["secrets/"]}'
+T7=$(addt "Cycle me to a branch")
+cyc tp --ticket "$T7" --apply
+ck "a project that has not opted in (no cycle: true) is refused for a ticket too" '[ "$RC" != 0 ] && grep -q "has not opted in" <<<"$OUT"'
+st_registry '["planner","purser","panel","shipwright"]' '{"cycle":true,"repo":"","verify":"PYTHONPATH=. python3 -c \"import app\"","forbidden_paths":["secrets/"]}'
+refs_before=$(refs_now)
+rm -f "$T/gh-calls"
+cyc tp --ticket "$T7" --apply
+BR7=$(store ".tickets | map(select(.id == $T7)) | .[0].branch")
+ck "cycle --ticket --apply: purser, dev panel and shipwright ran in order, then it stops: awaiting-review" '[ "$RC" = 0 ] && [ "$(jq -r .status "$REC")" = awaiting-review ] && [ "$(jq -r "[.stages[] | select(.state == \"done\") | .id] | join(\" \")" "$REC")" = "purser panel shipwright" ] && [ "$(stg human .state)" = waiting ]'
+ck "  the record keeps ticket: n and issue: null, and no pull request" '[ "$(jq -r .ticket "$REC")" = "$T7" ] && [ "$(jq -r .issue "$REC")" = null ] && [ "$(jq -r .pr "$REC")" = null ] && [ "$(jq -r .apply "$REC")" = true ] && [ "$(jq -r .kind "$REC")" = cycle ] && [ "$(jq -r .project "$REC")" = tp ]'
+ck "  the shipwright stage is a BRANCH, and the verify result is in the record" '[ "$(stg shipwright .verdict)" = BRANCH ] && grep -q "verify exit 0" <<<"$(stg shipwright .detail)"'
+ck "  the local branch exists with one commit; origin has no new branch; gh was never called" '[ "$BR7" = "ticket/$T7-cycle-me-to-a-branch" ] && [ "$(git -C "$T/work" rev-list --count main..$BR7)" = 1 ] && [ "$(refs_now)" = "$refs_before" ] && nogh'
+ck "  the stages that need a pull request are skipped with the plain reason, never failed" 'R="needs a GitHub pull request: connect a repo with qtdeck repo tp and run them there"; for sid in assayer r1:surveyor r1:marshal r1:lookout r1:pilot r1:inspector caulker; do [ "$(stg $sid .state)" = skipped ] && [ "$(stg $sid .detail)" = "$R" ] && [ "$(stg $sid .verdict)" = SKIPPED ] || { echo "bad $sid"; false; break; }; done'
+ck "  the final message names the branch and the review command; the record has them too" 'grep -q "local branch $BR7" <<<"$OUT" && grep -q "diff .*\.\.\.$BR7" <<<"$OUT" && [ "$(jq -r .branch "$REC")" = "$BR7" ] && jq -r .review "$REC" | grep -q "diff .*\.\.\.$BR7" && grep -q "Nothing was pushed and no pull request exists" <<<"$OUT"'
+ck "  the cost of each stage is read back from the spend ledger under this cycle's key" 'jq -e "[.stages[] | select(.state == \"done\") | .cost] | all(. > 0.04 and . < 0.6)" "$REC" >/dev/null && [ "$(jq -s "map(select(.fix == \"cycle:$ID\") | .cost) | add" "$T/state/spend.jsonl")" = "$(jq -r .cost "$REC")" ]'
+ck "  the ticket is in review with the cycle id and the branch; the lock is released; the run ledger has the cycle row" '[ "$(store ".tickets | map(select(.id == $T7)) | .[0].status")" = review ] && [ "$(store ".tickets | map(select(.id == $T7)) | .[0].cycle")" = "$ID" ] && [ ! -d "$T/state/cycle-tp-t$T7.lock" ] && [ "$(jq -r "map(select(.duty == \"cycle\")) | last | .verdict" "$T/state/runs.json")" = AWAITING-REVIEW ]'
+ck "  the purser saved its requirements in the ticket and the panel planned it (no card, no GitHub)" 'store ".tickets | map(select(.id == $T7)) | .[0].requirements" | grep -q "Reset sets the counter to zero" && [ -s "$T/workspace/tp-plan-ticket$T7.md" ]'
+cyc --status "$ID"
+ck "--status <id> shows a ticket cycle: the ticket, the branch, the review command, the skipped stages" '[ "$RC" = 0 ] && grep -q "local ticket #$T7" <<<"$OUT" && grep -q "awaiting-review" <<<"$OUT" && grep -q "local branch: $BR7" <<<"$OUT" && grep -q "review it: git" <<<"$OUT" && grep -q "skipped" <<<"$OUT"'
+OLD=$ID; cyc --resume "$OLD"
+ck "a finished ticket cycle has nothing to resume" '[ "$RC" != 0 ] && grep -q "nothing to resume" <<<"$OUT"'
+jq -n '{kind:"cycle", id:"cyc-tp-7-1", project:"tp", issue:7, apply:true, status:"awaiting-review", final:"", started:"2026-01-01T00:00:00Z", finished:"2026-01-01T00:10:00Z", t0:1, seconds:600, pr:"https://github.com/x/tp/pull/1", prnum:1, cost:1.5, notes:[], stages:[]}' > "$T/state/cycles/cyc-tp-7-1.json"
+OUT=$($QD cycle --status 2>&1); OUT2=$($QD cycle --status cyc-tp-7-1 2>&1)
+ck "an older record (an issue, no ticket field) still lists and shows as before" 'grep -q "cyc-tp-7-1  awaiting-review  tp #7" <<<"$OUT" && grep -q "tp issue #7" <<<"$OUT2" && grep -q "pull request: https://github.com/x/tp/pull/1" <<<"$OUT2" && grep -q "ticket $T7" <<<"$OUT"'
+
+# report only writes nothing
+T8=$(addt "Look but do not touch")
+snap=$(cat "$T/state/tickets/tp.json"); refs8=$(refs_now); rm -f "$T/gh-calls"; branches=$(git -C "$T/work" branch --list | tr -d ' *')
+cyc tp --ticket "$T8"
+ck "a report-only ticket cycle writes nothing: the ticket file, the branches and origin are unchanged, gh is not called" '[ "$RC" = 0 ] && [ "$(jq -r .status "$REC")" = report-only ] && [ "$(cat "$T/state/tickets/tp.json")" = "$snap" ] && [ "$(refs_now)" = "$refs8" ] && [ "$(git -C "$T/work" branch --list | tr -d " *")" = "$branches" ] && nogh'
+ck "  only the purser and the dev panel ran; the shipwright is listed as what it WOULD do, the pull-request stages as skipped" '[ "$(jq -r "[.stages[] | select(.state == \"done\") | .id] | join(\" \")" "$REC")" = "purser panel" ] && [ "$(stg shipwright .state)" = would ] && grep -q "local branch" <<<"$(stg shipwright .detail)" && [ "$(stg r1:pilot .state)" = skipped ] && [ "$(jq -r .ticket "$REC")" = "$T8" ] && grep -q "Add --apply" <<<"$OUT"'
+OLD=$ID; cyc --resume "$OLD"
+ck "  and it cannot be resumed (nothing was started)" '[ "$RC" != 0 ] && grep -q "report-only" <<<"$OUT"'
+
+# resume
+T9=$(addt "Resume after a stop")
+crew_replies "I did something but I will not say what"
+cyc tp --ticket "$T9" --apply
+FAILID=$ID; calls_before=$(jq -r 'select(.prompt | contains("REQUIREMENTS_JSON")) | 1' "$T/claude-calls" | wc -l | tr -d ' ')   # crew_replies below empties the record of calls
+ck "a shipwright that leaves no contract fails the stage: the cycle is failed, the earlier stages are kept, the ticket is still building" '[ "$RC" != 0 ] && [ "$(jq -r .status "$REC")" = failed ] && [ "$(stg purser .state)" = done ] && [ "$(stg panel .state)" = done ] && [ "$(stg shipwright .state)" = failed ] && [ "$(store ".tickets | map(select(.id == $T9)) | .[0].status")" = building ] && grep -q "qtdeck cycle --resume $FAILID" <<<"$OUT"'
+crew_replies
+cyc --resume "$FAILID"
+calls_after=$(jq -r 'select(.prompt | contains("REQUIREMENTS_JSON") or contains("RULING_JSON") or contains("ITEMS_JSON")) | 1' "$T/claude-calls" | wc -l | tr -d ' ')
+builds_after=$(jq -r 'select(.prompt | contains("Build this one ticket")) | 1' "$T/claude-calls" | wc -l | tr -d ' ')
+ck "--resume goes on at the failed stage: the purser and the panel are not repeated, the cycle ends awaiting-review on a branch" '[ "$RC" = 0 ] && [ "$ID" = "$FAILID" ] && [ "$calls_before" = 1 ] && [ "$calls_after" = 0 ] && [ "$builds_after" = 1 ] && [ "$(jq -r .status "$REC")" = awaiting-review ] && [ "$(jq -r .resumed "$REC")" = 1 ] && [ "$(git -C "$T/work" rev-list --count main..ticket/$T9-resume-after-a-stop)" = 1 ] && [ "$(store ".tickets | map(select(.id == $T9)) | .[0].status")" = review ]'
+ck "  still no pull request, no push, no gh call anywhere in the cycles" 'nogh && [ "$(refs_now)" = "$refs8" ]'
+T10=$(addt "Nothing to change HOOK-NOTHING")
+cyc tp --ticket "$T10" --apply
+ck "a build that changes nothing ends the cycle with an error and puts the ticket back to open" '[ "$RC" != 0 ] && [ "$(store ".tickets | map(select(.id == $T10)) | .[0].status")" != review ]'
+
+# the dashboard's readers
+pyck "$PYHEAD"'
+sys.path.insert(0, os.path.join(os.environ["REAL"], "bin"))
+import dashboard as D
+tid = sorted(f for f in os.listdir(T + "/state/cycles") if f.endswith(".json"))
+recs = {}
+for f in tid:
+    r = json.load(open(T + "/state/cycles/" + f)); recs[r["id"]] = r
+tk = next(r for r in recs.values() if r.get("ticket") and r["status"] == "awaiting-review")
+old = recs["cyc-tp-7-1"]
+chk("the lock a ticket cycle holds is cycle-<project>-t<n>, an issue cycle keeps cycle-<project>-<n>", D.cycle_lock_name(tk) == "cycle-tp-t%d" % tk["ticket"] and D.cycle_lock_name(old) == "cycle-tp-7")
+for name, rec in (("cyc-tp-t4-9", dict(tk, id="cyc-tp-t4-9", ticket=4, status="running")), ("cyc-tp-4-9", dict(old, id="cyc-tp-4-9", issue=4, status="running"))):
+    json.dump(rec, open(T + "/state/cycles/" + name + ".json", "w"))
+lock_t, lock_i = D.cycle_lock_name({"project": "tp", "ticket": 4}), D.cycle_lock_name({"project": "tp", "issue": 4})
+chk("a record that says running with no live lock reads as failed, for a ticket and for an issue; with its lock it stays running",
+    D.cycle_record("cyc-tp-t4-9", set())["status"] == "failed" and D.cycle_record("cyc-tp-4-9", set())["status"] == "failed"
+    and D.cycle_record("cyc-tp-t4-9", {lock_t})["status"] == "running" and D.cycle_record("cyc-tp-4-9", {lock_i})["status"] == "running")
+nodes = {n["id"]: n for n in D.cycle_nodes(tk)}
+chk("the nodes of a ticket cycle: brief and build done, review and seal skipped (never blocked or failed), human awaiting", nodes["brief"]["state"] == "done" and nodes["build"]["state"] == "done"
+    and nodes["review"]["state"] == "skipped" and nodes["seal"]["state"] == "skipped" and nodes["human"]["state"] == "awaiting" and not any(n["state"] in ("blocked", "failed") for n in nodes.values()))
+out = {}; D.cycle_mission(tk, out)
+chk("the mission view of a ticket cycle says ticket, not an issue number, and carries no issue", "ticket #%d" % tk["ticket"] in out["title"] and out["issue"] is None and out["state"] == "awaiting")
+out2 = {}; D.cycle_mission(old, out2)
+chk("an older issue record renders as before", out2["title"].startswith("Cycle · #7") and out2["issue"] == 7)
+'
 
 st_done

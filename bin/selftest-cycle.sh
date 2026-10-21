@@ -8,6 +8,7 @@
 # and a real git repository to show the assayer never sees the shipwright's diff; part 3 shows the surveyor leaves the findings
 # file the caulker reads. No GitHub, no model, no project checkout: only invented files.
 source "$(dirname "${BASH_SOURCE[0]}")/selftest-lib.sh"
+st_skip_if_nested_sandbox selftest-cycle
 st_init surveyor shipwright assayer
 cp "$REAL/bin/cycle" "$T/bin/cycle"
 st_repo

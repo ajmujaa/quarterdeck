@@ -122,6 +122,8 @@ only_fmt_validate() { [ ! -s "$T/tf-forbidden" ] && ! grep -vE '^-chdir=[^ ]+ (f
 # This machine has no bubblewrap and no sandbox-exec, so project_exec refuses to run a project command with the sandbox on (that refusal is
 # itself checked below). The rest of these checks run the commands with QUARTERDECK_CHECK_SANDBOX=off, the owner's explicit opt-out.
 SBX=on; [ "$(uname -s)" = Linux ] && ! command -v bwrap >/dev/null 2>&1 && SBX=off
+NESTED=""; st_can_nest_sandbox || NESTED=1   # inside the sandbox, where a second one cannot start: the same opt-out as a machine without one
+[ -n "$NESTED" ] && SBX=off && st_skip "T2 the sandboxed run of terraform: this suite is already inside the sandbox and a sandbox cannot start inside it; checked with QUARTERDECK_CHECK_SANDBOX=off"
 [ "$SBX" = off ] && st_skip "T2 the sandboxed run of terraform on this machine (Linux without bubblewrap): checked with QUARTERDECK_CHECK_SANDBOX=off; the refusal with it on is checked instead"
 
 mkdir -p "$T/tfwt/infra/net"; printf 'resource "aws_vpc" "v" {}\n' > "$T/tfwt/infra/net/main.tf"

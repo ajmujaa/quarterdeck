@@ -4,6 +4,7 @@
 # gh and a real git repository of invented files. Browser checks run for real when this machine has playwright and a
 # browser; when it has not, they are skipped and said so, never counted as passed.
 source "$(dirname "${BASH_SOURCE[0]}")/selftest-lib.sh"
+st_skip_if_nested_sandbox selftest-pilot
 st_init pilot
 st_repo
 # The app: one page that shows a greeting, a button that reveals a total, and a call to an outside address that

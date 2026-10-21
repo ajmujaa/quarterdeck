@@ -4,6 +4,7 @@
 # git repository of invented files. The planted cases are asserted: a major hiding in a minor, an instruction inside a changelog
 # that must be treated as data, an API the notes say was removed that the code still calls, a new install script, a licence change.
 source "$(dirname "${BASH_SOURCE[0]}")/selftest-lib.sh"
+st_skip_if_nested_sandbox selftest-quartermaster
 st_init quartermaster
 cp "$REAL/bin/qm.py" "$T/bin/"
 st_repo

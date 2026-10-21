@@ -3,6 +3,7 @@
 # that failed on the base and passes on the head. Run against stand-ins for the model (which writes files into a worktree
 # through a hook) and gh, a real git repository, and real python test files run by the registry's own command.
 source "$(dirname "${BASH_SOURCE[0]}")/selftest-lib.sh"
+st_skip_if_nested_sandbox selftest-assayer
 st_init assayer
 st_repo
 st_file calc.py $'def add(a, b):\n    return a - b\n'

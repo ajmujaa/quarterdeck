@@ -3,6 +3,7 @@
 # the panel's second round only where seats overlap, fewer seats on a small subject, a model per seat and its cost, and the prompt
 # switches (terse block, build focus, stable system prompt). Run against stand-ins for the model and gh and a real git repository.
 source "$(dirname "${BASH_SOURCE[0]}")/selftest-lib.sh"
+st_skip_if_nested_sandbox selftest-diet
 st_init shipwright inspector panel
 cp "$REAL/bin/spend.py" "$T/bin/"
 # The stand-in model, plus: a reply of __MAX_TURNS__ comes back the way the CLI reports a call stopped at --max-turns.

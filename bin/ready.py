@@ -3,14 +3,15 @@
 
     bin/ready.py show PROJECT [--details]       the checklist and one "next:" line (this is `qtdeck ready PROJECT`); changes nothing
     bin/ready.py json PROJECT                   the same as JSON (the dashboard's GET /api/ready)
-    bin/ready.py record-verify PROJECT CMD EXIT SECONDS SANDBOX [FIRST-LINE]     keep the result of one real run (bin/prove writes it)
+    bin/ready.py record-verify PROJECT CMD EXIT SECONDS SANDBOX [FIRST-LINE] [--tail-file FILE]     keep the result of one real run (bin/prove writes it)
 
 The items, in order: scan, verify, repo, docs, agents, cycle. Each is {key, label, state, detail, action}; state is done, todo, unknown or blocked.
 Only the verify command can block anything. The repo, the docs and the agents are offers, said calmly: a project with none of them is still ready for
 a first ticket. Everything here comes from files in your data folder (the registry, the survey, the attach record, verify.json, a waiting docs draft,
 the ticket list). Nothing is run and nothing is written, except by `record-verify`, which only keeps what `qtdeck ready PROJECT --prove` found.
 
-state/projects/<project>/verify.json  {at, command, exit, seconds, sandbox, first_line}   one real run of the verify command in the sandbox
+state/projects/<project>/verify.json  {at, command, exit, seconds, sandbox, first_line, tail}   one real run of the verify command in the sandbox;
+tail is the last 60 lines of its output (redacted by the credential scan, text only), and first_line is the line a failed run stopped at
 Standard library only; no model, no network.
 """
 import json
@@ -36,6 +37,53 @@ def _clip(s, n=160):
 
 def _plain_dashes(s):
     return str(s).replace(chr(0x2014), ", ").replace(chr(0x2013), "-")
+
+
+# ---- what a run printed: the line that failed, the kept tail, and what to do next ---------------------------------------------------
+TAIL_LINES = 60
+PASS_LINE = re.compile(r"^\s*(?:(?:ok|pass|passed|skip|skipped)\b|[\u2713\u2714+] )", re.I)
+FAIL_WORD = re.compile(r"\b(?:FAIL|FAILED|FAILURE|ERROR|Error|Traceback|AssertionError|not ok)\b|[\u2717\u2718]")
+_CTRL = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|[\x00-\x08\x0b-\x1f\x7f]")
+
+
+def plain_text(s, n=400):
+    """One line of command output as text only: terminal escapes and control characters out, tabs kept as spaces, clipped."""
+    return _CTRL.sub("", str(s).replace("\t", "    ").replace("\r", ""))[:n].rstrip()
+
+
+def tail_lines(text, n=TAIL_LINES):
+    """The last n non-blank lines of some output, as plain text, then redacted by the credential scan (which sees the whole tail at once)."""
+    rows = [plain_text(ln) for ln in str(text).splitlines()]
+    rows = [r for r in rows if r.strip()][-n:]
+    try:
+        import outscan as _os
+        return _os.redact("\n".join(rows)).split("\n") if rows else []
+    except Exception:
+        return ["(hidden: the credential scan could not run)"] if rows else []
+
+
+def failure_line(rows):
+    """The line a failed run stopped at: the last line that names a failure, else the last line that is not a pass line, else the last line."""
+    rows = [r for r in rows if r.strip()]
+    for r in reversed(rows):
+        if FAIL_WORD.search(r) and not PASS_LINE.match(r):
+            return r.strip()
+    for r in reversed(rows):
+        if not PASS_LINE.match(r):
+            return r.strip()
+    return rows[-1].strip() if rows else ""
+
+
+def next_step(rc, rows):
+    """One sentence: what to do after a failed run. The sandbox's own refusals are named as what they are."""
+    blob = "\n".join(rows)
+    if rc == 127:
+        return "Install what it needs in the project yourself, or set a command that runs without an install, then prove it again."
+    if rc == 142 or "timed out after" in blob:
+        return "It ran out of time, so set a quicker verify command (one suite, not everything) and prove that."
+    if "Operation not permitted" in blob or "the sandbox refused" in blob or "Read-only file system" in blob:
+        return "This command needs more than the sandbox allows, so set a verify command that only reads and tests the project's own files and prove that."
+    return "Open Show the output, fix the line it stopped at, then prove it again."
 
 
 # ---- reading what is kept ------------------------------------------------------------------------------------------------------
@@ -137,14 +185,16 @@ def _verify_item(name, entry, sv, vrec, path, preview):
         return {"key": "verify", "label": "Verify command", "state": "todo", "detail": f"{cmd} is set. {why}" + (f" Note: {hint}." if hint else ""),
                 "action": f"Run it once to prove it: qtdeck ready {name} --prove"}
     rc, first = vrec.get("exit"), _clip(vrec.get("first_line") or "", 140)
+    rows = [str(x) for x in (vrec.get("tail") or []) if isinstance(x, str)][-TAIL_LINES:]
     if rc == 0:
-        return {"key": "verify", "label": "Verify command", "state": "done",
+        return {"key": "verify", "label": "Verify command", "state": "done", "tail": rows,
                 "detail": f"{cmd} ran in the sandbox and passed (exit 0, {vrec.get('seconds', 0)} s, {str(vrec.get('at', ''))[:10]}).", "action": ""}
     why = EXPLAIN_127 if rc == 127 else (first or "it printed nothing")
-    detail = f"{cmd} exited {rc} in the sandbox. " + (f"First line: {first}. " if first and rc != 127 else "") + ("" if rc != 127 else f"Exit 127: {EXPLAIN_127}.")
+    step = next_step(rc, rows + [first])
+    detail = f"{cmd} exited {rc} in the sandbox. " + (f"It stopped at: {first}. " if first and rc != 127 else "") + ("" if rc != 127 else f"Exit 127: {EXPLAIN_127}.")
     if rc == 127 and hint:
         detail += f" {hint[0].upper() + hint[1:]}."
-    return {"key": "verify", "label": "Verify command", "state": "blocked", "detail": detail.strip(),
+    return {"key": "verify", "label": "Verify command", "state": "blocked", "detail": (detail.strip() + " " + step).strip(), "tail": rows, "next_step": step,
             "action": f"Fix it, then prove it again: qtdeck ready {name} --prove", "failed": True, "hint": why}
 
 
@@ -321,19 +371,22 @@ def say(project, details=False):
     return 0
 
 
-def record_verify(project, command, rc, seconds, sandbox, first_line=""):
+def record_verify(project, command, rc, seconds, sandbox, first_line="", tail_text=""):
     d = _folder(project)
     d.parent.mkdir(parents=True, exist_ok=True)
     os.chmod(d.parent, 0o700)
     d.mkdir(exist_ok=True)
     os.chmod(d, 0o700)
+    rows = tail_lines(tail_text) if tail_text else []
+    if rows and int(rc) != 0:
+        first_line = failure_line(rows)             # a failed run is described by the line it stopped at, not by its first (often passing) line
     try:
         import outscan as _os
         first_line = _os.redact(first_line)
     except Exception:
         first_line = "(hidden: the credential scan could not run)"
     rec = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "command": command, "exit": int(rc), "seconds": int(seconds), "sandbox": sandbox,
-           "first_line": _clip(first_line, 200)}
+           "first_line": _clip(first_line, 200), "tail": rows}
     _survey._atomic(d / "verify.json", json.dumps(rec, indent=2, sort_keys=True) + "\n")
     return rec
 
@@ -346,8 +399,13 @@ def main(argv):
         if a[:1] == ["json"] and len(a) == 2:
             print(json.dumps(view(a[1])))
             return 0
-        if a[:1] == ["record-verify"] and len(a) in (6, 7):
-            rec = record_verify(a[1], a[2], a[3], a[4], a[5], a[6] if len(a) == 7 else "")
+        if a[:1] == ["record-verify"] and len(a) >= 6:
+            tail = ""
+            if "--tail-file" in a:
+                i = a.index("--tail-file")
+                tail = Path(a[i + 1]).read_text(errors="replace") if i + 1 < len(a) else ""
+                a = a[:i] + a[i + 2:]
+            rec = record_verify(a[1], a[2], a[3], a[4], a[5], a[6] if len(a) == 7 else "", tail)
             print(json.dumps(rec))
             return 0
     except ValueError as e:

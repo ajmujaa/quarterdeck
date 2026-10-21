@@ -5,11 +5,15 @@ name: ci
 # Every step uses a throwaway HOME, so the tests start from a clean data folder.
 # Nothing here needs a secret, a private denylist or a real data folder.
 
+# A pull request runs the quick check on Linux only (about 8 minutes). A merge to main, the nightly run and a manual run (`gh workflow run ci.yml --ref <branch>`)
+# run every test on Linux and macOS. The sandbox tests that need macOS therefore run on every merge, not on every push to a branch.
 on:
   push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
   schedule:
-    - cron: "17 5 * * 1"      # weekly, Monday 05:17 UTC
+    - cron: "17 5 * * *"      # nightly, 05:17 UTC
 
 permissions:
   contents: read
@@ -19,7 +23,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["ubuntu-latest","macos-latest"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     env:
@@ -47,7 +51,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/home"
           echo "HOME=$RUNNER_TEMP/home" >> "$GITHUB_ENV"
       - name: Every test (what `qtdeck check` runs; the suite list is found by name, so none is left out)
-        run: python3 bin/check.py
+        run: python3 bin/check.py ${{ github.event_name == 'pull_request' && '--quick' || '' }}
 
 # Dependencies: there are none to audit. Quarterdeck is Python standard library and
 # bash only (jq, git and gh are tools it calls, not packages it installs); node is

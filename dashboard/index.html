@@ -2014,6 +2014,9 @@ function rdItemBody(i, d){
   let b = `<p>${esc(i.detail)}</p>`;
   if(i.key === "verify" && i.action && i.state !== "done") b += `<p class="sub">${i.state === "todo" ? "Runs only when you click. " : ""}<code class="tk-sel">${esc(i.action)}</code></p>`;
   if(i.key === "verify" && (i.tail || []).length) b += `<details class="rd-out"${(RD.open.out === undefined ? i.state === "blocked" : RD.open.out) ? " open" : ""}><summary ${act("rdToggle", "out")}>Show the output</summary><pre class="lv-log lv-kept" tabindex="0" aria-label="The last lines of the verify command's output">${esc(i.tail.join("\n"))}</pre></details>`;
+  if(i.key === "verify" && (i.candidates || []).length) b += `<p class="sub">Found by name in the project. None of these has been run. Picking one only sets it; you run it once afterwards.</p>
+    <ul class="rd-agents">${i.candidates.map(c => `<li><code class="tk-sel">${esc(c.command)}</code> <span class="sub">${esc(c.why)}. Not run yet.</span>
+      ${btn("Use this", {size: "small", click: act("rdUseVerify", c.command), attrs: `aria-label="Use ${esc(c.command)} as the verify command (not run yet)"`})}</li>`).join("")}</ul>`;
   if(i.key === "repo" && i.state === "todo") b += `<p class="sub">The four ways forward are in the card below and with <code class="tk-sel">${esc(i.action)}</code>.</p>`;
   if(i.key === "docs"){
     const miss = i.missing || [], busy = !!RD.busy || d.running.docs;
@@ -2090,6 +2093,14 @@ async function rdProve(){
   RD.busy = "prove"; RD.error = ""; RD.at = 0;
   if(live) live.liveStart("prove", "prove:" + p, {onEnd: () => loadReady(true)});
   announce("Running the verify command once in the sandbox."); render(); loadReady(true);
+}
+async function rdUseVerify(cmd){
+  const p = sel;
+  if(!p || !cmd) return;
+  if(!await confirmDlg(`This sets the verify command of ${p} to: ${cmd}. Nothing is run now. You will be asked before it is run once in the sandbox.`, {title: "Use this verify command?", ok: "Use it"})) return;
+  const j = await post("/api/project/verify", {project: p, command: cmd, confirm: true});
+  if(!j) return;
+  toast("Verify command set. It has not been run yet."); await tick(); loadReady(true);
 }
 async function rdProveStop(){
   const p = sel;
@@ -5455,7 +5466,7 @@ const ACTIONS = {
   startCycle, startMissionPanel, stopRun, talkSubmit, thinkToggle, tlClick, tlHover, tlSet, toggleCalm, toggleDemo, toggleLedger,
   toggleMissionForm, toggleMobileMenu, toggleOld, toggleReplay, toggleSched, toggleSel, toggleShowcaseForm, unpublishShowcase, unqueue, workOn,
   grEdit, grNew, grAdd, grRemove, grMove, grSave, openProject, openProjects, addonNeeds, homeDay, finToggle, trajToggle, tkRequest, tkDraft, tkFile, tkDiscard, tkRepoName, tkRepoSave, tkRepoCreate, tkMission,
-  rdShow, rdToggle, rdNext, rdDraft, rdApply, rdTurnOn, rdCycle, rdProveStop,
+  rdShow, rdToggle, rdNext, rdDraft, rdApply, rdTurnOn, rdCycle, rdProveStop, rdUseVerify,
   ...EXT.actions,                                   // an add-on's own (assets/ext-*.js), by name
 };
 

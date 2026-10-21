@@ -4622,6 +4622,27 @@ def project_suggested(name, entry):
             if isinstance(v, dict) and v.get("suggested") and d not in on]
 
 
+def project_verify_api(b):
+    """POST /api/project/verify {project, command, confirm}: set the verify command to one the scan finds by name now (ready.verify_candidates). Nothing is
+    run, and a command that is not one of those candidates is refused: typing a command stays with `qtdeck attach --verify`."""
+    import attach as _attach, ready as _ready
+    no_demo("set the verify command")
+    if b.get("confirm") is not True:
+        return 400, {"error": "confirm is required: this sets the project's verify command (it is not run)"}
+    project, cmd = b.get("project"), b.get("command")
+    try:
+        ent = _ticket_entry(project)
+        if ent.get("verify"):
+            return 409, {"error": "this project already has a verify command"}
+        if not isinstance(cmd, str) or cmd not in [c["command"] for c in _ready.verify_candidates(ent.get("path"))]:
+            return 400, {"error": "that is not one of the commands found in the project"}
+        _attach.update_commands(project, {"verify": cmd})
+    except ValueError as e:
+        return 400, {"error": str(e)}
+    _ticket_log("ready-verify-set", project)
+    return 200, {"verify": cmd, "run": False}
+
+
 def project_duties_api(b):
     """Turn duties on or off, and allow or forbid full cycles: attach.set_duties, the function `qtdeck enable` and `qtdeck disable` use."""
     import attach as _attach
@@ -6236,7 +6257,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(code, json.dumps(body))
 
         for path_, fn_ in (("/api/ticket/draft", ticket_draft_api), ("/api/ticket/file", ticket_file_api), ("/api/ticket/discard", ticket_discard_api), ("/api/repo", repo_api),
-                         ("/api/ready/prove", ready_prove_api), ("/api/ready/prove-stop", ready_prove_stop_api), ("/api/docs/draft", docs_draft_api), ("/api/docs/apply", docs_apply_api), ("/api/project/duties", project_duties_api),
+                         ("/api/ready/prove", ready_prove_api), ("/api/ready/prove-stop", ready_prove_stop_api), ("/api/docs/draft", docs_draft_api), ("/api/docs/apply", docs_apply_api), ("/api/project/duties", project_duties_api), ("/api/project/verify", project_verify_api),
                          ("/api/project/guardrails", project_guardrails_api)):
             if u.path == path_:
                 code, body = fn_(b)

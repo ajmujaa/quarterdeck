@@ -86,6 +86,60 @@ def next_step(rc, rows):
     return "Open Show the output, fix the line it stopped at, then prove it again."
 
 
+# ---- a verify command the scan could not guess, found by name instead ------------------------------------------------------------------
+# A repo whose tests are scripts (bin/selftest.py, bin/*.sh, scripts/test.sh, a Makefile target) has no manifest that names a test command. These are
+# offered as suggestions, one click each, never set silently and never run: each is marked "not run yet". Only file names (and the Makefile's target
+# names) are read. A candidate must also pass attach.VERIFY_OK, the same limit as a command typed by hand.
+CAND_MAX = 6
+_CAND_FILE = re.compile(r"(?:selftest|test|tests|check|run-tests|run_tests)[A-Za-z0-9_.-]*\.(?:py|sh|mjs|js)")
+_CAND_SKIP = re.compile(r"(?:^|[-_.])(?:lib|helpers?|common|fixtures?|setup|config)(?:[-_.]|$)", re.I)
+_CAND_RUN = {".py": "python3", ".sh": "bash", ".mjs": "node", ".js": "node"}
+
+
+def verify_candidates(path):
+    """[{command, why, run: False}]: up to six commands found by name in the project folder (bin/selftest*, bin/test*, scripts/test*, scripts/check*,
+    test.sh and check.sh at the top, a Makefile test or check target), best first. [] when the folder cannot be read. Nothing is run."""
+    import attach as _attach
+    root = Path(os.path.expanduser(str(path or "")))
+    out = []
+
+    def add(cmd, why):
+        if len(out) < CAND_MAX and _attach.VERIFY_OK.fullmatch(cmd) and all(o["command"] != cmd for o in out):
+            out.append({"command": cmd, "why": why, "run": False})
+
+    def names(sub):
+        try:
+            return sorted(n for n in os.listdir(root / sub) if (root / sub / n).is_file()) if (root / sub).is_dir() else []
+        except OSError:
+            return []
+
+    def as_cmd(sub, n):
+        run = _CAND_RUN.get(os.path.splitext(n)[1])
+        return f"{run} {sub + '/' if sub else ''}{n}" if run else ""
+
+    if not root.is_dir():
+        return out
+    for n in sorted(names("bin"), key=lambda x: (not x.startswith("selftest"), os.path.splitext(x)[0] != "selftest", x)):
+        if _CAND_FILE.fullmatch(n) and not _CAND_SKIP.search(os.path.splitext(n)[0]) and (n.startswith(("selftest", "test"))):
+            add(as_cmd("bin", n), f"bin/{n} is named like a test")
+    for sub in ("scripts", "script"):
+        for n in names(sub):
+            if _CAND_FILE.fullmatch(n) and not _CAND_SKIP.search(os.path.splitext(n)[0]):
+                add(as_cmd(sub, n), f"{sub}/{n} is named like a test")
+    for n in names(""):
+        if re.fullmatch(r"(?:test|check|run-tests|run_tests)\.(?:sh|py)", n):
+            add(as_cmd("", n), f"{n} is named like a test")
+    try:
+        mk = next((root / m for m in ("Makefile", "makefile", "GNUmakefile") if (root / m).is_file()), None)
+        text = mk.read_text(errors="replace")[:200000] if mk else ""
+    except OSError:
+        text = ""
+    for target in ("test", "check"):
+        if re.search(rf"^{target}\s*:", text, re.M):
+            add(f"make {target}", f"the Makefile has a {target} target")
+    return out
+
+
 # ---- reading what is kept ------------------------------------------------------------------------------------------------------
 def _folder(project):
     return _survey.folder(project)
@@ -173,9 +227,10 @@ def _scan_item(name, sv, path, preview):
 def _verify_item(name, entry, sv, vrec, path, preview):
     cmd = (entry or {}).get("verify", "")
     if not cmd:
+        cands = [] if preview else verify_candidates(path)
         return {"key": "verify", "label": "Verify command", "state": "blocked",
-                "detail": "No verify command is set, so there is nothing to prove a change with.",
-                "action": f"qtdeck attach {shlex.quote(path or '<dir>')} --verify \"<command>\" --apply"}
+                "detail": "No verify command is set, so there is nothing to prove a change with." + (f" {len(cands)} found by name, none of them run yet: pick one, then run it once to prove it." if cands else ""),
+                "action": f"qtdeck attach {shlex.quote(path or '<dir>')} --verify \"<command>\" --apply", "candidates": cands}
     hint = install_hint(path, cmd, sv)
     if preview:
         return {"key": "verify", "label": "Verify command", "state": "todo", "detail": f"{cmd}. After attaching, run it once to prove it works in the sandbox." + (f" Note: {hint}." if hint else ""),

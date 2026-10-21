@@ -10,6 +10,7 @@
 #   - Stop ends the run, keeps nothing and leaves no copy, file or lock behind
 #   - a project command is told it is in the sandbox (QUARTERDECK_IN_SANDBOX=1), and only that
 #   - attach shows its stage lines in the same box
+#   - a project whose tests are scripts is offered candidates found by name, one click each, never set or run silently
 # Run it on its own: bash bin/selftest-prove-live.sh. QD_KEEP=1 keeps the throwaway folder.
 ST_PROVIDER=fake
 source "$(dirname "${BASH_SOURCE[0]}")/selftest-lib.sh"
@@ -218,6 +219,38 @@ chk("an unknown key is a 400, an unknown project is a 400, and an unpaired read 
 chk("a since that is not a number is read as 0", get("/api/live?key=attach&since=abc")[0] == 200 and get("/api/live?key=attach&since=-5")[0] == 200)
 PY
 OUT=$(python3 "$T/p5.py" 2>&1)
+while IFS= read -r line; do
+  case "$line" in
+    "ok "*)   printf '  ok    %s\n' "${line#ok }"; passed=$((passed + 1)) ;;
+    "FAIL "*) printf '  FAIL  %s\n' "${line#FAIL }"; fails=$((fails + 1)) ;;
+    *) [ -z "$line" ] || echo "        $line" ;;
+  esac
+done <<<"$OUT"
+
+# ---- 5b. a script-driven project: verify candidates found by name, offered, never set or run silently ----
+SP="$T/proj/scripty"; mkdir -p "$SP/bin" "$SP/scripts"
+printf 'print("ok")\n' > "$SP/bin/selftest.py"; printf 'true\n' > "$SP/bin/selftest-flow.sh"; printf 'true\n' > "$SP/bin/selftest-lib.sh"; printf 'true\n' > "$SP/scripts/build.sh"
+printf 'check:\n\ttrue\n' > "$SP/Makefile"
+git init -q -b main "$SP" 2>/dev/null || { git init -q "$SP"; git -C "$SP" checkout -q -b main; }
+git -C "$SP" add -A; git -C "$SP" -c user.name=Test -c user.email=t@example.invalid commit -q -m "initial"
+$QD attach "$SP" --name scripty --apply >/dev/null 2>&1
+cat > "$T/p5b.py" <<'PY'
+exec(open(__import__("os").environ["T"] + "/qc.py").read())
+def item(): return [i for i in get("/api/ready?project=scripty")[1]["items"] if i["key"] == "verify"][0]
+def registry(): return json.load(open(T + "/config/projects.json"))["scripty"]
+it = item()
+cmds = [c["command"] for c in it.get("candidates", [])]
+chk("a project with no manifest: the Ready card offers what is named like a test, best first, and not a library or a build script", cmds == ["python3 bin/selftest.py", "bash bin/selftest-flow.sh", "make check"], cmds)
+chk("  each is marked not run yet and says why it was picked; nothing was set or run on its own", all(c["run"] is False and c["why"] for c in it["candidates"]) and registry().get("verify", "") == "" and not os.path.exists(T + "/state/projects/scripty/verify.json") and it["state"] == "blocked", registry())
+chk("  setting needs confirm, and only a command from the list is taken (a typed one is a 400)", post("/api/project/verify", {"project": "scripty", "command": cmds[0]})[0] == 400
+    and post("/api/project/verify", {"project": "scripty", "command": "rm -rf x", "confirm": True})[0] == 400 and registry().get("verify", "") == "")
+st, j = post("/api/project/verify", {"project": "scripty", "command": cmds[0], "confirm": True})
+it = item()
+chk("  one click sets it and runs nothing: the item now says it has not been run yet, and a second set is a 409", st == 200 and j == {"verify": cmds[0], "run": False} and registry()["verify"] == cmds[0]
+    and it["state"] == "todo" and "has not been run yet" in it["detail"] and not os.path.exists(T + "/state/projects/scripty/verify.json")
+    and post("/api/project/verify", {"project": "scripty", "command": cmds[1], "confirm": True})[0] == 409, (st, j, it))
+PY
+OUT=$(python3 "$T/p5b.py" 2>&1)
 while IFS= read -r line; do
   case "$line" in
     "ok "*)   printf '  ok    %s\n' "${line#ok }"; passed=$((passed + 1)) ;;

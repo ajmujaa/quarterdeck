@@ -21,5 +21,14 @@ Either way, the failure text on the Ready card must say what to do next in one s
 ## C. The scan cannot guess a verify command for a script-driven repo
 The scan found no verify command for a repo whose tests are `bin/selftest.py` and `bin/*.sh`. Offer candidates found by name (`bin/selftest*`, `scripts/test*`, a `check` or `test` target) as one-click suggestions on the Ready card, never set silently, each marked "not run yet".
 
-## D. Report
+## D. Sign in from the Connections page, never from a terminal
+After saving the Google client id and secret, the Gmail card says "run python3 bin/integrations/google_oauth.py gmail" in a terminal. A connection page must not ask for that. The sign-in code already exists (`authorize()` in `bin/integrations/google_oauth.py`: loopback redirect on 127.0.0.1, PKCE, a `state` check, token file 0600).
+1. The moment the last required credential of an account is saved, the page starts the sign-in itself. A new `POST /api/connections` action `signin` (same pairing, origin, token and confirm rules as the other writes) runs `authorize()` in a worker thread with `open_browser=False` and returns the Google address. The page shows a primary button "Continue with Google" (and also tries to open it; if the browser blocks that, the button is there), a calm "Waiting for you in the browser, 3:58 left" with a Cancel button, then "Signed in as ..." or the plain reason it stopped (cancelled, timed out, Google gave no refresh token, with the one thing to do next). The Test runs by itself after a successful sign-in.
+2. The listener is one loopback socket on a random port, single use, closed on success, cancel or after 4 minutes; the callback is checked against `state`; nothing about it is logged except "sign-in started/finished" with the service and account label, never the code, token or address.
+3. Gmail's second and later accounts use the same flow from "Add another account".
+4. The Gmail card's help text and the manifest (`bin/integrations/services/gmail.json`) stop telling people to run a command; they describe the button. `qtdeck connect gmail` keeps working for people who prefer the terminal.
+5. Tests with a stand-in Google endpoint (fixture token and auth server on loopback): sign-in succeeds, user cancels, timeout, wrong `state` is refused, the page never receives a token, a second account works.
+6. Same rule for any other connection that today needs a terminal step: list them in the report; fix the ones that are the same shape.
+
+## E. Report
 `docs/reports/cloud-round-5.md`: what was built, what was not checked, what still confuses a newcomer.

@@ -1,0 +1,23 @@
+{
+  "name": "qtdeck",
+  "version": "@VERSION@",
+  "description": "Quarterdeck: a local dashboard and crew of agents for your software projects. This package is a thin wrapper that finds Python and runs the program.",
+  "bin": {
+    "qtdeck": "bin/qtdeck.js"
+  },
+  "files": [
+    "bin/qtdeck.js",
+    "app",
+    "README.md"
+  ],
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/ajmujaa/quarterdeck",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ajmujaa/quarterdeck.git"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "private": true
+}

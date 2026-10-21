@@ -27,3 +27,6 @@ config/speech.json
 .playwright-mcp/
 .t
 .DS_Store
+
+# release files made by bin/release.py
+dist/release/

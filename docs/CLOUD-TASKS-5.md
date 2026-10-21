@@ -16,6 +16,8 @@ Attaching `~/Projects/Quarterdeck` (a clone of the public repo) with verify `pyt
 2. A real bug in the sandbox profile or the selftest. Fix it.
 Either way, the failure text on the Ready card must say what to do next in one sentence, not only an exit code.
 
+**Finding (reproduced by hand, 2026-10-21):** in the sandbox exactly one check of `bin/selftest.py` fails, everything else passes: `FAIL  a listener that is not the helper's child is refused, and one that is the child is accepted; the key stays unsent otherwise`. That check looks at which process owns a listening port, and the sandbox deliberately forbids listing or inspecting other processes (SECURITY.md, project-command sandbox). So the sandbox is right and the test cannot run there. Fix: make that check detect it cannot inspect processes and report `skip` with the reason (not FAIL), and add a small marker the harness sets for project commands (for example `QUARTERDECK_IN_SANDBOX=1`) so any test can skip what the sandbox forbids on purpose. Then `python3 bin/selftest.py` passes in Prove for this repo. Check that no other suite has the same problem (run `bin/selftest*.sh` and `*.py` the same way and list any that fail only inside the sandbox).
+
 ## C. The scan cannot guess a verify command for a script-driven repo
 The scan found no verify command for a repo whose tests are `bin/selftest.py` and `bin/*.sh`. Offer candidates found by name (`bin/selftest*`, `scripts/test*`, a `check` or `test` target) as one-click suggestions on the Ready card, never set silently, each marked "not run yet".
 

@@ -30,3 +30,4 @@ config/speech.json
 
 # release files made by bin/release.py
 dist/release/
+config/agent-sources.json

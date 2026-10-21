@@ -147,6 +147,16 @@ print("wd-secrets" if all(any(p.startswith(wd) and n in p for p in sb["filesyste
 PY
 )
 ck "F4 the Read deny rules and the sandbox's denyRead are the same list (they differ if either is built from one folder only)" '[ "$(sed -n 1p <<<"$parity")" = same ]'
+# round 4: the add-on folder (code the dashboard imports) is on the deny-write rules AND the sandbox's denyWrite: one list, two renderings, neither may lack it
+wparity=$(python3 - "$cb" "$DH" <<'PY'
+import json, sys
+c = json.loads(sys.argv[1]); dh = sys.argv[2]
+rules = {r[len("Edit(/"):-1][:-3] if r.endswith("/**)") else r[len("Edit(/"):-1] for r in c["deny"].split(",") if r.startswith("Edit(//") and "/addons" in r}
+sb = {p for p in json.loads(c["settings"])["sandbox"]["filesystem"]["denyWrite"] if p.endswith("/addons")}
+print("same" if rules == sb and (dh + "/addons") in sb else "differ: " + repr(sorted(rules)) + " vs " + repr(sorted(sb)))
+PY
+)
+ck "R4 the add-on folder is in the model's Edit deny rules and in the sandbox's denyWrite, the same path in both${wparity:+ ($wparity)}" '[ "$wparity" = same ]'
 ck "F9 a call with a shell runs in the sandbox with no unsandboxed escape, and the working folder's own .env/*.pem/*.key are hidden from its commands" '[ "$(sed -n 2p <<<"$parity")" = escape-closed ] && [ "$(sed -n 3p <<<"$parity")" = wd-secrets ]'
 ck "R4/R-LOW the sandbox fails closed (failIfUnavailable), the worktree's own .git file is closed to sandboxed writes, and Edit/Write are denied on it (a linked worktree's .git is a file; Edit(**/.git/**) does not match it)" \
    'jq -e --arg w "$WP" "(.settings | fromjson | .sandbox | .failIfUnavailable == true and (.filesystem.denyWrite | index(\$w + \"/.git\") != null)) and (.deny | split(\",\") | (index(\"Edit(/\" + \$w + \"/.git)\") != null) and (index(\"Edit(**/.git)\") != null))" <<<"$cb" >/dev/null'

@@ -585,6 +585,17 @@ _qd_physical() { # _qd_physical <path> — the path with its longest existing fo
   d=$(cd "${p:-/}" 2>/dev/null && pwd -P) || d=$p
   printf '%s%s' "${d%/}" "$rest"
 }
+# Code the dashboard imports at start (round 4): add-ons in the data folder. No model and no project command may create or change a file there, or a prompt
+# could plant code that runs as the owner. ONE list again, rendered as Edit(...) deny rules (private_read_rules) and as the sandbox's denyWrite
+# (claude_sandbox_json); bin/selftest-security.sh fails if the two differ or if either lacks the folder.
+protected_write_paths() { # one absolute path per line (a path is listed as written and, if different, with its symlinks resolved)
+  local p q
+  for p in "$QUARTERDECK_HOME/addons"; do
+    printf '%s\n' "$p"
+    q=$(_qd_physical "$p"); [ "$q" != "$p" ] && printf '%s\n' "$q"
+  done
+  return 0
+}
 private_paths() { # one absolute path or glob per line: the single source of both renderings (a path is listed as written and, if different, with its symlinks resolved)
   local b p q
   local -a st hm
@@ -628,6 +639,10 @@ private_read_rules() { # the same list as Read(...) deny rules, comma separated;
   done < <(private_paths)
   local n
   local -a nm
+  while IFS= read -r p; do
+    case "$p" in *,*) continue ;; esac
+    printf 'Edit(/%s),Edit(/%s/**),' "$p" "$p"
+  done < <(protected_write_paths)
   IFS=' ' read -ra nm <<<"$_QD_SECRET_NAMES"
   for n in "${nm[@]}"; do printf 'Read(**/%s),Edit(**/%s),' "$n" "$n"; done
   printf 'Edit(**/.git/**),Edit(**/.git),Edit(**/.claude/**),Edit(**/.mcp.json),'     # never a place for a model to write: hooks, agent settings, MCP servers; a linked worktree's .git is a FILE, which .git/** does not match
@@ -638,11 +653,12 @@ private_read_rules() { # the same list as Read(...) deny rules, comma separated;
 # the CLI otherwise runs the shell unconfined where it cannot build one), the worktree's own .git file closed to writes, and nothing written
 # outside the working folder (the sandbox's own default). Both keys were checked against the real CLI (2.1.293) by hand: see docs/public/SECURITY.md.
 claude_sandbox_json() { # claude_sandbox_json <workdir> [extra paths to deny, one per line: the secret screen's]
-  local wdir=$1 extra=${2:-} n
+  local wdir=$1 extra=${2:-} n nw
   local -a nm
   IFS=' ' read -ra nm <<<"$_QD_SECRET_NAMES"
+  nw=$(protected_write_paths | jq -Rn '[inputs]')
   { private_paths; for n in "${nm[@]}"; do printf '%s\n' "$wdir/$n" "$wdir/**/$n" "$HOME/**/$n"; done; _qd_broad_home "$wdir"; [ -z "$extra" ] || printf '%s\n' "$extra"; } \
-    | jq -Rn --arg w "$wdir" '[inputs] as $d | {sandbox: {enabled: true, allowUnsandboxedCommands: false, failIfUnavailable: true, filesystem: {denyRead: $d, denyWrite: [($w + "/.git")]}}}' -c
+    | jq -Rn --arg w "$wdir" --argjson nw "$nw" '[inputs] as $d | {sandbox: {enabled: true, allowUnsandboxedCommands: false, failIfUnavailable: true, filesystem: {denyRead: $d, denyWrite: ([($w + "/.git")] + $nw)}}}' -c
 }
 
 # The environment a model call gets: what claude needs to run and to sign in, and nothing else. Everything exported from
@@ -1513,6 +1529,10 @@ _qd_sb_profile() { # _qd_sb_profile <check|install|serve> <worktree> <scratch> [
   # Audit 7 (M1): when the command runs in a throwaway clone, the worktree itself (which is gated and committed) is not writable at all, even where
   # it sits under a folder that is (/private/tmp, /private/var/folders): a child that outlived the check could otherwise edit it before the first gate.
   [ "$run" != "$wt" ] && case "$wt" in *'"'*|*'\'*) _QD_SB_BAD=1 ;; *) printf '(deny file-write* (subpath "%s"))\n' "$wt" ;; esac
+  # The add-on folder (round 4): code the dashboard imports at start, never writable from a project command.
+  while IFS= read -r p; do
+    case "$p" in *'"'*|*'\'*) _QD_SB_BAD=1 ;; *) printf '(deny file-write* (subpath "%s"))\n' "$p" ;; esac
+  done < <(protected_write_paths)
   # The worktree's .git file (round-5 A2), as the model's own sandbox already has it: rewritten, it would point git somewhere else.
   case "$run" in *'"'*|*'\'*) _QD_SB_BAD=1 ;; *) printf '(deny file-write* (subpath "%s/.git"))\n' "$run" ;; esac
   case "$scratch" in *'"'*|*'\'*) _QD_SB_BAD=1 ;; esac

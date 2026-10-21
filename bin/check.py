@@ -42,6 +42,8 @@ LABELS = {
     "selftest-providers.sh": "providers: the claude adapter, unknown ones refused", "selftest-security.sh": "security: one check per fix",
     "selftest-cycle.sh": "the cycle: stage order, caps, resume", "selftest-diet.sh": "fewer tokens: turn caps, reuse, rounds",
     "selftest-round8.sh": "round 8 review: expected failures until fixed", "selftest-billing.sh": "billing: the API key only where it is chosen",
+    "selftest-sources.sh": "agent sources: read-only, https or a local tunnel, no redirects, 256 KB, a token only in the credential store",
+    "selftest-agents.sh": "show your own agents: fleet report, add-ons in the data folder, the builder agent file",
     "selftest-firstrun.sh": "first use: data folder, help, doctor, attach, setup",
     "selftest-connections.sh": "connections: instructions, several accounts per service",
     "selftest-stack.sh": "the stack scan: framework and tools named, build and lint proposed, a reason per duty",

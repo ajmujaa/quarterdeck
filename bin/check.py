@@ -46,6 +46,7 @@ LABELS = {
     "selftest-connections.sh": "connections: instructions, several accounts per service",
     "selftest-stack.sh": "the stack scan: framework and tools named, build and lint proposed, a reason per duty",
     "selftest-tickets.sh": "tickets: drafted from a request, filed only with --apply, local tickets and branches when there is no repo, repo create after a yes",
+    "selftest-missions.sh": "missions that tell the truth: a merged pull request is Merged, NO_CHANGE is Nothing to build, the buttons on a finished or stopped mission do only what they say, old stops are grouped",
     "selftest-tickets-ui.sh": "tickets on the dashboard: draft first, file on a click, the repo options, a mission from a ticket, Demo mode does nothing",
     "selftest-nav.sh": "navigation: the address holds the page, project and mission (Back, Forward, reload, deep links, hostile addresses), the scope chip where a scope applies, mission steps by kind, the trajectory on Projects, add-ons in the scope box",
     "selftest-projects.sh": "Home and Projects: Home is the person (five things and one count line), Projects shows a card per project and Open filters the tabs, the scope is in the address, the scope box exists only where it applies, Calm, a phone width",

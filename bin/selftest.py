@@ -2696,7 +2696,7 @@ check("speech hints: with no file there are none; with one, the words and the co
       and _bad == {"words": [], "sounds_like": {}}, (_before, _after))
 _dsrc = pathlib.Path(d.__file__).read_text()
 _fa = _dsrc[_dsrc.index("def fleet_action"):_dsrc.index("import fleetview") if False else _dsrc.index("CLAUDE_SESSION = ")]
-check("fleet route: starting or stopping needs confirm true, and the fleet view is built only for its own route, never in /api/state or the chat digest",
+check("fleet route: starting or stopping needs confirm true, and the fleet document (git and gh reads) is built only for its own route and a background refresh; /api/state carries just the live-work summary (S.live), and the chat digest nothing of it",
       "confirm is required" in _dsrc and _dsrc.count("fleet_view(") == 2 and "fleet" not in pathlib.Path(d.chatctx.__file__).read_text().lower())
 _fsrc = pathlib.Path(_fv.__file__).read_text()
 check("fleet module: no shell, no eval, and no read of the clipboard, screen, apps or location",
@@ -3837,8 +3837,9 @@ else:
 check("the Run dialog is one sl-dialog with Cancel and Run in its footer; Advanced is an sl-details holding the raw flags, extra arguments and Schedule; it posts {project, duty, args, apply} to /api/run; focus returns to the Run button",
       'id="run-dlg"' in _ix4 and 'id="run-yes"' in _ix4 and 'id="run-no"' in _ix4 and '<sl-details summary="Advanced"' in _ix4 and 'post("/api/run", {project, duty: d.duty, args, apply})' in _ix4
       and "focusRun(key)" in _ix4 and 'btn("Schedule"' in _ix4 and "Schedule…" not in _ix4 and "crewMod.missing(d.duty" in _ix4)
-check("Crew rows show the sentence, running with elapsed, last result and when, needs attention, Not enabled for this project with how to enable it; running first; a top strip counts running and attention and filters",
-      all(t in _ix4 for t in ("Running now", "Last result:", "Needs attention.", "Not enabled for this project.", "How to enable it", "crewRank = {running: 0", 'act("crewFilter"', "Need attention")))
+check("Crew rows show the sentence, running with elapsed, last result and when, needs attention; running first; a top strip counts running sessions and duties apart and filters. The owner's design replaced the 'Not enabled for this project, how to enable it' rows by one folded Available (N) list with an Enable button",
+      all(t in _ix4 for t in ("Running now", "Last result:", "Needs attention.", "crewRank = {running: 0", 'act("crewFilter"', "Need attention", 'summary="Available (', 'act("crewEnable"', "/api/project/duties", "report-only until you run it with Write for real"))
+      and "Not enabled for this project." not in _ix4 and "How to enable it" not in _ix4 and "crewEnableHelp" not in _ix4)
 _cm = _css4.split("/* ---- Calm:")[1].split("/* ---- 9 page layouts")[0]
 _basefs = float(_r4.search(r"\nbody\{[^}]*font:400 (\d+)px", _css4).group(1)); _calmfs = float(_r4.search(r"\.calm body\{font-size:([\d.]+)px", _css4).group(1))
 _calmpad = float(_r4.search(r"\.calm \.card-b\{padding:\d+px (\d+)px", _css4).group(1)); _basepad = float(_r4.search(r"\n\.card-b\{padding:\d+px (\d+)px", _css4).group(1))
@@ -4255,9 +4256,10 @@ _pa._cache.clear(); d.PROJECTS_FILE = _pj0
 _crew_ids = _repa.findall(r'\{id: "(\w+)", title:', (ROOT / "dashboard" / "assets" / "crew.js").read_text())[:6]
 check("project agents: the keyword table covers exactly the jobs crew.js groups", list(_pa.JOB_WORDS) == _crew_ids, _crew_ids)
 _ixp = (ROOT / "dashboard" / "index.html").read_text()
-check("project agents UI: the section has the pill, the empty state, the coverage wording and the not-yet-runnable note",
-      all(t in _ixp.lower() for t in ("this project's own agents", "from the project", "this project has no agents of its own.", "quarterdeck's crew covers every job.", "suggested match, not confirmed",
-                              "no agent of its own", "quarterdeck cannot run a project's own agents yet")) and "function ownAgents" in _ixp)
+check("project agents UI: the section has the pill, the coverage wording and the not-yet-runnable note, and shows only when the project has agents of its own (otherwise the one sentence)",
+      all(t in _ixp.lower() for t in ("this project's own agents", "from the project", "this project keeps no agents of its own.", "which jobs are covered", "suggested match, not confirmed",
+                              "no agent of its own", "quarterdeck cannot run a project's own agents yet")) and "function ownAgents" in _ixp
+      and "quarterdeck's crew covers every job." not in _ixp.lower())
 shutil.rmtree(_pt, ignore_errors=True)
 
 # website (docs/site): static, self-contained, no external loads, no em dash, no banned words, every internal link resolves

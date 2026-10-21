@@ -921,6 +921,19 @@ body.unpaired > :not(#unpaired){display:none!important}
 .calm .crew-row.tone-running .crew-last{color:var(--ink-2)}
 .calm .crew-last{font-size:14.5px}
 @media (max-width:520px){.crew-sum{grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.crew-sum .stat{padding:10px}.crew-sum .stat b{font-size:22px}.crew-sum .stat .kicker{overflow-wrap:anywhere}}
+/* ---- Live work: the Running now strip on Home, the Live work card on a project, and the Available list on the Crew page ---- */
+.live-head{margin:0 0 var(--s3);color:var(--ink-2);font-size:13px}
+.live-head code{overflow-wrap:anywhere}
+.live-proj{font:500 12px/1.3 var(--font-mono);letter-spacing:.1em;text-transform:uppercase;color:var(--dim);margin:var(--s4) 0 var(--s2)}
+.live-proj:first-of-type{margin-top:0}
+.live-row .li{padding:12px 0}
+.live-row .end{display:flex;flex-wrap:wrap;gap:6px;align-items:center;justify-content:flex-end}
+.live-more{margin-top:var(--s3)}
+.crew-avail{margin-top:var(--s5)}
+.crew-avail .li{padding:12px 0}
+.crew-avail .why{color:var(--ink-2)}
+.crew-sum .live-two{display:block;font-size:15px;line-height:1.5;color:var(--ink-2)}
+@media (max-width:520px){.live-row .end{justify-content:flex-start}}
 #run-dlg::part(panel){width:min(560px,calc(100vw - 24px))}
 .run-does{font-size:15px;color:var(--ink);margin-bottom:var(--s2)}
 .run-where{margin:0 0 var(--s4)}

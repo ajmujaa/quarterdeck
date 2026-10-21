@@ -10,7 +10,7 @@
 #
 #   1  the state document carries one overview entry per project, counted from the seeded files (spend, runs, needs you, missions, stack)
 #   2  the page, in a headless browser (skipped, saying so, when this machine has none), on the seeded data folder and again in Demo mode: Home has exactly its
-#      five things and one count line, Projects shows one card per project, Open filters the tabs, the address holds the scope (Back, Forward, reload, the old
+#      six things and one count line, Projects shows one card per project, Open filters the tabs, the address holds the scope (Back, Forward, reload, the old
 #      #/work/ spelling), the scope box exists only where it applies, Calm keeps working, a phone width has no sideways scroll, no console error
 # QD_KEEP=1 keeps the throwaway folder; QD_KEEP_SHOTS=<folder> copies the pictures the page checks take there.
 source "$(dirname "${BASH_SOURCE[0]}")/selftest-lib.sh"

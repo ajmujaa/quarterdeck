@@ -1368,6 +1368,74 @@ function homeTimeline(){
     : `<p class="hint">Nothing has run in the last 24 hours.</p>`) : `<p class="hint">Reading the ledger…</p>`;
   return card(null, body, {kicker: "Fleet timeline", cls: "timeline-card", attrs: 'data-calm="hide"', count: "last 24 hours", actions: `<button class="mlink link" ${act("dockGo", "timeline")}>Open the full timeline</button>`, label: "Fleet timeline"});
 }
+/* ---- Live work: every session and duty running now, across projects. S.live is composed on the server (bin/livework.py) from the events the sessions hook writes
+   and from the live locks; a session comes from the hook, a duty is a Quarterdeck run. Everything from the hook is untrusted text, shown only through esc(). A field
+   the hook did not report says "no detail reported". The Running now strip is on Home, the Live work card on the Projects page, and the full fleet view stays a page. ---- */
+const NO_DETAIL = "no detail reported";
+const LIVE_NONE = {items: [], worktrees: [], updated_at: null, hook_installed: false, install_command: "", sources: []};
+const liveOf = () => (S && S.live) || LIVE_NONE;
+const minWords = m => m < 1 ? "less than a minute" : m < 60 ? m + " " + plural(m, "minute") : m < 1440 ? Math.floor(m / 60) + " " + plural(Math.floor(m / 60), "hour") : Math.floor(m / 1440) + " " + plural(Math.floor(m / 1440), "day");
+function liveHeader(){
+  const L = liveOf();
+  const cmd = `<code class="tk-sel">${esc(L.install_command || "bin/fleet-hook.sh install")}</code>`;
+  if(!L.hook_installed && L.updated_at) return `<p class="live-head">The sessions hook is not installed, so no new live data arrives. The last update was ${minWords(Math.max(0, Math.floor((Date.now() - Date.parse(L.updated_at)) / 60000)))} ago. Install it with: ${cmd}</p>`;
+  if(!L.hook_installed) return `<p class="live-head">No live data: the sessions hook is not installed. Install it with: ${cmd}</p>`;
+  if(!L.updated_at) return `<p class="live-head">The sessions hook is installed. No session has reported yet.</p>`;
+  const m = Math.max(0, Math.floor((Date.now() - Date.parse(L.updated_at)) / 60000));
+  return `<p class="live-head">Live data updated ${m < 1 ? "less than a minute" : minWords(m)} ago.</p>`;
+}
+function liveRow(i, o = {}){
+  const duty = i.kind === "duty", agent = i.agent === NO_DETAIL ? "Agent: " + NO_DETAIL : (duty ? "Duty: " : "Agent: ") + i.agent;
+  const where = duty ? "A Quarterdeck duty" : (i.branch ? `<span class="mono">${esc(i.branch)}</span>` : "") + (i.worktree ? (i.branch ? " in " : "") + esc(i.worktree) : "") || "No branch reported";
+  const st = i.state === "working" ? pill("running", "working") : i.waiting_on_owner ? pill("awaiting", "waiting for you") : pill("", i.state);
+  const pr = i.pr ? pill(i.pr.draft ? "" : "running", (i.pr.draft ? "draft " : "") + "PR #" + i.pr.number) : "";
+  const title = `${o.project === false ? "" : esc(i.project || "Other") + " "}${pill("", duty ? "duty" : "session")}`;
+  return `<div class="live-row" data-kind="${esc(i.kind)}" data-state="${esc(i.state)}">${li({title, end: st + pr,
+    sub: `${where}<br>${esc(agent)} · ${esc(i.doing)} · ${esc(minWords(i.minutes))}${!i.project ? "<br>Not in a registered project." : ""}`})}</div>`;
+}
+const liveSplit = items => ({work: items.filter(i => i.state === "working"), wait: items.filter(i => i.state === "idle" && i.waiting_on_owner), idle: items.filter(i => i.state === "idle" && !i.waiting_on_owner)});
+// Home: one line per session or duty working or waiting for you, the quiet ones folded into "N idle sessions", the finished ones not shown.
+function runningStrip(){
+  const L = liveOf(), {work, wait, idle} = liveSplit(L.items);
+  const rows = [...work, ...wait].map(i => liveRow(i)).join("");
+  const more = idle.length ? `<sl-details class="live-more" summary="${idle.length} idle ${plural(idle.length, "session")}" data-fk="live:idle" ${fleetOpen.has("live:idle") ? "open" : ""}>${idle.map(i => liveRow(i)).join("")}</sl-details>` : "";
+  const empty = rows || more ? "" : `<p class="hint">Nothing is running right now.${L.hook_installed ? "" : " Duties show here as they start. Sessions cannot be seen until the hook is installed."}</p>`;
+  return card(null, liveHeader() + rows + empty + more, {kicker: "Running now", label: "Running now", cls: "running-now",
+    count: work.length || wait.length ? `${work.length} working${wait.length ? ", " + wait.length + " waiting for you" : ""}` : null,
+    actions: `<button class="mlink link" ${act("go", "fleet")}>Open the full fleet view</button>`});
+}
+const TREE_STATE = {working: "changes, not committed", committed: "committed, no pull request", draft: "draft pull request", "in review": "in review", merged: "merged", closed: "closed", clean: "clean"};
+function liveTree(w, items){
+  const it = w.session ? items.find(i => i.kind === "session" && i.worktree === w.name && i.state !== "finished") : null;
+  const pr = w.pr ? `${w.pr.draft ? "Draft pull request" : "Pull request"} #${esc(w.pr.number)}${w.pr.title ? " " + esc(w.pr.title) : ""} (${esc(w.pr.state)})` : "No pull request";
+  const who = w.session ? `Session ${esc(w.session.state === "working" ? "working" : "open")}${it ? ": " + esc(it.agent === NO_DETAIL ? NO_DETAIL : it.agent) + " · " + esc(it.doing) : ""}` : "Nobody working in it";
+  const prBtn = w.pr && w.pr.url ? " " + btn("Open pull request #" + w.pr.number, {size: "small", variant: "text", href: w.pr.url}) : "";
+  return `<div class="live-row" data-tree="${esc(w.name)}">${li({title: `<span class="mono">${esc(w.branch || "no branch")}</span>${w.main ? " " + pill("", "main checkout") : ""}`,
+    sub: `${esc(w.name)} · last activity ${esc(agoS(w.last_activity_ago))}${w.changed ? " · " + w.changed + " changed " + plural(w.changed, "file") : ""}<br>${pr}<br>${who}`,
+    end: prBtn + pill(["working", "draft", "in review"].includes(w.stage) || w.session ? "running" : "", TREE_STATE[w.stage] || w.stage || "unknown")})}</div>`;
+}
+function liveProject(name, L){
+  const trees = L.worktrees.filter(w => w.project === name), items = L.items.filter(i => i.project === name && i.state !== "finished");
+  const busy = w => w.session || ["working", "committed", "draft", "in review"].includes(w.stage);
+  const hot = trees.filter(busy).sort((a, b) => (a.last_activity_ago ?? 1e9) - (b.last_activity_ago ?? 1e9)), calm = trees.filter(w => !busy(w));
+  const duties = items.filter(i => i.kind === "duty"), known = new Set(trees.map(w => w.name)), loose = items.filter(i => i.kind === "session" && !known.has(i.worktree));
+  if(!hot.length && !duties.length && !loose.length) return "";
+  const quiet = calm.length ? `<sl-details class="live-more" summary="${calm.length} quiet ${plural(calm.length, "worktree")}" data-fk="live:q:${esc(name)}" ${fleetOpen.has("live:q:" + name) ? "open" : ""}>${calm.map(w => liveTree(w, items)).join("")}</sl-details>` : "";
+  return hot.map(w => liveTree(w, items)).join("") + duties.map(i => liveRow(i, {project: false})).join("") + loose.map(i => liveRow(i, {project: false})).join("") + quiet;
+}
+// The Projects page: worktrees (branch, state, last activity, pull request, the session in it) and the running duties of the chosen project, or the same list for every project grouped by project.
+function liveWorkCard(project){
+  const L = liveOf(), names = project ? [project] : [...S.projects.map(p => p.name), ""];
+  const blocks = names.map(n => ({n, html: liveProject(n, L)})).filter(b => b.html);
+  const idle = names.length - blocks.length;
+  const body = liveHeader() + (blocks.length
+    ? blocks.map(b => (project ? "" : `<h3 class="live-proj" data-live-project="${esc(b.n)}">${esc(b.n || "Other (not in a registered project)")}</h3>`) + b.html).join("") + (!project && idle ? `<p class="hint">${idle} ${plural(idle, "project has", "projects have")} nothing in flight.</p>` : "")
+    : `<p class="hint">${project ? "Nothing is in flight in this project." : "Nothing is in flight in any project."} No worktree has changes, an open pull request or a session working in it.</p>`);
+  const n = L.items.filter(i => i.state !== "finished" && (!project || i.project === project)).length;
+  return `<div id="live-work" tabindex="-1">${card(null, body, {kicker: "Live work", label: "Live work", cls: "live-work", count: n ? `${n} running or open` : null,
+    actions: `<button class="mlink link" ${act("go", "fleet")}>Open the full fleet view</button>`})}</div>`;
+}
+function liveJump(){ if(sel) go("projects"); else openProjects(); focusSoon("#live-work"); }
 function viewCommandCenterNew(){
   if(filter) return viewHomeSearch();
   if(S.projects.length) loadBrainPrs();
@@ -1375,7 +1443,7 @@ function viewCommandCenterNew(){
   const nextBlock = nx ? `<section class="card next-card tone-${nx.n && /failed|blocked|BLOCKED/.test(nx.title) ? "blocked" : "awaiting"}" aria-label="Next action"><div><div class="kicker">Next${nx.tag ? " · " + esc(nx.tag) : ""}</div><h2>${esc(nx.title)}</h2><p>${esc(nx.why)}</p></div>
       ${btn(esc(nx.label), {variant: "primary", click: nx.day ? act("homeDay") : act("runNext")})}</section>` : "";
   if(!S.projects.length) return nextBlock + `<div style="margin-top:20px">${homeNow()}</div>`;
-  return nextBlock + homeCount() + homeNow() + homeTimeline() + `<div class="home-row">${calmHide(finishedCard())}${calmHide(budgetCard())}</div>`;
+  return nextBlock + runningStrip() + homeCount() + homeNow() + homeTimeline() + `<div class="home-row">${calmHide(finishedCard())}${calmHide(budgetCard())}</div>`;
 }
 /* ---- Projects: the place where the work is. It opens on every project together (one card each, then the add-ons, what needs you, and the missions);
    choosing a project (the Open button, a berth or the scope box) makes the same place show that project: its facts, its Ready card, its tickets and
@@ -1416,7 +1484,7 @@ function projectsOverview(){
   const f = homeFacts(), ov = (S.overview || []).filter(o => S.projects.some(p => p.name === o.name));
   const cards = ov.length ? `<div class="pj-grid">${ov.map(o => projectCard(o)).join("")}</div>`
     : emptyState({inline: true, title: "The project summaries could not be read just now.", body: "The pages of each project are still under the tabs. This page tries again by itself."});
-  return `<div class="stack">${calmHide(fleetStrip(f))}${cards}${addonsStrip()}${needsCard(f.att, f.waiting)}${calmHide(trajectoryCard(f))}</div>`;
+  return `<div class="stack">${calmHide(fleetStrip(f))}${cards}${addonsStrip()}${liveWorkCard("")}${needsCard(f.att, f.waiting)}${calmHide(trajectoryCard(f))}</div>`;
 }
 /* ---- Guardrails: the rules every agent is given for a project. The card is a function of the project and lives in #guardrails-slot; it reads GET /api/guardrails and
    saves the full ordered list with POST /api/project/guardrails (bin/guardrails.py). The three locked rules are shown, never editable or removable. ---- */
@@ -1514,7 +1582,7 @@ function guardrailsCard(project){
 }
 function projectPage(){
   const o = pjOf(sel), f = homeFacts();
-  return `<div class="stack pj-page">${o ? projectCard(o, {open: false}) : ""}${needsCard(f.att.filter(x => !x.addon), f.waiting, 3)}${readyCard(sel)}${readyLink(sel)}${repoOptionsCard(sel)}${ticketsCard(sel)}
+  return `<div class="stack pj-page">${o ? projectCard(o, {open: false}) : ""}${liveWorkCard(sel)}${needsCard(f.att.filter(x => !x.addon), f.waiting, 3)}${readyCard(sel)}${readyLink(sel)}${repoOptionsCard(sel)}${ticketsCard(sel)}
     <div id="guardrails-slot">${guardrailsCard(sel)}</div></div>`;
 }
 function viewProjects(){
@@ -2616,8 +2684,7 @@ function crewRow(r){
   if(st === "running"){
     const first = r.live.map(x => x.since).sort()[0], what = r.live[0].what;
     line = `Running now${many ? " on " + esc([...new Set(r.live.map(x => x.project))].join(", ")) : ""} · ${elapsedSpan(first)}${what ? " · " + esc(what) : ""}${r.live.length > 1 ? ` · ${r.live.length} at once` : ""}`;
-  } else if(st === "off") line = `Not enabled for this project. <button class="mlink link" ${act("crewEnableHelp", project, duty)}>How to enable it</button>`;
-  else if(st === "unbuilt") line = "Listed for this project, but its script is not built yet.";
+  } else if(st === "unbuilt") line = "Listed for this project, but its script is not built yet.";
   else if(st === "never") line = many ? "Never run." : "Never run for this project.";
   else line = `${st === "attention" ? "<b>Needs attention.</b> " : ""}Last result: ${esc(a.last_verdict || "ran")}${many ? " on " + esc(a.project) : ""} · ${ago(a.last_at)}${a.last_detail ? `<span data-calm="hide"> · ${esc(crewDetail(a.last_detail))}</span>` : ""}`;
   const can = st !== "off" && st !== "unbuilt";
@@ -2627,25 +2694,56 @@ function crewRow(r){
   return `<div class="crew-row tone-${st}">${li({title: `<span class="mono">${esc(duty)}</span>${sel ? "" : ` <span class="crew-proj">${esc(where)}</span>`} ${badge}`,
     sub: `${esc(crewMod.sentence(duty, r.role))}<br><span class="crew-last">${line}</span>`, end})}</div>`;
 }
+const suggestedOf = project => ((S.projects.find(x => x.name === project) || {}).suggested) || [];
+// One line in the folded Available list: the name, what it does, why the scan suggests it (when it does) and, for a chosen project, a button that turns it on.
+function crewAvailRow(r, project){
+  const sg = project ? suggestedOf(project).find(x => x.duty === r.duty) : null;
+  return `<div class="li crew-avail-row" data-avail="${esc(r.duty)}"><div><b class="mono">${esc(r.duty)}</b> ${sg ? pill("", "suggested") + " " : ""}<span class="sub">${esc(crewMod.sentence(r.duty, r.role))}</span>${sg && sg.why ? `<br><span class="why">Suggested for this project: ${esc(sg.why)}</span>` : ""}</div>
+    ${project ? `<div class="end">${btn("Enable", {size: "small", click: act("crewEnable", project, r.duty), attrs: `data-enable="${esc(r.duty)}" aria-label="Enable the ${esc(r.duty)} for ${esc(project)}"`})}</div>` : ""}</div>`;
+}
+function crewAvailable(rows, project){
+  if(!rows.length) return "";
+  const order = crewMod.groupDuties(rows.map(r => r.duty)).flatMap(g => g.duties), sg = new Set(project ? suggestedOf(project).map(x => x.duty) : []);
+  const list = order.map(d => rows.find(r => r.duty === d)).sort((x, y) => (sg.has(y.duty) ? 1 : 0) - (sg.has(x.duty) ? 1 : 0));      // the scan's suggestions first, the rest in the page's job order
+  return `<sl-details class="crew-avail" summary="Available (${list.length})" data-fk="crew:avail" ${fleetOpen.has("crew:avail") ? "open" : ""}>
+    <p class="hint">${project ? `Not enabled for ${esc(project)}. Enable one and it moves up to the agents above.` : "Not enabled for any project. Choose a project to enable one."}</p>${list.map(r => crewAvailRow(r, project)).join("")}</sl-details>`;
+}
+async function crewEnable(project, duty){
+  if(!crewMod) return;
+  const role = (S.duties.find(d => d.name === duty) || {}).role || "", sg = suggestedOf(project).find(x => x.duty === duty);
+  const msg = `${crewMod.sentence(duty, role)}${sg && sg.why ? " Why it is suggested: " + sg.why + "." : ""} Enabling it lets ${project} run it. It stays report-only until you run it with Write for real (--apply).`;
+  if(!await confirmDlg(msg, {title: `Enable the ${duty} for ${project}?`, ok: "Enable"})) return;
+  const j = await post("/api/project/duties", {project, add: [duty], confirm: true});
+  if(!j) return;
+  toast(`Enabled the ${duty} for ${project}.`); announce(`The ${duty} is enabled for ${project} and is now listed with the enabled agents.`);
+  await tick();
+  setTimeout(() => focusRun(project + "/" + duty), 120);
+}
 function viewCrew(){
   if(crewMod === null) return `<div class="stack"><sl-skeleton effect="sheen" style="height:90px"></sl-skeleton><sl-skeleton effect="sheen" style="height:200px"></sl-skeleton></div>`;
   if(crewMod === false) return emptyState({kicker: "Crew", title: "The list of agents did not load.", body: "Reload the page to try again.", label: "Reload", click: act("reloadPage")});
   if(!S.projects.some(p => !sel || p.name === sel)) return fleetProjects.has(sel)
     ? emptyState({kicker: "Crew", title: `${sel}'s agents live in its own repository.`, body: "They are not part of Quarterdeck's crew. Fleet lists them.", label: "Open its Fleet", click: act("go", "fleet")})
     : emptyState({kicker: "Crew", title: "No agents for this project.", body: "Add a project and the crew shows here.", label: "Add a project", click: act("openAttach")});
-  const all = crewRows().filter(r => hit(r.duty, r.project || r.projects.join(" "), r.role, crewMod.sentence(r.duty, r.role)));
-  const on = all.filter(r => r.state !== "off"), nRun = on.filter(r => r.state === "running").length, nAtt = on.filter(r => r.state === "attention").length;
+  const rows = crewRows().filter(r => hit(r.duty, r.project || r.projects.join(" "), r.role, crewMod.sentence(r.duty, r.role)));
+  const all = rows.filter(r => r.state !== "off"), off = rows.filter(r => r.state === "off");
+  const nameList = [...new Set([...(S.duties || []).map(d => d.name), ...S.agents.map(a => a.duty)])];
+  const unused = sel ? off : nameList.filter(d => !all.some(r => r.duty === d)).map(d => ({duty: d, role: ((S.duties || []).find(x => x.name === d) || {}).role || ""})).filter(r => hit(r.duty, r.role, crewMod.sentence(r.duty, r.role)));
+  const nRun = all.filter(r => r.state === "running").length, nAtt = all.filter(r => r.state === "attention").length;
+  const nSes = liveOf().items.filter(i => i.kind === "session" && i.state === "working" && (!sel || i.project === sel)).length;
   const tab = (k, label, n, tone) => `<button class="stat ${tone} ${crewFilter === k ? "on" : ""}" aria-pressed="${crewFilter === k}" ${act("crewFilter", k)}>${kicker(label)}<b>${n}</b></button>`;
-  const strip = `<div class="crew-sum" role="group" aria-label="Show">${tab("all", "Agents", on.length, "")}${tab("running", "Running now", nRun, nRun ? "running" : "")}${tab("attention", "Need attention", nAtt, nAtt ? "awaiting" : "")}</div>`;
+  const now = `<div class="stat live-link ${nSes || nRun ? "running" : ""}" role="group" aria-label="Running now">${kicker("Running now")}<span class="live-two"><button class="mlink link" ${act("liveJump")} aria-label="${nSes} ${plural(nSes, "session")} working, see the live work">${nSes} ${plural(nSes, "session")}</button> and <button class="mlink link" ${act("crewFilter", "running")} aria-label="${nRun} ${plural(nRun, "duty", "duties")} running, show them">${nRun} ${plural(nRun, "duty", "duties")}</button></span></div>`;
+  const strip = `<div class="crew-sum" role="group" aria-label="Show">${tab("all", "Agents", all.length, "")}${now}${tab("attention", "Need attention", nAtt, nAtt ? "awaiting" : "")}</div>`;
   const shown = all.filter(r => crewFilter === "all" || r.state === crewFilter);
   const groups = crewMod.groupDuties([...new Set(all.map(r => r.duty))]).map(g => {
-    const rows = shown.filter(r => g.duties.includes(r.duty)).sort((x, y) => crewRank[x.state] - crewRank[y.state] || g.duties.indexOf(x.duty) - g.duties.indexOf(y.duty) || x.project.localeCompare(y.project));
-    return rows.length ? card(g.title, `<p class="hint crew-why" data-calm="hide">${esc(g.why)}</p>${rows.map(crewRow).join("")}`, {count: `${rows.length} ${plural(rows.length, "agent")}`, label: g.title, cls: "crew-group"}) : "";
+    const rs = shown.filter(r => g.duties.includes(r.duty)).sort((x, y) => crewRank[x.state] - crewRank[y.state] || g.duties.indexOf(x.duty) - g.duties.indexOf(y.duty) || x.project.localeCompare(y.project));
+    return rs.length ? card(g.title, `<p class="hint crew-why" data-calm="hide">${esc(g.why)}</p>${rs.map(crewRow).join("")}`, {count: `${rs.length} ${plural(rs.length, "agent")}`, label: g.title, cls: "crew-group"}) : "";
   }).join("");
   const none = crewFilter === "attention" ? emptyState({inline: true, title: "Nothing needs attention.", body: "Every agent's last run finished cleanly.", label: "Show all agents", click: act("crewFilter", "all")})
-    : crewFilter === "running" ? emptyState({inline: true, title: "Nothing is running.", body: "Pick an agent below and press Run.", label: "Show all agents", click: act("crewFilter", "all")})
-    : emptyState({inline: true, title: "No agent matches the search.", body: "Clear the search box to see them all."});
-  return strip + (groups ? `<div class="stack">${groups}</div>` : none) + `<div class="stack">${ownAgents()}</div>`;
+    : crewFilter === "running" ? emptyState({inline: true, title: "No duty is running.", body: "Pick an agent below and press Run. Sessions are listed under Live work.", label: "Show all agents", click: act("crewFilter", "all")})
+    : all.length ? emptyState({inline: true, title: "No agent matches the search.", body: "Clear the search box to see them all."})
+    : emptyState({inline: true, title: "No agent is enabled for this project yet.", body: unused.length ? "Open Available below and enable one." : "Add a project and its agents show here."});
+  return strip + (groups ? `<div class="stack">${groups}</div>` : none) + crewAvailable(unused, sel) + `<div class="stack">${ownAgents()}</div>`;
 }
 function crewFilterSet(k){ crewFilter = k; render(); }
 /* A project's own agents (.claude/agents in its folder): read-only, listed beside the crew, never run from here. Everything from the file is text, escaped. */
@@ -2668,11 +2766,11 @@ function ownAgents(){
     return card(title, `${rows}<p class="hint">Choose a project to see its agents and what Quarterdeck's crew covers for it.</p>`, {label: title});
   }
   const o = ownAg[sel] || {};
-  if(!o.data) return card(title, `<p class="hint">${o.bad ? "This project's agents could not be read." : "Looking."}</p>`, {label: title});
+  if(!o.data) return o.bad ? `<p class="hint">This project's agents could not be read.</p>` : "";
   const ag = o.data.agents;
-  const list = ag.length ? ag.map(a => li({title: `<span class="mono">${esc(a.name)}</span> ${pill("", "from the project")}`,
-      sub: `${esc(a.description || "No description.")}${a.model ? `<br><span class="sub">Model: ${esc(a.model)}</span>` : ""}`})).join("")
-    : emptyState({inline: true, title: "This project has no agents of its own.", body: "Quarterdeck's crew covers every job."});
+  if(!ag.length) return `<p class="hint">This project keeps no agents of its own.</p>`;
+  const list = ag.map(a => li({title: `<span class="mono">${esc(a.name)}</span> ${pill("", "from the project")}`,
+      sub: `${esc(a.description || "No description.")}${a.model ? `<br><span class="sub">Model: ${esc(a.model)}</span>` : ""}`})).join("");
   const lead = Object.fromEntries(crewMod.GROUPS.map(g => [g.id, g]));
   const cov = (o.data.coverage || []).filter(c => lead[c.job]).map(c => { const g = lead[c.job];
     return li({title: esc(g.title), sub: c.fits.length ? `Suggested match, not confirmed: ${c.fits.map(esc).join(", ")}.`
@@ -2746,13 +2844,6 @@ $("#run-dlg").addEventListener("sl-after-hide", e => {            // back to the
   runBack = {key, until: Date.now() + 6000};
   setTimeout(() => focusRun(key), 60);                           // after Shoelace has let go of focus
 });
-function crewEnableHelp(project, duty){
-  $("#dtitle").textContent = `Switch on the ${duty} for ${project}`;
-  $("#dbody").innerHTML = `<p>${esc(crewMod ? crewMod.sentence(duty, (S.duties.find(d => d.name === duty) || {}).role) : "")}</p>
-    <h2>How</h2><p>Add <code>"${esc(duty)}"</code> to the <code>duties</code> list of <b>${esc(project)}</b> in <code>config/projects.json</code> and save the file. This page picks it up within a few seconds; nothing needs restarting.</p>
-    <p class="hint">A project only runs the agents it lists, so an agent it does not list can never start by accident.</p>`;
-  openDrawer(drawerFoot(btn("Close", {variant: "primary", click: act("closeDrawer")})));
-}
 /* ---- spend ---- */
 const usd = v => v == null ? "none" : "$" + (v >= 100 ? v.toFixed(0) : v.toFixed(2));
 // Rough cost of one fix by tier until real fixes have run, then the measured
@@ -5209,7 +5300,7 @@ const ACTIONS = {
   brainErrClear: () => { brainErr = ""; render(); },
   ackInbox, addSched, approveMissionPlan, attachAdd, attachLook, attachNew, backToLedger, bargeInToggle, briefAct, briefAsk, briefForIssue, briefRetry, briefSend,
   capDone, capSubmit, caseStepTo, closeCard, closeDrawer, closeMissionPage, closeMobileMenu, closePalette, connAddOpen, connAddSave, connEnable, connHelp, connRemove, connRemoveAccount, connSave, connStore, connTest, crewRun,
-  crewEnableHelp, crewSchedule, openRun, runGo, runPaint,
+  crewEnable, liveJump, crewSchedule, openRun, runGo, runPaint,
   dockStartOver, dockGo, dockToggle, explainWrites, fileAsIssues, fixItem, fixSelected, fleetAct, focusEdit, go, helmOrb, leaveBrain, linkPanelToMission,
   loadBoard, markSeen, mergePr, noteAdd, noteDone, noteEditSave, noteEditStart, noteEditStop, noteFilter, notePromote, noteTag, nwMakeBrief,
   openScope, openAttach, openAttention, openCard, openCycleDialog, openDoc, openFocusDrawer, openFullLog, openMission, openMissionPage, openPalette, openPanel, openShowcase,

@@ -63,9 +63,9 @@ try {
     old: ["#view .traj", "#view .needs", "#view .fleet-wrap", "#view .fleet-strip", "#view .berths", "#view .home-grid", "#view .chip", "#view .tl-strip", "#view .attn", "#view .rd-card"].filter(q => document.querySelector(q)),
     counts: document.querySelectorAll("#view .home-count").length, text: document.querySelector("#view").innerText.replace(/\s+/g, " "),
   }));
-  const ALLOWED = ["Next action", "Your day", "Brain dump", "Fleet timeline", "Recently finished", "Budget"];
-  ok("Home shows exactly five things (Your day, Brain dump, the fleet timeline, Recently finished, Budget today), plus the one next action when there is one", ["Your day", "Brain dump", "Fleet timeline", "Recently finished", "Budget"].every(l => home.labels.includes(l)) && home.labels.every(l => ALLOWED.includes(l)), home.labels.join("|"));
-  ok("  none of the old cards or ids is on Home: no Mission trajectory, no Needs you card, no project chips or harbor map, no stats rows, no Operations, Spend or Fleet side card, no Ready card", home.old.length === 0 && !home.kickers.some(k => /^(Mission trajectory|Needs you|Operations|Spend|Fleet|Attention feed|Running now)$/.test(k)) && !home.text.includes("Mission trajectory"), JSON.stringify([home.old, home.kickers]));
+  const ALLOWED = ["Next action", "Running now", "Your day", "Brain dump", "Fleet timeline", "Recently finished", "Budget"];
+  ok("Home shows exactly six things (Running now, Your day, Brain dump, the fleet timeline, Recently finished, Budget today), plus the one next action when there is one", ["Running now", "Your day", "Brain dump", "Fleet timeline", "Recently finished", "Budget"].every(l => home.labels.includes(l)) && home.labels.every(l => ALLOWED.includes(l)), home.labels.join("|"));
+  ok("  none of the old cards or ids is on Home: no Mission trajectory, no Needs you card, no project chips or harbor map, no stats rows, no Operations, Spend or Fleet side card, no Ready card", home.old.length === 0 && !home.kickers.some(k => /^(Mission trajectory|Needs you|Operations|Spend|Fleet|Attention feed)$/.test(k)) && !home.text.includes("Mission trajectory"), JSON.stringify([home.old, home.kickers]));
   ok("  and exactly one count line", home.counts === 1, home.counts);
   const want = await page.evaluate(() => { const n = (S.inbox || []).filter(x => !x.acknowledged).length; return n; });
   const cl = await text("#view .home-count");

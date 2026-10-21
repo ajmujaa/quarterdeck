@@ -43,6 +43,7 @@ from pathlib import Path
 from urllib.parse import urlparse, parse_qs, quote
 
 import home as _home
+import firstrun as _firstrun                            # the first-run checklist and its one small state file (bin/firstrun.py)
 import markers as _markers                              # the marks written into GitHub bodies (bin/markers.py)
 import safegit as _safegit
 import packs as _packs_mod                              # stack and infrastructure packs (bin/packs.py)
@@ -320,6 +321,33 @@ def demo_set(on, restart=False):
         DEMO["world"] = demo.World()
     elif not on:
         DEMO["world"] = None
+
+
+def firstrun_projects():
+    """The registered projects, read straight from the registry file so the answer is the same in Demo mode (the first-run screen reads no project data)."""
+    try:
+        d = json.loads(PROJECTS_FILE.read_text())
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def firstrun_api(b=None):
+    """GET /api/firstrun -> (200, {first, items, done_at}); POST {action: demo|dismiss, confirm: true} records it in state/first-run.json and, for demo,
+    switches Demo on through the same switch as the Demo toggle. Nothing else is written; no secret is read."""
+    if b is None:
+        return 200, _firstrun.status(HOME, firstrun_projects())
+    if b.get("confirm") is not True:
+        return 400, {"error": "confirm is required: this records that you have seen the first-run screen"}
+    if b.get("action") not in ("demo", "dismiss"):
+        return 400, {"error": "action must be demo or dismiss"}
+    try:
+        st = _firstrun.record(HOME, b["action"])
+    except OSError as e:
+        return 500, {"error": "could not save it: " + type(e).__name__}
+    if b["action"] == "demo":
+        demo_set(True)
+    return 200, {"first": False, "done_at": st.get("done_at"), "demo": demo_on()}
 
 
 # ---- extensions ---------------------------------------------------------------
@@ -3960,18 +3988,31 @@ def project_agents_api(name):
     return 200, {"project": name, **projagents.project_agents(str(root))}
 
 
+def clean_path(raw):
+    """A pasted folder path as a plain path: spaces and one pair of quotes around it go, a terminal's backslash before a space goes, and so do trailing slashes."""
+    p = str(raw or "").strip()
+    if len(p) > 1 and p[0] == p[-1] and p[0] in "\"'`":
+        p = p[1:-1].strip()
+    p = p.replace("\\ ", " ")
+    while len(p) > 1 and p[-1] in "/\\":
+        p = p[:-1]
+    return p
+
+
 def attach_api(b):
     """Look at a folder and propose how the crew should work on it; with apply and confirm, register it. Read-only until the owner confirms."""
     import attach as _attach, scan as _scan, survey as _survey, ready as _ready
-    raw = str(b.get("path") or "").strip()
+    raw = clean_path(b.get("path"))
     if not raw:
         return 400, {"error": "say which folder"}
     try:
         path = check_project_folder(raw)
     except ValueError as e:
         return 400, {"error": str(e)}
+    if not path.exists():
+        return 400, {"error": f"there is no folder at {raw}"}
     if not path.is_dir():
-        return 400, {"error": f"{raw} is not a folder"}
+        return 400, {"error": f"{raw} is a file, not a folder"}
     try:
         prof = _scan.scan(path)
         prop = proposed = _attach.propose(prof, str(b.get("name") or "").strip() or None)
@@ -5440,6 +5481,7 @@ def _build_state():
         "fixqueue": _safe(queue_view, {}),
         "spend": _safe(spend_summary, {}),
         "schedules": _safe(schedules_view, []),
+        "first_run": _safe(lambda: _firstrun.is_first(HOME, projects), False),
         "docs": _safe(lambda: [{**d, "superseded_by": stale_docs.get(d["name"]),
                                 **classify(d["name"], doc_kind)}
                                for d in doc_list(list(projects), filed)], []),
@@ -5662,6 +5704,10 @@ class Handler(BaseHTTPRequestHandler):
 
         if u.path.startswith("/api/") and not self._read_ok():
             return self._send(401, json.dumps({"error": "unpaired: open Quarterdeck from the link that `qtdeck dashboard` prints"}))
+
+        if u.path == "/api/firstrun":               # about this machine, not the owner's projects, so it answers the same with Demo on
+            code, body = firstrun_api()
+            return self._send(code, json.dumps(body))
 
         if u.path.startswith("/api/") and demo_on():
             # Answered entirely from the made-up world; a path it does not know is a 404,
@@ -5982,6 +6028,10 @@ class Handler(BaseHTTPRequestHandler):
             b = self._body()
             demo_set(bool(b.get("on")), bool(b.get("restart")))
             return self._send(200, json.dumps({"on": demo_on()}))
+
+        if u.path == "/api/firstrun":
+            code, body = firstrun_api(self._body())
+            return self._send(code, json.dumps(body))
 
         # Voice is the one thing demo mode leaves on (the talk is about directing agents by voice).
         # It reads no project data there: what it is told about projects comes from the made-up world.

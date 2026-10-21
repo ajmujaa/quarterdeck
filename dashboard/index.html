@@ -406,6 +406,7 @@ function fieldError(el, msg){
 document.addEventListener("sl-input", e => { if(e.target.hasAttribute && e.target.hasAttribute("data-error")) fieldError(e.target, ""); });
 let lastPostError = "";
 async function post(path, body){
+  if(path === "/api/demo") HR.hold = true;           // Demo is being switched: no per-project reads of the old world until the next state arrives (see loadHomeReady)
   const r = await fetch(path, {method:"POST",
     headers:{"Content-Type":"application/json","X-Quarterdeck-Token":TOKEN}, body:JSON.stringify(body)});
   const j = await r.json().catch(() => ({}));
@@ -1332,6 +1333,93 @@ function homeCount(){
   const where = [projects.size ? `in ${projects.size} ${plural(projects.size, "project")}` : "", addons.size ? `from ${addons.size} ${plural(addons.size, "add-on")}` : ""].filter(Boolean).join(" and ");
   return `<p class="home-count"><button class="mlink link" ${act("openProjects")}>${n} ${plural(n, "thing needs", "things need")} you${where ? " " + where : ""}</button></p>`;
 }
+/* ---- First run: the first time, one panel over Home says what this machine has and lacks (the same checks as `qtdeck doctor`, from /api/firstrun), with the exact
+   command for each missing piece and a Copy button. One primary button, "Look around in Demo". Nothing is installed or run for the person. ---- */
+const FR = {data: null, loading: false, gone: false, busy: false, focused: false};
+async function loadFirstRun(){
+  if(FR.loading || FR.data) return;
+  FR.loading = true;
+  try{
+    const r = await fetch("/api/firstrun");
+    if(r.status === 401){ showUnpaired(); return; }
+    if(r.ok){ FR.data = await r.json(); if(view === "overview" && !tkTyping()) render(); }
+  }catch(e){ /* the next poll asks again */ }
+  finally{ FR.loading = false; }
+}
+const FR_PILL = {have: ["good", "Have"], lack: ["warn", "Missing"], unknown: ["", "Not checked"]};
+// The one place the page writes to the clipboard: the single command the person just chose to copy, and nothing else. It never reads the clipboard.
+// If the browser refuses, the command is selected in its read-only box and the person is told to press Cmd+C or Ctrl+C.
+function copyCommand(text){
+  let done;
+  try{ done = navigator.clipboard.writeText(String(text)); }catch(e){ done = Promise.reject(e); }
+  done.then(() => { toast("Copied. Paste it into a terminal."); announce("Copied."); }, () => selectCommand(text));
+}
+function selectCommand(text){
+  const box = [...document.querySelectorAll(".fr-cmd")].find(c => c.textContent === String(text));
+  if(box){ const r = document.createRange(); r.selectNodeContents(box); const g = getSelection(); g.removeAllRanges(); g.addRange(r); box.focus(); }
+  toast("Press Cmd+C or Ctrl+C to copy it.");
+}
+function firstRunCard(){
+  const head = `<h2 class="card-t fr-title" id="fr-title" tabindex="-1">Welcome to Quarterdeck</h2>`;
+  if(!FR.data) return card(null, `${head}<p class="hint" role="status"><sl-spinner></sl-spinner> Checking this machine…</p>`, {kicker: "First run", cls: "fr-card", label: "First run"});
+  if(!FR.focused){ FR.focused = true; focusSoon("#fr-title"); }
+  const rows = FR.data.items.map(i => { const [tone, word] = FR_PILL[i.state] || FR_PILL.unknown;
+    return `<li class="fr-item" data-key="${esc(i.key)}"><div class="fr-row"><span class="fr-label">${esc(i.label)}</span>${pill(tone, word)}<span class="sub">${esc(i.detail)}</span></div>`
+      + (i.fix ? `<div class="fr-fix"><code class="fr-cmd" tabindex="0">${esc(i.fix.command)}</code>${btn("Copy", {size: "small", click: act("copyCommand", i.fix.command), attrs: `aria-label="Copy the command for ${esc(i.label)}"`})}</div>${i.fix.note ? `<p class="hint fr-note">${esc(i.fix.note)}</p>` : ""}` : "") + `</li>`; }).join("");
+  return card(null, `${head}<p>Here is what this machine has and what it lacks. Nothing is installed for you: each missing piece shows the command to run yourself.</p>
+    <ul class="fr-list" aria-label="What this machine has">${rows}</ul>
+    <p class="hint">These are the same checks as <code>qtdeck doctor</code>.</p>
+    <div class="btns">${btn("Look around in Demo", {variant: "primary", click: act("firstRunDemo")})}${btn("Skip, I will set it up myself", {click: act("firstRunSkip")})}</div>
+    <p class="hint">Demo is a made-up world. Nothing real is read or changed in it, and you can switch it off at the top.</p>`, {kicker: "First run", cls: "fr-card", label: "First run"});
+}
+async function firstRunDemo(){
+  if(FR.busy) return; FR.busy = true;
+  const j = await post("/api/firstrun", {action: "demo", confirm: true});
+  FR.busy = false;
+  if(!j) return;
+  FR.gone = true; await tick(); render();
+  toast("Demo is on. Everything you see is made up."); announce("Demo is on. Everything you see is made up."); focusSoon("#ptitle");
+}
+async function firstRunSkip(){
+  if(FR.busy) return; FR.busy = true;
+  const j = await post("/api/firstrun", {action: "dismiss", confirm: true});
+  FR.busy = false;
+  if(!j) return;
+  FR.gone = true; await tick(); render(); focusSoon("#ptitle");
+}
+function focusWhen(sel, tries = 20){ const e = $(sel); if(e){ e.scrollIntoView({block: "center"}); e.focus(); } else if(tries) setTimeout(() => focusWhen(sel, tries - 1), 250); }
+function homeTicket(project){ openProject(project); focusWhen("#tk-request"); }
+// After the first project, one next action and only one. When nothing more urgent is waiting: file the first ticket in a project that is ready and has none;
+// else, with every project ready, start the sessions hook if live work is not connected. A project that is not ready yet has its own Ready card.
+const HR = {data: {}, at: 0, loading: false, hold: false};
+async function loadHomeReady(){
+  const names = (S.projects || []).slice(0, 3).map(p => p.name);
+  if(HR.loading || HR.hold || !names.length || Date.now() - HR.at < 15000) return;
+  HR.loading = true; HR.at = Date.now();
+  try{
+    let changed = false;
+    for(const n of names){
+      if(HR.hold) break;
+      const r = await fetch("/api/ready?project=" + encodeURIComponent(n));
+      if(r.status === 401){ showUnpaired(); return; }
+      const j = r.ok ? await r.json() : null;
+      if(j && JSON.stringify(HR.data[n]) !== JSON.stringify(j)){ HR.data[n] = j; changed = true; }
+    }
+    if(changed && view === "overview" && !filter && !tkTyping()) render();
+  }catch(e){ /* the next poll asks again */ }
+  finally{ HR.loading = false; }
+}
+const hookCommand = () => liveOf().install_command || "bash bin/fleet-hook.sh install";
+function quietNext(){
+  const names = (S.projects || []).slice(0, 3).map(p => p.name);
+  if(!names.length) return null;
+  loadHomeReady();
+  if(!names.every(n => HR.data[n])) return null;
+  const first = names.find(n => { const d = HR.data[n]; return d.ready && d.next && d.next.kind === "ticket" && /first ticket/.test(d.next.text); });
+  if(first) return {tag: first, title: "File your first ticket", why: `${first} is ready. Say what you want built and the planner drafts the tickets.`, label: "File your first ticket", step: "ticket", project: first};
+  if(names.every(n => HR.data[n].ready) && !liveOf().hook_installed) return {tag: names[0], title: "Start the dashboard sessions hook", why: "Live work shows the coding sessions running on this machine, in every project. Run this once in a terminal:", cmd: hookCommand(), label: "Copy the command", step: "hook"};
+  return null;
+}
 // The next action: the person's day first (an overdue reminder, or a meeting in the next three hours), else the one most urgent thing across projects, always saying whose it is.
 function homeNext(){
   const now = Date.now(), rem = connOf("reminders"), cal = connOf("calendar");
@@ -1345,7 +1433,7 @@ function homeNext(){
   if(n.act === "attach") return {tag: "", title: n.title, why: n.why, label: n.label, n};
   if(/^Nothing needs you/.test(n.title)){
     const x = att[0];
-    if(!x) return null;                                    // nothing is pressing: nothing is shown
+    if(!x) return quietNext();                             // nothing is pressing: the one gentle next step, or nothing
     n = nextCur = {title: x.source, why: x.text, label: x.blocker === "config" ? "Inspect blocker" : "Inspect", go: x.view, project: x.project};
     return {tag: x.addon ? "Add-on: " + x.addon.label : x.project || "", title: n.title, why: n.why, label: n.label, n};
   }
@@ -1438,10 +1526,11 @@ function liveWorkCard(project){
 function liveJump(){ if(sel) go("projects"); else openProjects(); focusSoon("#live-work"); }
 function viewCommandCenterNew(){
   if(filter) return viewHomeSearch();
+  if(S.first_run && !FR.gone){ loadFirstRun(); return firstRunCard(); }
   if(S.projects.length) loadBrainPrs();
   const nx = homeNext();
-  const nextBlock = nx ? `<section class="card next-card tone-${nx.n && /failed|blocked|BLOCKED/.test(nx.title) ? "blocked" : "awaiting"}" aria-label="Next action"><div><div class="kicker">Next${nx.tag ? " · " + esc(nx.tag) : ""}</div><h2>${esc(nx.title)}</h2><p>${esc(nx.why)}</p></div>
-      ${btn(esc(nx.label), {variant: "primary", click: nx.day ? act("homeDay") : act("runNext")})}</section>` : "";
+  const nextBlock = nx ? `<section class="card next-card tone-${nx.n && /failed|blocked|BLOCKED/.test(nx.title) ? "blocked" : "awaiting"}" aria-label="Next action"><div><div class="kicker">Next${nx.tag ? " · " + esc(nx.tag) : ""}</div><h2>${esc(nx.title)}</h2><p>${esc(nx.why)}</p>${nx.cmd ? `<div class="fr-fix"><code class="fr-cmd" tabindex="0">${esc(nx.cmd)}</code></div>` : ""}</div>
+      ${btn(esc(nx.label), {variant: "primary", click: nx.day ? act("homeDay") : nx.step === "hook" ? act("copyCommand", nx.cmd) : nx.step === "ticket" ? act("homeTicket", nx.project) : act("runNext")})}</section>` : "";
   if(!S.projects.length) return nextBlock + `<div style="margin-top:20px">${homeNow()}</div>`;
   return nextBlock + runningStrip() + homeCount() + homeNow() + homeTimeline() + `<div class="home-row">${calmHide(finishedCard())}${calmHide(budgetCard())}</div>`;
 }
@@ -1938,15 +2027,20 @@ function readyItemsHtml(items, d){
   return `<div class="rd-list" role="list">${items.map(i => `<details class="rd-item" role="listitem"${(RD.open[i.key] === undefined ? i.state === "blocked" : RD.open[i.key]) ? " open" : ""}><summary ${act("rdToggle", i.key)}><span class="rd-label">${esc(i.label)}</span>${rdPill(i)}
     <span class="sub">${esc(rdShort(i.detail))}</span></summary><div class="rd-body">${d ? rdItemBody(i, d) : `<p>${esc(i.detail)}</p>`}</div></details>`).join("")}</div>`;
 }
+function rdOne(d){        // exactly one next step: the checklist's own, except that a ready project with tickets already filed and no sessions hook is shown the hook instead
+  const n = d.next;
+  if(d.ready && n.kind === "ticket" && !/first ticket/.test(n.text) && !liveOf().hook_installed) return {kind: "hook", text: "Start the dashboard sessions hook: " + hookCommand(), command: hookCommand()};
+  return n;
+}
 function rdNextLabel(n){
-  return ({"set-verify": "Set a verify command", "fix-verify": "Prove it again", "enable-cycle": "Allow cycles"})[n.kind] || String(n.text).split(":")[0];
+  return ({"set-verify": "Set a verify command", "fix-verify": "Prove it again", "enable-cycle": "Allow cycles", hook: "Copy the install command"})[n.kind] || String(n.text).split(":")[0];
 }
 function readyCard(project){
   rdScope(project || "");
   const d = project ? rdData(project) : null;
   if(!project || !d) return "";
   if(d.ready && !RD.show) return "";
-  const n = d.next, busy = !!RD.busy || d.running.prove || d.running.docs;
+  const n = rdOne(d), busy = !!RD.busy || d.running.prove || d.running.docs;
   const head = d.ready ? `<p class="hint" role="status">${esc(project)} is ready for a first ticket. The rest below is optional.</p>`
     : `<p class="hint" role="status">${esc(project)} is not ready yet. One thing is left before a ticket makes sense.</p>`;
   const run = busy ? callout("running", d.running.prove || RD.busy === "prove" ? "Proving" : "Working", d.running.prove || RD.busy === "prove"
@@ -1954,7 +2048,7 @@ function readyCard(project){
   const err = RD.error && !busy ? callout("blocked", "That did not finish", esc(RD.error)) : "";
   const how = RD.how && !busy ? `<div class="note-line">Run this in a terminal: <code class="tk-sel">${esc(n.command)}</code></div>` : "";
   const go = btn(esc(rdNextLabel(n)), {variant: "primary", click: act("rdNext"), disabled: busy, attrs: 'id="rd-next"'});
-  return card("Is it ready?", `${head}${readyItemsHtml(d.items, d)}${run}${err}${how}<div class="btns rd-go">${go}</div><p class="sub" id="rd-next-line">Next: ${esc(n.text)}</p>`,
+  return card("Is it ready?", `${head}${readyItemsHtml(d.items, d)}${run}${err}${how}<div class="btns rd-go">${go}</div><p class="sub" id="rd-next-line">Next: ${esc(n.text)}</p>${n.kind === "hook" ? `<div class="fr-fix"><code class="fr-cmd" tabindex="0">${esc(n.command)}</code></div>` : ""}`,
     {kicker: "Ready? · " + project, label: "Is it ready?", cls: "rd-card"});
 }
 function readyLink(project){
@@ -1970,7 +2064,8 @@ function rdShow(){ rdScope(sel); RD.show = true; render(); focusSoon("#rd-next")
 async function rdNext(){
   const d = rdData(sel);
   if(!d || RD.busy) return;
-  const n = d.next;
+  const n = rdOne(d);
+  if(n.kind === "hook") return copyCommand(n.command);
   if(n.kind === "prove" || n.kind === "fix-verify") return rdProve();
   if(n.kind === "ticket"){ const b = $("#tk-request"); if(b){ b.scrollIntoView({block: "center"}); b.focus(); } else window.scrollTo(0, document.body.scrollHeight); return; }
   if(n.kind === "mission"){ const m = /ticket (\d+)/.exec(n.text); if(m) return tkMission(Number(m[1]), null); return; }
@@ -3607,77 +3702,101 @@ async function openDoc(name){
 /* ---- add a project: look at a folder, say what was found, register it only on a click ---- */
 let attachLast = null;
 const cap = t => t ? t[0].toUpperCase() + t.slice(1) : t;
+const AT_STEPS = ["Folder", "Scan", "Missing docs", "Crew", "Ready"];
+function atSteps(n){        // n: the step the person is on (1 to 5); earlier steps are marked done
+  const el = $("#at-steps"); if(!el) return;
+  el.innerHTML = AT_STEPS.map((s, i) => `<li${i + 1 === n ? ' aria-current="step"' : ""} class="${i + 1 < n ? "done" : i + 1 === n ? "now" : ""}">${i + 1 < n ? '<span class="sr-only">Done: </span>' : ""}${esc(s)}</li>`).join("");
+}
+// What was pasted, made into a plain path: quotes and spaces around it, a trailing slash and a backslash before a space (as a terminal writes it) go. The server checks the rest.
+function cleanPath(raw){
+  let p = String(raw || "").trim();
+  if(p.length > 1 && /^(["'`]).*\1$/.test(p)) p = p.slice(1, -1).trim();
+  p = p.replace(/\\ /g, " ");
+  while(p.length > 1 && /[\/\\]$/.test(p)) p = p.slice(0, -1);
+  return p;
+}
 function openAttach(path){
-  $("#dtitle").textContent = "Add a project";
-  $("#dbody").innerHTML = `<p>Name a folder on this computer. Quarterdeck looks inside it, reads nothing secret, changes nothing, and tells you what it found. It is added only when you click.</p>
-    ${slInput({id: "at-path", label: "Folder", placeholder: "~/Projects/my-app", value: path || "", keydown: actOn("keydown", "onEnter", "attachLook")})}
-    <div class="btns">${btn("Look at it", {variant: "primary", click: act("attachLook")})}</div>
+  $("#dtitle").textContent = "Attach a project";
+  $("#dbody").innerHTML = `<ol class="at-steps" id="at-steps" aria-label="The five steps"></ol>
+    <section class="at-step" aria-labelledby="at-h1"><h3 id="at-h1" tabindex="-1">Step 1 of 5 · Paste the folder</h3>
+    <p>Paste the full path of one project folder.</p>
+    ${slInput({id: "at-path", label: "Project folder", placeholder: "~/Projects/my-app", value: path || "", help: "For example ~/Projects/my-app. It must be under your home folder and not a hidden folder.", keydown: actOn("keydown", "onEnter", "attachLook")})}
+    <p class="hint">Nothing is read until you press Scan. Quarterdeck never scans your home folder.</p>
+    <div class="btns">${btn("Scan", {variant: "primary", click: act("attachLook")})}</div></section>
     <div id="at-out" role="status" aria-live="polite"></div>
     <h3 style="margin-top:28px">Or start something new</h3>
-    <p>Makes a folder with a git repository and a README, then shows it here so you can add it. It writes nothing else.</p>
+    <p>Makes a folder with a git repository and a README, then shows it here so you can attach it. It writes nothing else.</p>
     ${slInput({id: "nw-name", label: "Name", placeholder: "my-new-app"})}
     ${slInput({id: "nw-about", label: "What it is for, in a sentence"})}
     ${slInput({id: "nw-folder", label: "Where to put it", value: "~/Projects"})}
     <div class="btns">${btn("Create it", {click: act("attachNew")})}</div>
     <div id="nw-idea" aria-live="polite"></div>`;
+  atSteps(1);
   nwBrief = {id: "", name: "", busy: false};
   if(!drawerOn()) openDrawer();
   setTimeout(() => { const i = $("#at-path"); if(i) i.focus(); }, 120);
 }
 async function attachLook(){
-  const path = $("#at-path").value.trim(), out = $("#at-out");
-  if(!path){ out.innerHTML = ""; return fieldError($("#at-path"), "Type a folder first."); }
-  fieldError($("#at-path"), "");
-  out.innerHTML = `<p class="hint" style="margin-top:var(--s4)"><sl-spinner></sl-spinner> Looking…</p>`;
+  const field = $("#at-path"), path = cleanPath(field.value), out = $("#at-out");
+  if(!path){ out.innerHTML = ""; atSteps(1); return fieldError(field, "Paste a folder path first."); }
+  fieldError(field, "");
+  out.innerHTML = `<p class="hint" style="margin-top:var(--s4)"><sl-spinner></sl-spinner> Scanning…</p>`;
   const r = await fetch("/api/attach", {method:"POST", headers:{"Content-Type":"application/json","X-Quarterdeck-Token":TOKEN}, body:JSON.stringify({path})});
   const j = await r.json().catch(() => ({}));
-  if(!r.ok){ out.innerHTML = ""; return fieldError($("#at-path"), j.error || "Could not look at that folder."); }
+  if(!r.ok){ out.innerHTML = ""; atSteps(1); return fieldError(field, j.error || "Could not scan that folder."); }
   attachLast = j;
   const p = j.profile, e = j.proposal.entry, list = k => p[k].map(i => i.name).join(", ");
   const line = (label, k) => p[k].length ? `<li><b>${label}</b> ${esc(list(k))}</li>` : "";
   const plan = j.proposal.duty_reasons || {}, sugg = j.proposal.suggested || [], role = Object.fromEntries(j.duty_options.map(o => [o.name, o.role]));
-  const dutyBox = (name, checked) => slCheckbox(`${esc(name)}<small> ${esc((plan[name] || {}).why || role[name] || "")}</small>`, {attrs: `data-ad="${esc(name)}"${checked ? " checked" : ""}`});
+  const dutyBox = (name, checked) => `<div class="at-duty">${slSwitch(`${esc(name)}<small> ${esc((plan[name] || {}).why || role[name] || "")}</small>`, {attrs: `data-ad="${esc(name)}"`, checked})}</div>`;
   const dutyGroup = names => names.length ? `<div class="focus-rows" style="flex-direction:column;align-items:flex-start;gap:0">${names.map(n => dutyBox(n, e.duties.includes(n))).join("")}</div>` : "";
   const known = j.duty_options.map(o => o.name);
   const dOn = known.filter(n => e.duties.includes(n)), dSug = known.filter(n => !e.duties.includes(n) && sugg.includes(n)), dRest = known.filter(n => !e.duties.includes(n) && !sugg.includes(n));
   const cmdHelp = (k, none) => e[k] ? cap(j.proposal.reasons[k] || "") + ". One plain command." : none;
-  out.innerHTML = `<h3>What was found in ${esc(p.name)}</h3>
-    <p id="at-stack"><b>${esc(p.stack && p.stack.summary || "")}</b></p><ul>`
+  const cmdLine = (label, v, none) => `<li><b>${label}</b> ${v ? `<code>${esc(v)}</code>` : esc(none)}</li>`;
+  const missing = Object.keys((j.survey && j.survey.docs && j.survey.docs.missing) || {});
+  const docCmd = w => `<div class="fr-fix"><code class="fr-cmd">qtdeck docs ${esc(j.proposal.name)} ${w}</code>${btn("Copy", {size: "small", click: act("copyCommand", `qtdeck docs ${j.proposal.name} ${w}`), attrs: `aria-label="Copy the command that drafts the ${w === "readme" ? "README" : "architecture overview"}"`})}</div>`;
+  out.innerHTML = `<section class="at-step" aria-labelledby="at-h2"><h3 id="at-h2" tabindex="-1">Step 2 of 5 · Scan</h3>
+    <p id="at-stack"><b>${esc(p.stack && p.stack.summary || "")}</b></p>
+    <ul>${cmdLine("Verify", e.verify, "none found; the Shipwright stays off until you give one")}${cmdLine("Build", e.build, "none found")}${cmdLine("Lint", e.lint, "none found")}</ul>
+    <p class="hint">Found in ${esc(p.name)}:</p><ul>`
     + line("Languages", "languages") + line("Frameworks", "frameworks") + line("Commands", "commands") + line("Checks that run on push", "ci")
     + line("Containers", "containers") + line("Infrastructure", "infrastructure") + line("Deploys to", "deploy_targets") + line("Sensitive areas", "sensitive")
     + (p.secret_files.length ? `<li><b>Secret files</b> ${esc(list("secret_files"))} (named only, never opened)</li>` : "")
     + line("Agent set-up already there", "agent_config")
-    + (j.survey ? `<li><b>Documents</b> ${esc(j.ready.docs_line || "")}</li>${j.survey.entry_points.length ? `<li><b>Entry points</b> ${esc(j.survey.entry_points.slice(0, 4).map(e => e.file).join(", "))}</li>` : ""}` : "") + `</ul>`
+    + (j.survey && j.survey.entry_points.length ? `<li><b>Entry points</b> ${esc(j.survey.entry_points.slice(0, 4).map(x => x.file).join(", "))}</li>` : "") + `</ul>`
     + (p.notes.length ? `<p>${p.notes.map(n => esc(cap(n))).join("<br>")}</p>` : "")
-    + `<h3>What the crew would do</h3>
-      <p>This is a proposal. Change anything you like; nothing is added until you click the button at the end.</p>
+    + `</section>
+    <section class="at-step" aria-labelledby="at-h3"><h3 id="at-h3" tabindex="-1">Step 3 of 5 · Missing docs</h3>
+      <p id="at-docs">${esc(j.ready.docs_line.replace(/\s*\(qtdeck docs.*$/, ""))}</p>
+      ${missing.length ? `<p class="hint">After you attach, the scribe can draft what is missing. It costs a few cents, you read the draft first, and nothing is written to your project until you say so. These are the commands:</p>${missing.filter(w => w === "readme" || w === "architecture").map(docCmd).join("")}` : `<p class="hint">Nothing is missing, so there is nothing to draft.</p>`}</section>
+    <section class="at-step" aria-labelledby="at-h4"><h3 id="at-h4" tabindex="-1">Step 4 of 5 · Crew</h3>
+      <p>${esc(cap(j.proposal.reasons.duties))}.</p>
       <ul><li><b>Repository</b> ${esc(e.repo || "no GitHub address found")}</li>
       <li><b>Stack notes</b> ${esc(e.packs.join(", ") || "none")} ${e.packs.map(id => packPill((j.pack_status || {})[id])).join(" ")}. ${esc(cap(j.proposal.reasons.packs))}.</li></ul>
-      <div class="sec-h">Duties</div>
-      <p class="hint">${esc(cap(j.proposal.reasons.duties))}.</p>
-      ${dutyGroup(dOn)}
-      ${dSug.length ? `<div class="sec-h">These also fit this stack, switched off</div>
-      <p class="hint">Nothing here is on unless you tick it.</p>${dutyGroup(dSug)}` : ""}
-      ${dRest.length ? `<div class="sec-h">Other duties, off</div>${dutyGroup(dRest)}` : ""}
-      <div class="sec-h">Commands</div>
+      <div class="sec-h">On, with the reason</div>${dutyGroup(dOn) || `<p class="hint">None is on for this project.</p>`}
+      ${dSug.length ? `<div class="sec-h">These also fit this stack, switched off</div><p class="hint">Nothing here is on unless you switch it on.</p>${dutyGroup(dSug)}` : ""}
+      ${dRest.length ? `<details class="at-more"><summary>Other duties, off</summary>${dutyGroup(dRest)}</details>` : ""}
+      <details class="at-more"><summary>Change commands, rules or the name (optional)</summary>
       ${slInput({id: "at-verify", label: "Command that proves a change works", value: e.verify, help: e.verify ? cap(j.proposal.reasons.verify) + ". One plain command. The Shipwright needs one." : "None was found. The Shipwright stays off until you give one."})}
       ${slInput({id: "at-build", label: "Build command", value: e.build || "", help: cmdHelp("build", "None was found. Leave it empty if there is none.")})}
       ${slInput({id: "at-lint", label: "Lint command", value: e.lint || "", help: cmdHelp("lint", "None was found. Leave it empty if there is none.")})}
       ${e.typecheck ? slInput({id: "at-typecheck", label: "Type check command", value: e.typecheck, help: cmdHelp("typecheck", "")}) : ""}
-      <p class="hint">The build command is the one the Shipwright's checks already run. Lint and type check are recorded for your review and the crew's notes; nothing runs them by itself.</p>
       ${slTextarea({id: "at-forbid", label: "Paths the crew may not touch, one per line", rows: 6, value: e.forbidden_paths.join("\n")})}
       <p class="hint">The build, CI and dependency files the harness already protects cannot be removed.</p>
       <div class="sec-h">Standing rules</div>
       <div class="focus-rows" style="flex-direction:column;align-items:flex-start;gap:0">${j.guardrail_options.map((g, i) => slCheckbox(esc(g), {attrs: `data-ag="${esc(g)}" checked${i < 3 ? " disabled" : ""}`})).join("")}</div>
       <p class="hint">Never merging, never pushing to ${esc(e.default_branch)} and never touching secrets stay on.</p>
-      <div class="sec-h">A note for other coding agents</div>
       ${slCheckbox("Also add an AGENTS.md to the project", {id: "at-agents"})}
-      <p class="hint">Off by default. It would be a small new file in the project that says how the crew works there. An AGENTS.md that is already there is never changed.</p>
-    <div class="sec-h">The checklist, as it would be right after you add it</div>
-      <p class="hint">Nothing here is run. The verify command is proven once, later, only when you click.</p>
+      <p class="hint">Off by default. It would be a small new file in the project. An AGENTS.md that is already there is never changed.</p>
+      ${slInput({id: "at-name", label: "Name in Quarterdeck", value: j.proposal.name})}</details></section>
+    <section class="at-step" id="at-ready" aria-labelledby="at-h5"><h3 id="at-h5" tabindex="-1">Step 5 of 5 · Ready</h3>
+      <p class="hint">Nothing is run. This is the checklist as it would be right after you attach. The verify command is proven once, later, only when you click.</p>
       ${j.ready ? readyItemsHtml(j.ready.items, null) : ""}
-    ${slInput({id: "at-name", label: "Name in Quarterdeck", value: j.proposal.name})}
-    <div class="btns">${btn("Add this project", {variant: "primary", click: act("attachAdd")})}</div>`;
+      <div class="btns">${btn("Attach this project", {variant: "primary", click: act("attachAdd")})}</div></section>`;
+  atSteps(4);
+  announce("Scanned. Steps 2 to 5 are below: what was found, missing docs, the crew and the checklist.");
+  const h = $("#at-h2"); if(h && h.scrollIntoView) h.scrollIntoView({block: "start"}); if(h) h.focus({preventScroll: true});
 }
 function attachEdits(){
   const on = a => [...document.querySelectorAll(`#at-out [${a}]`)].filter(c => c.checked).map(c => c.getAttribute(a));
@@ -3811,14 +3930,18 @@ async function attachAdd(){
   attachDone(j);
   await tick();
 }
-function attachDone(j){        // the drawer's last screen: the real checklist, in the same order, and the one next step
-  const name = j.proposal.name, r = j.ready;
-  $("#dtitle").textContent = `Added ${name}`;
-  $("#dbody").innerHTML = `<p>${esc(name)} is in your registry, and its survey is kept in your data folder. Nothing was changed inside the project.</p>
-    <div class="sec-h">Is it ready?</div>${readyItemsHtml(r.items, null)}
-    <p class="sub">Next: ${esc(r.next.text)}</p>
-    <div class="btns">${btn("Open the Ready card", {variant: "primary", click: act("seq", ["closeDrawer"], ["selectProject", name], ["rdShow"], ["go", "projects"])})}${btn("Close", {click: act("closeDrawer")})}</div>`;
-  focusSoon("#dtitle");
+function attachDone(j){        // the drawer's last step: the real checklist, in the same order, and the one next step
+  const name = j.proposal.name, r = j.ready, n = r.next, cmd = n.command && n.kind !== "ticket" ? n.command : "";
+  $("#dtitle").textContent = `Attached ${name}`;
+  $("#dbody").innerHTML = `<ol class="at-steps" id="at-steps" aria-label="The five steps"></ol>
+    <section class="at-step" aria-labelledby="at-h5"><h3 id="at-h5" tabindex="-1">Step 5 of 5 · Ready</h3>
+    <p>${esc(name)} is in your registry, and its survey is kept in your data folder. Nothing was changed inside the project.</p>
+    ${readyItemsHtml(r.items, null)}
+    <p class="sub" id="at-next">Next: ${esc(n.text)}</p>
+    ${cmd ? `<div class="fr-fix"><code class="fr-cmd">${esc(cmd)}</code>${btn("Copy", {size: "small", click: act("copyCommand", cmd), attrs: 'aria-label="Copy the next command"'})}</div>` : ""}
+    <div class="btns">${btn("Open the Ready card", {variant: "primary", click: act("seq", ["closeDrawer"], ["selectProject", name], ["rdShow"], ["go", "projects"])})}${btn("Close", {click: act("closeDrawer")})}</div></section>`;
+  atSteps(5);
+  focusSoon("#at-h5");
 }
 const drawerOn = () => { const d = $("#drawer"); return !!(d && d.open); };
 const paletteOn = () => { const d = $("#palette"); return !!(d && d.open); };
@@ -5233,6 +5356,7 @@ async function tick(){
     if(r.status === 401){ showUnpaired(); return; }
     if(!r.ok) throw new Error("state " + r.status);
     S = await r.json();
+    HR.hold = false;
     if(!routeReady){ await routeLoad; initRoute(); }
     try{ sgTick(); }catch(e){}
     loadAttention();
@@ -5298,7 +5422,7 @@ const ACTIONS = {
   calmShowAll, crewFilter: crewFilterSet, reloadPage: () => location.reload(),
   seeAttention: () => { go("brain"); setTimeout(openAttention, 900); },
   brainErrClear: () => { brainErr = ""; render(); },
-  ackInbox, addSched, approveMissionPlan, attachAdd, attachLook, attachNew, backToLedger, bargeInToggle, briefAct, briefAsk, briefForIssue, briefRetry, briefSend,
+  copyCommand, firstRunDemo, firstRunSkip, homeTicket, ackInbox, addSched, approveMissionPlan, attachAdd, attachLook, attachNew, backToLedger, bargeInToggle, briefAct, briefAsk, briefForIssue, briefRetry, briefSend,
   capDone, capSubmit, caseStepTo, closeCard, closeDrawer, closeMissionPage, closeMobileMenu, closePalette, connAddOpen, connAddSave, connEnable, connHelp, connRemove, connRemoveAccount, connSave, connStore, connTest, crewRun,
   crewEnable, liveJump, crewSchedule, openRun, runGo, runPaint,
   dockStartOver, dockGo, dockToggle, explainWrites, fileAsIssues, fixItem, fixSelected, fleetAct, focusEdit, go, helmOrb, leaveBrain, linkPanelToMission,

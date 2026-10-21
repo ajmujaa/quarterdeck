@@ -27,11 +27,12 @@ One dashboard for all your projects. A built-in crew of agents takes an issue to
 
 ```bash
 git clone https://github.com/ajmujaa/quarterdeck.git && cd quarterdeck
-bin/qtdeck setup
-bin/qtdeck dashboard      # switch Demo on to look around with invented data
+bin/qtdeck dashboard      # the first time, a first-run screen lists what this machine has and lacks
 ```
 
-`bin/qtdeck attach ~/Projects/my-app` registers your first project. It names the stack it found (for example React 18 with Vite, tests by Vitest), proposes build and lint commands next to the verify command, and says why each duty is on or off; duties that also fit the stack are listed as "also fit this stack" and stay off until you tick them. **What attach does.** Attaching is onboarding. It surveys the folder from its files alone (layout, entry points, scripts, dependencies worth knowing, which documents exist, size, git), says which documents are missing and offers to draft them (`bin/qtdeck docs my-app`; you read the draft, and only your yes puts it on a new branch), chooses the crew with a reason for each duty, hands the survey to the agents as their stable context so they do not re-read the project every run, and ends with one checklist (`bin/qtdeck ready my-app`) and one next action, such as filing your first ticket. The dry run writes nothing. The [guide](GUIDE.md) has the rest. `bin/qtdeck check` runs every test.
+That is the whole path today: the dashboard opens with a first-run screen that shows the same checks as `qtdeck doctor` (with the exact command to run, and a Copy button, for anything missing) and one button, "Look around in Demo". When you are ready, press **Add a project**, paste a folder path, and it walks you through scan, missing docs, crew and ready. `bin/qtdeck setup` is still there if you prefer the terminal. Later, `brew install ajmujaa/quarterdeck/qtdeck` (macOS) and `npm install -g qtdeck` will do the clone for you (the files for both are in `packaging/`; neither is published yet).
+
+`bin/qtdeck attach ~/Projects/my-app` registers a project from the command line too. It names the stack it found (for example React 18 with Vite, tests by Vitest), proposes build and lint commands next to the verify command, and says why each duty is on or off; duties that also fit the stack are listed as "also fit this stack" and stay off until you tick them. **What attach does.** Attaching is onboarding. It surveys the folder from its files alone (layout, entry points, scripts, dependencies worth knowing, which documents exist, size, git), says which documents are missing and offers to draft them (`bin/qtdeck docs my-app`; you read the draft, and only your yes puts it on a new branch), chooses the crew with a reason for each duty, hands the survey to the agents as their stable context so they do not re-read the project every run, and ends with one checklist (`bin/qtdeck ready my-app`) and one next action, such as filing your first ticket. The dry run writes nothing. The [guide](GUIDE.md) has the rest. `bin/qtdeck check` runs every test.
 
 ## Why Quarterdeck
 

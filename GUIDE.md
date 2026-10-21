@@ -12,11 +12,12 @@ Quarterdeck runs on your own machine. It gives you one dashboard for all your pr
 
 ```bash
 git clone https://github.com/ajmujaa/quarterdeck.git && cd quarterdeck   # 1. get the program
-bin/qtdeck setup                       # 2. checks the tools, prints the install command for anything missing, makes your data folder
-bin/qtdeck dashboard                   # 3. opens the dashboard on this machine (a one-time link)
-                                       # 4. switch Demo on to look around with invented data before you connect anything
-bin/qtdeck attach ~/Projects/my-app    # 5. shows what it found and what the crew would do; add --apply to register it
+bin/qtdeck dashboard                   # 2. opens the dashboard on this machine (a one-time link); the first-run screen lists what is missing
+                                       # 3. "Look around in Demo" shows invented data before you connect anything
+                                       # 4. Add a project: paste a folder path, then scan, missing docs, crew, ready
 ```
+
+Prefer the terminal? `bin/qtdeck setup` checks the tools and prints the install command for anything missing, and `bin/qtdeck attach ~/Projects/my-app` does the same as the Add a project panel (add `--apply` to register it).
 
 `bin/qtdeck help` lists the day-one commands, `bin/qtdeck help more` all of them. `bin/qtdeck doctor` checks the wiring in a few seconds; `bin/qtdeck check` runs every test.
 
@@ -71,9 +72,13 @@ Every model call uses your own account and your own usage limits. Quarterdeck ne
 
 ## First run
 
+Ways to install: today you clone (above). A Homebrew formula (`brew install ajmujaa/quarterdeck/qtdeck`) and an npm wrapper (`npm install -g qtdeck`) are prepared in `packaging/` and will be the macOS path and the Node path once they are published; `packaging/README.md` says how. Neither is published yet.
+
 ```bash
 bin/qtdeck dashboard              # or --no-open to print the link without opening a browser
 ```
+
+**The first-run screen.** The first time, Home shows one panel instead of anything else: a checklist of what this machine has and lacks (`claude`, `gh`, `git`, `node`, `python3` 3.10 or newer, whether `claude` and `gh` are signed in, and whether an API key is stored). These are the same checks as `qtdeck doctor`, taken from the same code. For anything missing it shows the exact command in a small box with a **Copy** button; Quarterdeck never runs an installer or signs you in, you do. The one primary button, **Look around in Demo**, switches Demo on; **Skip, I will set it up myself** closes the panel. Either way it does not come back, and it is also gone once you register a project. The only thing recorded is one small file, `state/first-run.json`, in your data folder. The Copy button writes the one command you clicked to the clipboard and never reads the clipboard; if your browser refuses, the command is selected for you to copy with Cmd+C or Ctrl+C.
 
 This starts the dashboard and opens a one-time pairing link to `http://127.0.0.1:7878`. The server listens on your own machine only (loopback).
 
@@ -89,7 +94,7 @@ This starts the dashboard and opens a one-time pairing link to `http://127.0.0.1
 
 ## Attach a project
 
-Use **Add a project** in the dashboard, or the command line. Quarterdeck reads the folder first: languages, test command, CI, where it deploys, folders that need care. It says what it found and what the crew would do, and registers the project only when you say so. It never opens secret files and never changes the project. What it proposed and what you approved are kept in your data folder.
+Use **Attach a project** in the dashboard, or the command line. The dashboard panel is the guided way: **1. Folder** (paste one folder path, for example `~/Projects/my-app`; quotes, spaces around it and a trailing slash are fine; nothing is read until you press **Scan**, and Quarterdeck never scans your home folder), **2. Scan** (the stack sentence, the verify, build and lint commands and what was found), **3. Missing docs** (what is missing and the scribe commands, with Copy; nothing is written), **4. Crew** (the duties that are on, each with its reason, and the ones that also fit, switched off, with a switch each) and **5. Ready** (the checklist and one next action, once you press Attach). A folder that does not exist, a file, a hidden folder, one outside your home folder, or your home folder itself gets one plain line under the field and nothing is scanned. After your first project, Home offers one next action only: "File your first ticket", or, when live work is not connected, "Start the dashboard sessions hook" with its command and a Copy button. Quarterdeck reads the folder first: languages, test command, CI, where it deploys, folders that need care. It says what it found and what the crew would do, and registers the project only when you say so. It never opens secret files and never changes the project. What it proposed and what you approved are kept in your data folder.
 
 ```bash
 bin/qtdeck attach ~/Projects/my-app            # shows what it found and proposes a set-up; changes nothing

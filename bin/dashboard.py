@@ -3943,7 +3943,94 @@ def connection_test(sid, label, timeout=180):
         return {"ok": False, "message": "could not start the refresh"}
     line = (r.stdout.strip().splitlines() or [""])[-1]
     why = line.split("failed:", 1)[1].strip() if "failed:" in line else ""
+    if "google_oauth.py" in why:                                 # the page has its own sign-in button: do not send anyone to a terminal
+        why = "Not signed in with Google yet. Press Sign in with Google on this card."
     return {"ok": r.returncode == 0, "message": "Refreshed." if r.returncode == 0 else (why[:200] or "the refresh failed")}
+
+
+# ---- Google sign-in from the Connections page -------------------------------------------------------------------------------
+# The sign-in runs in its own process (bin/integrations/google_oauth.py --no-browser), like a Test does, so the client secret and the token never enter
+# this one. It prints the Google address on its first line; the page shows it as a button. The process listens once on a random loopback port, checks
+# `state`, saves the refresh token (0600) and exits. Nothing about the address, code or token is kept or logged here.
+SIGNIN_WAIT = 240                      # seconds google_oauth.authorize waits for you; the process is killed a little after
+_SIGNIN = {}                           # (service, label) -> {"proc", "state", "url", "message", "at"}
+_SIGNIN_LOCK = threading.Lock()
+SIGNIN_URL = "https://accounts.google.com/o/oauth2/v2/auth?"
+
+
+def _signin_reader(key, proc):
+    """Read the child's first line for the address, then wait for it to end and say how it ended."""
+    st = _SIGNIN[key]
+    try:
+        for line in proc.stdout:
+            line = line.strip()
+            if line.startswith(SIGNIN_URL) and st["state"] == "starting":
+                with _SIGNIN_LOCK:
+                    st["url"], st["state"] = line, "waiting"
+        proc.wait(timeout=SIGNIN_WAIT + 30)
+    except Exception:
+        proc.kill()
+    err = ""
+    try:
+        err = (proc.stderr.read() or "").strip().splitlines()[-1:] or [""]
+        err = err[0][:200]
+    except Exception:
+        pass
+    with _SIGNIN_LOCK:
+        if st["state"] == "cancelled":
+            return
+        if proc.returncode == 0:
+            st["state"], st["message"], st["url"] = "done", "Signed in.", ""
+        else:
+            st["state"], st["url"] = "failed", ""
+            st["message"] = err or "The sign-in did not finish. Try again."
+    try:                                                         # how it ended, in the connections log: the reason is a short sentence, never an address, code or token
+        with open(LOGS / "connections.log", "a") as f:
+            svc, acct = key
+            f.write(f"{iso(now_utc())} signin-{st['state']} {log_field(svc)} {log_field(acct)} {log_field(st['message'][:120])}\n")
+    except OSError:
+        pass
+
+
+def signin_start(sid, label, argv=None):
+    """Start (or report) the Google sign-in of one account. `argv` is for tests only."""
+    import integrations.google_oauth as _go
+    if sid not in _go.SCOPES:
+        return 400, {"error": "this service has no sign-in step"}
+    key = (sid, label)
+    with _SIGNIN_LOCK:
+        cur = _SIGNIN.get(key)
+        if cur and cur["state"] in ("starting", "waiting"):
+            return 200, signin_view(key)
+        cmd = argv or [sys.executable, "-u", str(ROOT / "bin" / "integrations" / "google_oauth.py"), sid, "--account", label, "--no-browser"]
+        env = {k: v for k, v in os.environ.items() if k in ("PATH", "HOME", "LANG", "QUARTERDECK_HOME", "QUARTERDECK_DIR", "QUARTERDECK_SECRETS_DIR")}
+        try:
+            proc = subprocess.Popen(cmd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        except OSError:
+            return 500, {"error": "could not start the sign-in"}
+        _SIGNIN[key] = {"proc": proc, "state": "starting", "url": "", "message": "", "at": time.time()}
+    threading.Thread(target=_signin_reader, args=(key, proc), daemon=True).start()
+    return 200, signin_view(key)
+
+
+def signin_view(key):
+    st = _SIGNIN.get(key)
+    if not st:
+        return {"state": "idle", "url": "", "seconds_left": 0, "message": ""}
+    left = max(0, int(SIGNIN_WAIT - (time.time() - st["at"]))) if st["state"] in ("starting", "waiting") else 0
+    return {"state": st["state"], "url": st["url"], "seconds_left": left, "message": st["message"]}
+
+
+def signin_cancel(key):
+    with _SIGNIN_LOCK:
+        st = _SIGNIN.get(key)
+        if st and st["state"] in ("starting", "waiting"):
+            st["state"], st["url"], st["message"] = "cancelled", "", "Sign-in cancelled."
+            try:
+                st["proc"].terminate()
+            except OSError:
+                pass
+    return signin_view(key)
 
 
 def agent_sources_api(b):
@@ -3982,6 +4069,23 @@ def connections_api(b):
     if b.get("confirm") is not True:
         return 400, {"error": "confirm is required: this changes how a service is connected"}
     sid, action = str(b.get("id") or ""), b.get("action")
+    if action in ("signin", "signin_status", "signin_cancel"):
+        if demo_on():
+            return 400, {"error": "Demo mode: nothing is connected."}
+        try:
+            key = (sid, integrations_accounts.norm(b.get("label")))
+        except ValueError as e:
+            return 400, {"error": str(e)}
+        if action == "signin_status":                                    # polled every second or two: not logged
+            return 200, signin_view(key)
+        code, body = signin_start(*key) if action == "signin" else (200, signin_cancel(key))
+        try:
+            LOGS.mkdir(parents=True, exist_ok=True)
+            with open(LOGS / "connections.log", "a") as f:
+                f.write(f"{iso(now_utc())} {action} {log_field(sid)} {log_field(key[1])}\n")
+        except OSError:
+            pass
+        return code, body
     try:
         label = integrations_accounts.norm(b.get("label"))
         if action == "credential":
@@ -4002,7 +4106,7 @@ def connections_api(b):
         elif action == "store":                                          # move every credential to the file or the keychain, verified, then switch
             result = {"moved": integrations_manifest.move_store(str(b.get("to") or "")), "store": integrations_manifest.store_info()["kind"]}
         else:
-            return 400, {"error": "action must be credential, enable or store"}
+            return 400, {"error": "action must be credential, enable, store or signin"}
     except ValueError as e:
         return 400, {"error": str(e)}
     except OSError as e:

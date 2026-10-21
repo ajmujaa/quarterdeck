@@ -2392,27 +2392,73 @@ const connBadLabel = "An account label is lowercase letters, digits and dashes, 
 let connAdding = {};                                                     // service id -> the "Add another account" field is open
 // The credential fields of one account. The ids and the labels carry the account, so no two fields on the page are alike.
 function connCreds(c, a){
+  if(!a.credentials.length) return "";
   const lab = connLab(a), who = connWho(c, a);
-  return a.credentials.map(k => `<form class="conn-cred" ${actOn("submit", "seq", ["connSave", c.id, k.key, lab], ["preventDefault"])}>
-      ${slInput({id: `cr-${c.id}-${k.key}${lab ? "-" + lab : ""}`, label: lab ? `${k.label} (${lab} account)` : k.label, type: k.secret ? "password" : "text", password: !!k.secret, placeholder: k.present ? "Enter a new value to replace it" : "Enter it here",
-        help: `${k.present ? `Saved in ${k.stored === "keychain" ? "the macOS Keychain" : "the private file"}. It is not shown again.` : "Not entered yet."}${k.help ? " " + k.help : ""}`})}
-      <div class="btns">${btn("Save", {size: "small", attrs: `type="submit" aria-label="Save ${esc(k.label)} for ${esc(who)}"`})}${k.present ? btn("Remove", {size: "small", click: act("connRemove", c.id, k.key, lab), attrs: `aria-label="Remove ${esc(k.label)} for ${esc(who)}"`}) : ""}</div></form>`).join("");
+  const fields = a.credentials.map(k => `<div class="conn-field">${slInput({id: `cr-${c.id}-${k.key}${lab ? "-" + lab : ""}`, label: lab ? `${k.label} (${lab} account)` : k.label, type: k.secret ? "password" : "text", password: !!k.secret, placeholder: k.present ? "Saved. Enter a new value to replace it" : "Enter it here",
+        help: `${k.present ? `Saved in ${k.stored === "keychain" ? "the macOS Keychain" : "the private file"}. It is not shown again.` : "Not entered yet."}${k.help ? " " + k.help : ""}`})}</div>`).join("");
+  const removes = a.credentials.filter(k => k.present).map(k => btn(`Remove ${esc(k.label)}`, {size: "small", click: act("connRemove", c.id, k.key, lab), attrs: `aria-label="Remove ${esc(k.label)} for ${esc(who)}"`})).join("");
+  return `<form class="conn-cred" ${actOn("submit", "seq", ["connSaveAll", c.id, lab], ["preventDefault"])}>${fields}
+      <div class="btns">${btn(a.credentials.length > 1 ? "Save all" : "Save", {variant: "primary", size: "small", attrs: `type="submit" aria-label="Save the values for ${esc(who)}"`})}${removes}</div></form>`;
 }
 // What one account says about itself: the refresh time, the last error, what it still needs.
 function connFacts(c, a){
   const last = a.last_at ? `Last refreshed ${esc(ago(a.last_at))}.` : c.local ? "" : "Not refreshed yet.";
   return `<p class="sub">${last}${c.minutes && !c.local ? ` Checks every ${c.minutes} minutes.` : ""}</p>
-      ${a.error ? `<sl-alert variant="danger" open style="margin-top:12px"><sl-icon slot="icon" name="exclamation-octagon"></sl-icon>${esc(a.error)}</sl-alert>` : ""}
+      ${a.error ? `<sl-alert variant="danger" open style="margin-top:12px"><sl-icon slot="icon" name="exclamation-octagon"></sl-icon>${esc(a.signin && /google_oauth\.py/.test(a.error) ? "Not signed in with Google yet." : a.error)}</sl-alert>` : ""}
       ${a.state === "needs set-up" ? `<p class="sub">Still needs: ${esc(a.missing.join(", "))}.</p>` : ""}`;
 }
 const connCls = a => a.state === "ok" ? "good" : a.state === "failing" ? "bad" : a.state === "needs set-up" ? "warn" : "";
+// Google sign-in, done here instead of in a terminal: Save on the last credential starts it, the server runs the sign-in in its own process and the
+// page shows the Google address as a button while it waits. connSign holds what the server last said for "service|label".
+const connSign = {};
+const connSignPoll = {};
+function connSigninBlock(c, a){
+  if(!a.signin) return "";
+  const lab = connLab(a), k = `${c.id}|${lab}`, s = connSign[k] || {state: "idle"}, who = esc(connWho(c, a));
+  if(s.state === "starting") return `<div class="conn-signin"><p class="sub">Starting the Google sign-in...</p></div>`;
+  if(s.state === "waiting") return `<div class="conn-signin"><p class="sub" role="status">Waiting for you in the browser. ${esc(s.seconds_left)} seconds left. Google asks for read-only access to your mail, nothing else. If Google says redirect_uri_mismatch, the client you made in Google Cloud is not of type Desktop app: create a new one of that type and save its two values here.</p>
+    <div class="btns">${btn("Continue with Google", {variant: "primary", href: s.url, attrs: `aria-label="Continue with Google for ${who}"`})}${btn("Cancel", {size: "small", click: act("connSignCancel", c.id, lab)})}</div></div>`;
+  if(s.state === "failed" || s.state === "cancelled") return `<div class="conn-signin"><sl-alert variant="${s.state === "failed" ? "danger" : "neutral"}" open><sl-icon slot="icon" name="exclamation-octagon"></sl-icon>${esc(s.message)}</sl-alert>
+    <div class="btns">${btn("Try again", {variant: "primary", click: act("connSignin", c.id, lab), attrs: `aria-label="Try the Google sign-in again for ${who}"`})}</div></div>`;
+  if(a.signin.signed_in) return `<div class="conn-signin"><p class="sub">Signed in with Google.</p><div class="btns">${btn("Sign in again", {size: "small", click: act("connSignin", c.id, lab), attrs: `aria-label="Sign in again for ${who}"`})}</div></div>`;
+  if(a.missing.length) return `<div class="conn-signin"><p class="sub">Save the Google values above. Quarterdeck then opens the Google sign-in for you.</p></div>`;
+  return `<div class="conn-signin"><p class="sub">The values are saved. One step left: sign in with Google.</p><div class="btns">${btn("Sign in with Google", {variant: "primary", click: act("connSignin", c.id, lab), attrs: `aria-label="Sign in with Google for ${who}"`})}</div></div>`;
+}
+async function connSignin(id, lab){
+  const k = `${id}|${lab || ""}`;
+  connSign[k] = {state: "starting"}; if(view === "connections") render();
+  const j = await post("/api/connections", {action: "signin", id, label: lab || "default", confirm: true});
+  if(!j){ delete connSign[k]; if(view === "connections") render(); return; }
+  connSign[k] = j; if(view === "connections") render();
+  clearInterval(connSignPoll[k]);
+  connSignPoll[k] = setInterval(async () => {
+    const r = await post("/api/connections", {action: "signin_status", id, label: lab || "default", confirm: true});
+    if(!r) return;
+    const was = connSign[k] && connSign[k].state, opened = connSign[k] && connSign[k].opened;
+    connSign[k] = r;
+    if(r.state === "waiting" && !opened){ r.opened = true; try{ window.open(safeUrl(r.url), "_blank", "noopener"); }catch(e){} }      // a browser may refuse this; the button is there
+    if(r.state === "waiting" && opened) r.opened = true;
+    if(r.state !== "starting" && r.state !== "waiting"){
+      clearInterval(connSignPoll[k]);
+      if(r.state === "done"){ toast("Signed in. Testing it now."); await loadConnections(true); connTest(id, lab); delete connSign[k]; }
+      else loadConnections(true);
+    }
+    if(view === "connections" && !document.activeElement?.matches("#view :is(input, sl-input)")) render();
+  }, 1500);
+}
+async function connSignCancel(id, lab){
+  const k = `${id}|${lab || ""}`;
+  clearInterval(connSignPoll[k]);
+  const j = await post("/api/connections", {action: "signin_cancel", id, label: lab || "default", confirm: true});
+  connSign[k] = j || {state: "cancelled", message: "Sign-in cancelled."}; if(view === "connections") render();
+}
 const connTestBtn = (c, a) => c.local || !c.credentials.length ? "" : btn("Test", {size: "small", click: act("connTest", c.id, connLab(a)), attrs: `aria-label="Test ${esc(connWho(c, a))} now"`});
 // One extra account of a service: its own state, switch, fields, test and remove.
 function connAcct(c, a){
   const who = connWho(c, a);
   return `<div class="conn-acct" id="conn-${esc(c.id)}-${esc(a.label)}"><div class="conn-h"><h3>${esc(a.label)} account</h3>${pill(connCls(a), connWords[a.state] || a.state)}
       <div class="conn-end">${slSwitch(a.enabled ? "On" : "Off", {checked: a.enabled, change: actOn("change", "connEnable", c.id, T.checked, a.label), attrs: `aria-label="${esc(who)} on or off"`})}</div></div>
-    ${connFacts(c, a)}${connCreds(c, a)}
+    ${connFacts(c, a)}${connCreds(c, a)}${connSigninBlock(c, a)}
     <div class="btns">${connTestBtn(c, a)}${btn("Remove account", {size: "small", click: act("connRemoveAccount", c.id, a.label), attrs: `aria-label="Remove the ${esc(who)}"`})}</div></div>`;
 }
 function connAddField(c){
@@ -2427,7 +2473,7 @@ function connRow(c){
       <div class="conn-end">${c.local ? "" : slSwitch(c.enabled ? "On" : "Off", {checked: c.enabled, change: actOn("change", "connEnable", c.id, T.checked, ""), attrs: `aria-label="${esc(c.label)} on or off"`})}
       <sl-icon-button name="question-circle" label="How to connect ${esc(c.label)}" ${act("connHelp", c.id)}></sl-icon-button></div></div>
     <div class="conn-body">${esc(c.what)} ${pill(c.verified ? "good" : "", c.verified ? "Tested" : "Not tested")}${extra.length ? `<p class="sub">This is the default account. The others are below.</p>` : ""}
-      ${connFacts(c, c)}${connCreds(c, d)}
+      ${connFacts(c, c)}${connCreds(c, d)}${connSigninBlock(c, d)}
       <div class="btns">${connTestBtn(c, d)}</div>
       ${extra.map(a => connAcct(c, a)).join("")}
       ${c.multi ? `<div class="conn-more">${connAddField(c)}</div>` : ""}</div></section>`;
@@ -2511,7 +2557,31 @@ async function connSave(id, key, lab){
   const el = document.getElementById(`cr-${id}-${key}${lab ? "-" + lab : ""}`), v = el ? String(el.value || "").trim() : "";
   if(!v) return fieldError(el, "Enter a value first.");
   const j = await post("/api/connections", {action: "credential", id, key, label: lab || "default", value: v, confirm: true});
-  if(j){ el.value = ""; toast("Saved. It will not be shown again."); loadConnections(true); }
+  if(j){
+    el.value = ""; toast("Saved. It will not be shown again.");
+    await loadConnections(true);
+    const c = ((connData || {}).services || []).find(x => x.id === id), a = c && (c.accounts || []).find(x => connLab(x) === (lab || ""));
+    if(a && a.signin && !a.missing.length && !a.signin.signed_in) connSignin(id, lab);       // the last value is in: start the Google sign-in at once
+  }
+}
+// One Save for the whole account: every field that has text is saved, then the Google sign-in starts when nothing is missing any more.
+async function connSaveAll(id, lab){
+  const c = ((connData || {}).services || []).find(x => x.id === id), a = c && (c.accounts || []).find(x => connLab(x) === (lab || ""));
+  if(!a) return;
+  const els = a.credentials.map(k => ({k, el: document.getElementById(`cr-${id}-${k.key}${lab ? "-" + lab : ""}`)})).filter(x => x.el);
+  const todo = els.filter(x => String(x.el.value || "").trim());
+  if(!todo.length) return fieldError((els[0] || {}).el, "Enter a value first.");
+  let ok = 0;
+  for(const {k, el} of todo){
+    const j = await post("/api/connections", {action: "credential", id, key: k.key, label: lab || "default", value: String(el.value).trim(), confirm: true});
+    if(!j) break;
+    el.value = ""; ok++;
+  }
+  if(!ok) return;
+  toast(ok > 1 ? `Saved ${ok} values. They will not be shown again.` : "Saved. It will not be shown again.");
+  await loadConnections(true);
+  const c2 = ((connData || {}).services || []).find(x => x.id === id), a2 = c2 && (c2.accounts || []).find(x => connLab(x) === (lab || ""));
+  if(a2 && a2.signin && !a2.missing.length && !a2.signin.signed_in) connSignin(id, lab);
 }
 async function connRemove(id, key, lab){
   const j = await post("/api/connections", {action: "credential", id, key, label: lab || "default", value: "", confirm: true});
@@ -5136,6 +5206,7 @@ function brainGraph(){
     const fresh = c.connected && (c.unread > 0 || (c.items || []).some(i => i.new));
     const ck = c.key || c.name;            // a service with several accounts has one node each; the default account's key stays the plain name
     const ig = (S.integrations || {})[ck], bad = ig && !ig.ok;   // a direct feed that is failing says why
+    if(!c.connected && !ig) continue;       // a service nobody connected has no place in the Brain: it shows only with a real snapshot, or a refresh that was tried (and failed, so it says why)
     const fp = feeds && c.connected ? feeds.feedPanel(c, Date.now()) : null;   // what changed, what needs you
     const old = (c.account ? c.account + " account · " : "") + (c.unread != null ? c.unread + " unread · " : "") + "read " + ago(c.updated) + (ig ? ", refreshed " + ago(ig.at) : "");
     add("c:" + ck, c.label, "world", "connection", {hub: true, ref: {feed: ck}, state: bad ? "attn" : !c.connected ? "off" : fp ? fp.state : fresh ? "new" : "idle",
@@ -5311,7 +5382,7 @@ function render(){
   setHtml($("#pacts"), meta.acts);
   if(document.title !== meta.title + " · Quarterdeck"){ document.title = meta.title + " · Quarterdeck"; if(annRunning !== null) announce(meta.title); }
   const brainMounted = v.id === "brain" && !brainErr && $("#brain-slot .brain-host");
-  const keep = ["cap-in", "note-new", "note-q", "note-edit", "bf-note"].map(id => ({id, e: document.getElementById(id)})).filter(k => k.e)
+  const keep = ["cap-in", "note-new", "note-q", "note-edit", "bf-note", ...[...document.querySelectorAll('#view [id^="cr-"]')].map(e => e.id)].map(id => ({id, e: document.getElementById(id)})).filter(k => k.e)
     .map(k => ({id: k.id, v: k.e.value, f: document.activeElement === k.e, at: k.e.selectionStart, to: k.e.selectionEnd})).filter(k => typeof k.v === "string");     // a field the browser has not upgraded yet has no value to keep
   const fleetNote = fleetProjects.has(sel) && !["fleet", "brain", "crew"].includes(v.id) && !atPlace
     ? `<div class="note-line">${esc(sel)} runs its own agents, so this page has nothing from Quarterdeck's duties. ${btn("See all its work in Fleet", {size: "small", variant: "primary", click: act("go", "fleet")})}</div>` : "";
@@ -5474,7 +5545,7 @@ const ACTIONS = {
   seeAttention: () => { go("brain"); setTimeout(openAttention, 900); },
   brainErrClear: () => { brainErr = ""; render(); },
   copyCommand, firstRunDemo, firstRunSkip, homeTicket, ackInbox, addSched, approveMissionPlan, attachAdd, attachLook, attachNew, backToLedger, bargeInToggle, briefAct, briefAsk, briefForIssue, briefRetry, briefSend,
-  capDone, capSubmit, caseStepTo, closeCard, closeDrawer, closeMissionPage, closeMobileMenu, closePalette, asAdd, asPreset, asRemove, connAddOpen, connAddSave, connEnable, connHelp, connRemove, connRemoveAccount, connSave, connStore, connTest, crewRun,
+  capDone, capSubmit, caseStepTo, closeCard, closeDrawer, closeMissionPage, closeMobileMenu, closePalette, asAdd, asPreset, asRemove, connAddOpen, connAddSave, connEnable, connHelp, connRemove, connRemoveAccount, connSave, connSaveAll, connSignCancel, connSignin, connStore, connTest, crewRun,
   crewEnable, liveJump, crewSchedule, openRun, runGo, runPaint,
   dockStartOver, dockGo, dockToggle, explainWrites, fileAsIssues, fixItem, fixSelected, fleetAct, focusEdit, go, helmOrb, leaveBrain, linkPanelToMission,
   loadBoard, markSeen, mergePr, noteAdd, noteDone, noteEditSave, noteEditStart, noteEditStop, noteFilter, notePromote, noteTag, nwMakeBrief,

@@ -55,8 +55,9 @@ ck "addon new writes ext_<name>.py and a test, mode 0600, in a 0700 addons folde
 ck "the scaffold's own test passes" 'python3 -I "$QH/addons/test_scout.py" | grep -q "^ok"'
 ck "addon new never overwrites, and refuses a bad name" 'echo "# mine" > "$QH/addons/ext_scout.py"; ! qd addon new scout 2>/dev/null && [ "$(cat "$QH/addons/ext_scout.py")" = "# mine" ] && ! qd addon new "../x" 2>/dev/null && ! qd addon new Bad-Name 2>/dev/null'
 qd addon new tail >/dev/null
-# Relay: the sample in docs/public/ADDONS.md, exactly as published
-python3 - "$REAL/docs/public/ADDONS.md" "$QH/addons/ext_relay.py" <<'PY'
+# Relay: the sample in ADDONS.md, exactly as published (a private checkout keeps it in docs/public/, the published repo at the root)
+ADDOC="$REAL/docs/public/ADDONS.md"; [ -f "$ADDOC" ] || ADDOC="$REAL/ADDONS.md"; AGDOC="$REAL/docs/public/AGENTS.md"; [ -f "$AGDOC" ] || AGDOC="$REAL/AGENTS.md"
+python3 - "$ADDOC" "$QH/addons/ext_relay.py" <<'PY'
 import re, sys
 s = open(sys.argv[1]).read()
 open(sys.argv[2], "w").write(re.findall(r"```python\n(# ext_relay\.py.*?)```", s, re.S)[0])
@@ -103,13 +104,16 @@ import json, dashboard as d
 print(json.dumps({"addons": d.addons_list(), "attention": len(d.EXT["attention"])}))
 PY
 QUARTERDECK_ADDONS=off py "$T/off.py" > "$T/off.out" 2>/dev/null
-ck "QUARTERDECK_ADDONS=off loads none from the data folder" 'jq -e ".addons == [] and .attention == 0" "$T/off.out" >/dev/null'
+# built-in add-ons (a private checkout has some) add attention hooks of their own: the baseline is a data folder with no addons folder at all
+mkdir -p "$T/empty-home"; : > "$T/empty-home/.quarterdeck-home"
+env -u QUARTERDECK_DIR -u PROJECTS_FILE HOME="$T/home" QUARTERDECK_HOME="$T/empty-home" PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$P/bin" python3 "$T/off.py" > "$T/base.out" 2>/dev/null
+ck "QUARTERDECK_ADDONS=off loads none from the data folder" 'jq -e --slurpfile b "$T/base.out" "[.addons[] | select(.where == \"local\")] == [] and .attention == \$b[0].attention" "$T/off.out" >/dev/null'
 ck "addon list says they are turned off when the switch is set" 'QUARTERDECK_ADDONS=off bash "$P/bin/qtdeck" addon list 2>&1 | grep -q "turned off"'
 # the folder itself must be a real, private directory
 chmod 755 "$QH/addons"; py "$T/off.py" > "$T/open.out" 2>/dev/null
-ck "an addons folder open to others (mode 0755) loads nothing, and the reason names it" 'jq -e ".addons == []" "$T/open.out" >/dev/null && qd addon list | grep -q "not mode 0700"'
+ck "an addons folder open to others (mode 0755) loads nothing, and the reason names it" 'jq -e "[.addons[] | select(.where == \"local\")] == []" "$T/open.out" >/dev/null && qd addon list | grep -q "not mode 0700"'
 chmod 700 "$QH/addons"; mv "$QH/addons" "$T/addons-real"; ln -s "$T/addons-real" "$QH/addons"; py "$T/off.py" > "$T/lnk.out" 2>/dev/null
-ck "an addons folder that is a link loads nothing" 'jq -e ".addons == []" "$T/lnk.out" >/dev/null && qd addon list | grep -q "is a link"'
+ck "an addons folder that is a link loads nothing" 'jq -e "[.addons[] | select(.where == \"local\")] == []" "$T/lnk.out" >/dev/null && qd addon list | grep -q "is a link"'
 rm "$QH/addons"; mv "$T/addons-real" "$QH/addons"
 
 # ---- no model and no project command can write there ------------------------------------------------------------------------------------
@@ -139,7 +143,8 @@ EM=$(printf "\342\200\224"); EN=$(printf "\342\200\223")
 ck "the add-on builder is a crew-style file: frontmatter whose name matches the file, a seat and a bias, no project named, no dashes the style forbids" \
   '[ "$(sed -n 1p "$A")" = --- ] && [ "$(sed -n "s/^name: *//p" "$A" | sed -n 1p)" = addon-builder ] && grep -q "^seat: ." "$A" && grep -q "^bias: ." "$A" && [ "$(grep -c "^---[[:space:]]*$" "$A")" = 2 ] && ! LC_ALL=C grep -q -e "$EM" -e "$EN" "$A"'
 ck "it is read-only toward the service by default, asks before a button, never sees keys, and its output is a diff" 'grep -qi "read-only toward the service" "$A" && grep -qi "ask before any action button" "$A" && grep -qi "never see a key" "$A" && grep -qi "diff" "$A" && grep -qi "only when the owner starts it" "$A"'
-ck "the new docs and the security documents contain no long dashes" '! LC_ALL=C grep -q -e "$EM" -e "$EN" "$REAL/docs/public/ADDONS.md" "$REAL/docs/public/AGENTS.md" "$REAL/SECURITY.md" "$REAL/THREAT-MODEL.md"'
-ck "SECURITY.md and THREAT-MODEL.md say what loading code from the data folder means and how to turn it off" 'grep -q "QUARTERDECK_ADDONS=off" "$REAL/SECURITY.md" && grep -q "QUARTERDECK_ADDONS=off" "$REAL/THREAT-MODEL.md"'
+SECDOC="$REAL/SECURITY.md"; [ -f "$SECDOC" ] || SECDOC="$REAL/docs/public/SECURITY.md"; THRDOC="$REAL/THREAT-MODEL.md"; [ -f "$THRDOC" ] || THRDOC="$REAL/docs/public/THREAT-MODEL.md"
+ck "the new docs and the security documents contain no long dashes" '! LC_ALL=C grep -q -e "$EM" -e "$EN" "$ADDOC" "$AGDOC" "$SECDOC" "$THRDOC"'
+ck "SECURITY.md and THREAT-MODEL.md say what loading code from the data folder means and how to turn it off" 'grep -q "QUARTERDECK_ADDONS=off" "$SECDOC" && grep -q "QUARTERDECK_ADDONS=off" "$THRDOC"'
 
 echo; [ "$fails" = 0 ] && echo "  all checks passed" || { echo "  $fails check(s) failed"; exit 1; }

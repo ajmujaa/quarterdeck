@@ -18,7 +18,7 @@ import re
 import threading
 from pathlib import Path
 
-from integrations import accounts, common, keychain
+from integrations import accounts, common, google_oauth, keychain
 
 BUILTIN = Path(__file__).resolve().parent / "services"
 SAFE_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,30}$")
@@ -152,14 +152,17 @@ def status(services=None, cfg=None, have=None, recorded=None):
                     if isinstance(t, str) and (not stamp or t > stamp):
                         stamp = t
             state, last, bad = _state_of(s, on or s["local"], missing, recs, stamp)
-            entries.append({"label": label, "enabled": on, "state": state, "missing": missing, "last_at": (last or {}).get("at"),
-                            "error": (bad or {}).get("error_short") or "",
-                            "credentials": [{**c, "present": c["key"] in have_l, "stored": kind if c["key"] in have_l else None} for c in s["credentials"]]})
+            entry = {"label": label, "enabled": on, "state": state, "missing": missing, "last_at": (last or {}).get("at"),
+                     "error": (bad or {}).get("error_short") or "",
+                     "credentials": [{**c, "present": c["key"] in have_l, "stored": kind if c["key"] in have_l else None} for c in s["credentials"]]}
+            if s["id"] in google_oauth.SCOPES:                     # the page offers "Sign in with Google" for these, and says whether it was done
+                entry["signin"] = {"kind": "google", "signed_in": google_oauth.token_file(s["id"], label).is_file()}
+            entries.append(entry)
         d = entries[0]
         rows.append({**{k: s[k] for k in ("id", "label", "what", "minutes", "local", "settings", "reads", "not_reads", "scopes", "revoke", "tested", "links")},
                      "steps": [x.replace("{data_folder}", str(common.HOME)) for x in s["steps"]],          # the exact folder, not "your data folder"
                      "verified": s["tested"].startswith(VERIFIED),
-                     "credentials": d["credentials"], "enabled": d["enabled"], "state": d["state"], "missing": d["missing"],
+                     "credentials": d["credentials"], "enabled": d["enabled"], "state": d["state"], "missing": d["missing"], **({"signin": d["signin"]} if "signin" in d else {}),
                      "last_at": d["last_at"], "error": d["error"], "multi": s["accounts"], "accounts": entries})
     return rows
 

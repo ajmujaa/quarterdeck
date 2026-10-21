@@ -435,8 +435,8 @@ st, j = post("/api/ready/prove", {"project": P, "confirm": True})
 chk("POST /api/ready/prove starts the verify command detached and answers started", st == 200 and j == {"started": True}, (st, j))
 j = wait(lambda r: not r["running"]["prove"] and os.path.exists(vj) and json.load(open(vj))["at"] != at0)
 v = json.load(open(T + "/state/projects/" + P + "/verify.json"))
-chk("  it ran once in the sandbox and kept the result: verify.json has {at, command, exit, seconds, sandbox, first_line}, the item is done and the one next action is a mission from ticket 1",
-    set(v) == {"at", "command", "exit", "seconds", "sandbox", "first_line"} and v["exit"] == 0 and v["command"] == "node --test" and j["items"][1]["state"] == "done" and j["ready"] is True
+chk("  it ran once in the sandbox and kept the result: verify.json has {at, command, exit, seconds, sandbox, first_line, tail}, the item is done and the one next action is a mission from ticket 1",
+    set(v) == {"at", "command", "exit", "seconds", "sandbox", "first_line", "tail"} and v["exit"] == 0 and v["command"] == "node --test" and j["items"][1]["state"] == "done" and j["ready"] is True
     and j["next"]["kind"] == "mission" and "ticket 1" in j["next"]["text"], (v, j["next"]))
 chk("  the project's own folder was not written to (no README, no node_modules, a clean tree), and gh was never called", not os.path.exists(os.environ["T"] + "/proj/sample-web/README.md") and ghcalls() == [])
 st, j = post("/api/docs/apply", {"project": "sample-react", "confirm": True})
@@ -803,7 +803,7 @@ part9_ready() {
   rm -f "$T/gh-calls"; touch "$T/stamp9"; sleep 1
   OUT=$($QD ready sample-ready --prove 2>&1); RC=$?
   ck "--prove runs the verify command once in the sandbox and says it passed; the checklist then shows it done and the next step is the first ticket" '[ "$RC" = 0 ] && grep -q "passed: exit 0" <<<"$OUT" && grep -qE "^  \[x\] Verify command +node --test ran in the sandbox and passed" <<<"$OUT" && grep -qF "next: File your first ticket: qtdeck ticket new sample-ready \"<what you want built>\"" <<<"$OUT" && [ "$(nlines "^  next: " "$OUT")" = 1 ]'
-  ck "  verify.json keeps {at, command, exit, seconds, sandbox, first_line}, 0600, in the data folder" '[ "$(mode "$T/state/projects/sample-ready/verify.json")" = 0o600 ] && jq -e "(keys | join(\",\")) == \"at,command,exit,first_line,sandbox,seconds\" and .command == \"node --test\" and .exit == 0 and (.seconds | type) == \"number\" and (.sandbox | length) > 0 and (.at | test(\"^[0-9]{4}-\"))" "$T/state/projects/sample-ready/verify.json" >/dev/null'
+  ck "  verify.json keeps {at, command, exit, seconds, sandbox, first_line, tail}, 0600, in the data folder" '[ "$(mode "$T/state/projects/sample-ready/verify.json")" = 0o600 ] && jq -e "(keys | join(\",\")) == \"at,command,exit,first_line,sandbox,seconds,tail\" and .command == \"node --test\" and .exit == 0 and (.seconds | type) == \"number\" and (.sandbox | length) > 0 and (.at | test(\"^[0-9]{4}-\"))" "$T/state/projects/sample-ready/verify.json" >/dev/null'
   ck "  the owners tree is not used: nothing in the project changed, no worktree or scratch folder is left, and gh was not called" '[ -z "$(git -C "$R" status --porcelain)" ] && [ -z "$(find "$R" -newer "$T/stamp9" ! -path "$R" ! -path "$R/.git*" 2>/dev/null | head -1)" ] && [ "$(git -C "$R" worktree list | wc -l | tr -d " ")" = 1 ] && [ -z "$(find "$T/workspace" -maxdepth 1 \( -name "wt-sample-ready-prove*" -o -name "exec.*" \) 2>/dev/null)" ] && nogh'
   OUT=$($QD ready sample-ready 2>&1)
   ck "  ready alone now shows the same: proven, one next step" 'grep -qE "^  \[x\] Verify command" <<<"$OUT" && grep -q "next: File your first ticket" <<<"$OUT"'

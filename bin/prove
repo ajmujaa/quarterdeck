@@ -22,7 +22,10 @@ WT="$QUARTERDECK_HOME/workspace/wt-$PROJECT-prove"
 mkdir -p "$QUARTERDECK_HOME/workspace" "$QUARTERDECK_HOME/logs"
 acquire_lock "prove-$PROJECT"
 cleanup_wt() { safe_git -C "$SRC" worktree remove --force "$WT" >/dev/null 2>&1 || true; rm -rf "$WT" "$WT.gitpin" "$WT.nmlink" "$WT.ignored-before"; }
-trap 'cleanup_wt; rm -rf "$QUARTERDECK_LOCK"' EXIT
+# The command's output goes to this file as it is printed; the dashboard reads its tail while the run lasts (redacted there) and it is removed at the end.
+LIVE="$QUARTERDECK_HOME/workspace/prove-live-$PROJECT.out"
+trap 'cleanup_wt; rm -f "$LIVE"; [ -z "${PX_SCRATCH:-}" ] || rm -rf "$PX_SCRATCH"; rm -rf "$QUARTERDECK_LOCK"' EXIT
+trap 'exit 143' TERM INT      # "Stop" on the page: the trap above still removes the copy, the file and the lock
 
 ref=""
 for r in "$BASE" "origin/$BASE"; do safe_git -C "$SRC" rev-parse --verify -q "$r^{commit}" >/dev/null 2>&1 && { ref=$r; break; }; done
@@ -32,7 +35,8 @@ worktree_at "$SRC" "$WT" "$ref" || die "could not make a throwaway worktree of $
 say "  proving the verify command once: $verify"
 say "  it runs in the sandbox, in a throwaway copy of $ref; your working tree is not used and nothing is installed."
 start=$(date +%s)
-project_exec check "${QUARTERDECK_CHECK_TIMEOUT:-900}" "$WT" "$verify"; rc=$?
+( umask 077; : > "$LIVE" )
+PX_LIVE_FILE="$LIVE" project_exec check "${QUARTERDECK_CHECK_TIMEOUT:-900}" "$WT" "$verify"; rc=$?
 secs=$(( $(date +%s) - start ))
 if [ "$rc" = 126 ]; then
   say "  not run: ${EXEC_OUT:-the sandbox could not start}"
@@ -40,7 +44,12 @@ if [ "$rc" = 126 ]; then
   exit 1
 fi
 first=$(printf '%s\n' "$EXEC_OUT" | grep -v '^[[:space:]]*$' | head -1 | cut -c1-200)
-python3 "$QUARTERDECK_DIR/bin/ready.py" record-verify "$PROJECT" "$verify" "$rc" "$secs" "${RUN_SANDBOX:-none}" "$first" >/dev/null 2>>"$LOG_FILE" || die "could not keep the result"
+# the last 60 lines are kept with the result (ready.py redacts them and picks the line a failed run stopped at); the file is private and removed at once
+TAILF="$QUARTERDECK_HOME/workspace/prove-tail-$PROJECT.txt"
+( umask 077; printf '%s\n' "$EXEC_OUT" | tail -n 400 > "$TAILF" )
+python3 "$QUARTERDECK_DIR/bin/ready.py" record-verify "$PROJECT" "$verify" "$rc" "$secs" "${RUN_SANDBOX:-none}" "$first" --tail-file "$TAILF" >/dev/null 2>>"$LOG_FILE"; krc=$?
+rm -f "$TAILF"
+[ "$krc" = 0 ] || die "could not keep the result"
 log "prove $PROJECT: verify exit $rc in ${secs}s"
 if [ "$rc" = 0 ]; then say "  passed: exit 0 in ${secs}s [sandbox: ${RUN_SANDBOX:-none}]"
 else say "  failed: exit $rc in ${secs}s [sandbox: ${RUN_SANDBOX:-none}]"; fi

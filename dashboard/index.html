@@ -1953,6 +1953,7 @@ const RD_OFFER = {repo: 1, docs: 1, agents: 1, cycle: 1};            // offers, 
 const rdData = project => RD.data && RD.data.project === project ? RD.data : null;
 function rdScope(p){        // a different project starts with a clean card
   if(RD.project === p) return;
+  if(live) live.liveStop("prove", true);
   Object.assign(RD, {project: p, data: null, at: 0, show: false, busy: "", error: "", how: false, open: {}});
 }
 async function loadReady(force){
@@ -1969,11 +1970,15 @@ async function loadReady(force){
     if(j && sel === p){
       const before = JSON.stringify(RD.data);
       RD.data = j;
+      rdLive(j);
       const changed = rdSettle(j) || JSON.stringify(j) !== before;
       if(changed && view === "projects" && !tkTyping()) render();
     }
   }catch(e){ /* the next poll asks again */ }
   finally{ RD.loading = false; }
+}
+function rdLive(j){        // a run that was started before this page was opened is watched too
+  if(live && j.running.prove && !live.liveRunning("prove")) live.liveStart("prove", "prove:" + j.project, {onEnd: () => loadReady(true)});
 }
 function rdSettle(j){        // something this page started has ended: say how it went, once
   if(!RD.busy || j.running.prove || j.running.docs) return false;
@@ -2008,6 +2013,10 @@ function rdDraftHtml(d){
 function rdItemBody(i, d){
   let b = `<p>${esc(i.detail)}</p>`;
   if(i.key === "verify" && i.action && i.state !== "done") b += `<p class="sub">${i.state === "todo" ? "Runs only when you click. " : ""}<code class="tk-sel">${esc(i.action)}</code></p>`;
+  if(i.key === "verify" && (i.tail || []).length) b += `<details class="rd-out"${(RD.open.out === undefined ? i.state === "blocked" : RD.open.out) ? " open" : ""}><summary ${act("rdToggle", "out")}>Show the output</summary><pre class="lv-log lv-kept" tabindex="0" aria-label="The last lines of the verify command's output">${esc(i.tail.join("\n"))}</pre></details>`;
+  if(i.key === "verify" && (i.candidates || []).length) b += `<p class="sub">Found by name in the project. None of these has been run. Picking one only sets it; you run it once afterwards.</p>
+    <ul class="rd-agents">${i.candidates.map(c => `<li><code class="tk-sel">${esc(c.command)}</code> <span class="sub">${esc(c.why)}. Not run yet.</span>
+      ${btn("Use this", {size: "small", click: act("rdUseVerify", c.command), attrs: `aria-label="Use ${esc(c.command)} as the verify command (not run yet)"`})}</li>`).join("")}</ul>`;
   if(i.key === "repo" && i.state === "todo") b += `<p class="sub">The four ways forward are in the card below and with <code class="tk-sel">${esc(i.action)}</code>.</p>`;
   if(i.key === "docs"){
     const miss = i.missing || [], busy = !!RD.busy || d.running.docs;
@@ -2043,8 +2052,11 @@ function readyCard(project){
   const n = rdOne(d), busy = !!RD.busy || d.running.prove || d.running.docs;
   const head = d.ready ? `<p class="hint" role="status">${esc(project)} is ready for a first ticket. The rest below is optional.</p>`
     : `<p class="hint" role="status">${esc(project)} is not ready yet. One thing is left before a ticket makes sense.</p>`;
-  const run = busy ? callout("running", d.running.prove || RD.busy === "prove" ? "Proving" : "Working", d.running.prove || RD.busy === "prove"
-    ? "The verify command is running once in the sandbox, on a throwaway copy of the default branch. Your files are not used." : "The scribe is working. Nothing is written to your project.", {}).replace("<div ", `<div role="status" `) : "";
+  const proving = d.running.prove || RD.busy === "prove";
+  const stopBtn = btn("Stop", {size: "small", click: act("rdProveStop"), attrs: 'id="rd-stop" aria-label="Stop the verify command"'});
+  const run = busy ? callout("running", proving ? "Proving" : "Working", proving
+    ? "The verify command is running once in the sandbox, on a throwaway copy of the default branch. Your files are not used." : "The scribe is working. Nothing is written to your project.", {}).replace("<div ", `<div role="status" `)
+    + (proving && live ? live.liveBoxHtml("prove", {title: "Running the verify command", stopHtml: stopBtn, logLabel: "Output of the verify command so far"}) : "") : "";
   const err = RD.error && !busy ? callout("blocked", "That did not finish", esc(RD.error)) : "";
   const how = RD.how && !busy ? `<div class="note-line">Run this in a terminal: <code class="tk-sel">${esc(n.command)}</code></div>` : "";
   const go = btn(esc(rdNextLabel(n)), {variant: "primary", click: act("rdNext"), disabled: busy, attrs: 'id="rd-next"'});
@@ -2079,7 +2091,22 @@ async function rdProve(){
   const j = await post("/api/ready/prove", {project: p, confirm: true});
   if(!j) return;
   RD.busy = "prove"; RD.error = ""; RD.at = 0;
+  if(live) live.liveStart("prove", "prove:" + p, {onEnd: () => loadReady(true)});
   announce("Running the verify command once in the sandbox."); render(); loadReady(true);
+}
+async function rdUseVerify(cmd){
+  const p = sel;
+  if(!p || !cmd) return;
+  if(!await confirmDlg(`This sets the verify command of ${p} to: ${cmd}. Nothing is run now. You will be asked before it is run once in the sandbox.`, {title: "Use this verify command?", ok: "Use it"})) return;
+  const j = await post("/api/project/verify", {project: p, command: cmd, confirm: true});
+  if(!j) return;
+  toast("Verify command set. It has not been run yet."); await tick(); loadReady(true);
+}
+async function rdProveStop(){
+  const p = sel;
+  if(!p) return;
+  const j = await post("/api/ready/prove-stop", {project: p, confirm: true});
+  if(j) announce("Stopping the verify command. Nothing will be kept.");
 }
 async function rdDraft(which){
   const p = sel;
@@ -3791,8 +3818,10 @@ async function attachLook(){
   const field = $("#at-path"), path = cleanPath(field.value), out = $("#at-out");
   if(!path){ out.innerHTML = ""; atSteps(1); return fieldError(field, "Paste a folder path first."); }
   fieldError(field, "");
-  out.innerHTML = `<p class="hint" style="margin-top:var(--s4)"><sl-spinner></sl-spinner> Scanning…</p>`;
+  if(live) live.liveStart("attach", "attach", {follow: true});
+  out.innerHTML = `<p class="hint" style="margin-top:var(--s4)"><sl-spinner></sl-spinner> Scanning…</p>` + (live ? live.liveBoxHtml("attach", {title: "Scanning the folder", logLabel: "What the scan is doing"}) : "");
   const r = await fetch("/api/attach", {method:"POST", headers:{"Content-Type":"application/json","X-Quarterdeck-Token":TOKEN}, body:JSON.stringify({path})});
+  if(live) live.liveStop("attach");
   const j = await r.json().catch(() => ({}));
   if(!r.ok){ out.innerHTML = ""; atSteps(1); return fieldError(field, j.error || "Could not scan that folder."); }
   attachLast = j;
@@ -4063,6 +4092,8 @@ function closePalette(){ const d = $("#palette"); if(d.open) d.hide(); }
 /* ---- Next up, brain dump, the command bar, calm mode ---- */
 let asst = null;
 import("/assets/assistant.js").then(m => { asst = m; if(S) render(); }).catch(() => {});
+let live = null;          // the live box (assets/livebox.js): what a long action prints while it runs
+import("/assets/livebox.js").then(m => { live = m; if(S) render(); }).catch(() => {});
 let feeds = null;
 import("/assets/feeds.js").then(m => { feeds = m; if(S) render(); }).catch(() => {});
 let prevSeen = null, nextCur = null;
@@ -5486,7 +5517,7 @@ const ACTIONS = {
   startCycle, startMissionPanel, stopRun, talkSubmit, thinkToggle, tlClick, tlHover, tlSet, toggleCalm, toggleDemo, toggleLedger,
   toggleMissionForm, toggleMobileMenu, toggleOld, toggleReplay, toggleSched, toggleSel, toggleShowcaseForm, unpublishShowcase, unqueue, workOn,
   grEdit, grNew, grAdd, grRemove, grMove, grSave, openProject, openProjects, addonNeeds, homeDay, finToggle, trajToggle, tkRequest, tkDraft, tkFile, tkDiscard, tkRepoName, tkRepoSave, tkRepoCreate, tkMission,
-  rdShow, rdToggle, rdNext, rdDraft, rdApply, rdTurnOn, rdCycle,
+  rdShow, rdToggle, rdNext, rdDraft, rdApply, rdTurnOn, rdCycle, rdProveStop, rdUseVerify,
   ...EXT.actions,                                   // an add-on's own (assets/ext-*.js), by name
 };
 

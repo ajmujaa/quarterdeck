@@ -144,6 +144,7 @@ guard_group() {
     if (!$pid) { setpgrp(0, 0); exec @ARGV; exit 127 }
     setpgrp($pid, $pid);
     my $to = 0; local $SIG{ALRM} = sub { $to = 1; kill "KILL", -$pid };
+    local $SIG{TERM} = sub { kill "KILL", -$pid; exit 143 };      # a stop from the page ends the command too, not only this wrapper
     alarm $s; waitpid($pid, 0); my $st = $?; alarm 0;
     select(undef, undef, undef, 0.05);
     my $left = kill 0, -$pid; my %n;
@@ -1716,6 +1717,8 @@ px_prepare() {
       fi
     fi
   fi
+  # The marker for a test that must skip what the sandbox forbids on purpose (listing other processes, say). Set only where a sandbox is applied.
+  if [ "$RUN_SANDBOX" != none ]; then PX_ENV+=("QUARTERDECK_IN_SANDBOX=1"); fi
   return 0
 }
 # A check runs in a throwaway clone of the worktree (px_prepare ... clone); what it writes goes away with the clone, and the clone's path in its
@@ -1731,7 +1734,15 @@ project_exec() {
     EXEC_OUT="not run: ${PX_WHY:-the macOS sandbox could not be applied, and a project command is never run unsandboxed on a Mac by default}"
     return 126
   elif [ "$pr" != 0 ]; then EXEC_OUT="cannot make a scratch folder"; return 127; fi
-  EXEC_OUT=$(cd "$PX_RUN" && guard_group "$secs" env -i "${PX_ENV[@]}" ${PX_PRE[@]+"${PX_PRE[@]}"} bash -c "$cmd" 2>&1) || rc=$?
+  if [ -n "${PX_LIVE_FILE:-}" ]; then
+    # A caller that shows the output while it runs (bin/prove) names a file: the command writes there as it goes, the caller's page reads the tail,
+    # and the whole output is still returned in EXEC_OUT. Python's output is unbuffered so lines arrive when they are printed, not at the end.
+    PX_ENV+=("PYTHONUNBUFFERED=1")
+    (cd "$PX_RUN" && guard_group "$secs" env -i "${PX_ENV[@]}" ${PX_PRE[@]+"${PX_PRE[@]}"} bash -c "$cmd") > "$PX_LIVE_FILE" 2>&1 || rc=$?
+    EXEC_OUT=$(cat "$PX_LIVE_FILE" 2>/dev/null)
+  else
+    EXEC_OUT=$(cd "$PX_RUN" && guard_group "$secs" env -i "${PX_ENV[@]}" ${PX_PRE[@]+"${PX_PRE[@]}"} bash -c "$cmd" 2>&1) || rc=$?
+  fi
   [ "$PX_RUN" != "$wt" ] && EXEC_OUT=${EXEC_OUT//"$PX_RUN"/"$wt"}
   rm -rf "$PX_SCRATCH"
   # audit 7 (L6): a failure the sandbox caused reads like any other, and pushed owners to turn the sandbox off. It is named as what it is.

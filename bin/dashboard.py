@@ -4072,13 +4072,19 @@ def attach_api(b):
         return 400, {"error": f"{raw} is not a folder (there is nothing at that path)"}
     if not path.is_dir():
         return 400, {"error": f"{raw} is a file, not a folder"}
+    live_open("attach")                       # the page's live box shows these stage lines while the request works
     try:
+        live_add("attach", "Reading the folder and its manifests")
         prof = _scan.scan(path)
+        live_add("attach", "Found: " + str((prof.get("stack") or {}).get("summary") or "no stack recognised")[:160])
         prop = proposed = _attach.propose(prof, str(b.get("name") or "").strip() or None)
+        live_add("attach", "Choosing the commands and duties to propose")
         agents = None
         if b.get("edits") is not None:
             prop = _attach.edit(prop, b["edits"])
+        live_add("attach", "Surveying the files (reading only)")
         sv = _survey.survey(path, prop["name"])           # the survey (bin/survey.py): files only; it is kept only by the confirmed apply below
+        live_add("attach", "Survey done")
         applied = False
         if b.get("apply"):
             if b.get("confirm") is not True:
@@ -4102,9 +4108,12 @@ def attach_api(b):
                  "next": _ready.next_action(prop["name"], prop["entry"], items, {"tickets": []}, str(path)) if applied else {"kind": "attach", "text": "Add this project, then run the verify command once to prove it.", "command": ""}}
         ready["docs_line"] = _attach.docs_line(sv).replace("<name>", prop["name"])
     except ValueError as e:
+        live_close("attach", "failed")
         return 400, {"error": str(e)}
     except OSError as e:
+        live_close("attach", "failed")
         return 500, {"error": str(e)[:200]}
+    live_close("attach", "done")
     return 200, {"profile": prof, "survey": sv, "ready": ready, "proposal": prop, "applied": bool(b.get("apply")), "agents_md": agents, "duty_options": [{"name": x["name"], "role": x["role"]} for x in duty_list() if x["name"] in _attach.known_duties()], "guardrail_options": _attach.GUARDRAILS, "pack_status": {x["id"]: x["status"] for x in _packs_mod.load()}}
 
 
@@ -4402,6 +4411,8 @@ def _ready_error(project, kind):
         rec = read_json(STATE / "projects" / project / "verify.json", None)
         if isinstance(rec, dict) and str(rec.get("at", "")) >= job["at"]:
             return ""
+        if job.get("stopped"):
+            return "You stopped it. Nothing was kept: a run that was stopped is not a failed command."
         try:
             tail = [ln.strip() for ln in (LOGS / f"ready-{project}.log").read_text(errors="replace").split("started by dashboard")[-1].splitlines() if ln.strip()]
         except OSError:
@@ -4472,6 +4483,146 @@ def ready_prove_api(b):
     return 200, {"started": True}
 
 
+def ready_prove_stop_api(b):
+    """POST /api/ready/prove-stop {project, confirm}: ends the prove run this dashboard started. The run's own trap removes its copy, file and lock."""
+    no_demo("stop the verify command")
+    if b.get("confirm") is not True:
+        return 400, {"error": "confirm is required"}
+    project = b.get("project")
+    try:
+        _ticket_entry(project)
+    except ValueError as e:
+        return 400, {"error": str(e)}
+    with TICKET_LOCK:
+        job = READY_JOBS.get((project, "prove"))
+    if not job or job["popen"].poll() is not None:
+        return 409, {"error": "nothing is running for that project"}
+    job["stopped"] = True
+    pg = job["popen"].pid                      # started in a process group of its own
+    try:
+        os.killpg(pg, signal.SIGTERM)
+    except OSError:
+        pass
+
+    def _late():                               # a command that ignored the stop is ended for good after a few seconds
+        time.sleep(6)
+        try:
+            os.killpg(pg, signal.SIGKILL)
+        except OSError:
+            pass
+    threading.Thread(target=_late, daemon=True).start()
+    _ticket_log("ready-prove-stop", project)
+    return 200, {"stopped": True}
+
+
+# ---- the live box: what a long action prints while it runs ----------------------------------------------------------------------------
+# GET /api/live?key=&since=N -> {state, seconds, lines, next, total, replace}. One small JSON the page polls (no stream, no websocket). Text only:
+# control characters and terminal escapes are removed, every line is clipped, and the whole chunk goes through the same credential scan as every
+# log. key "prove:<project>" reads the output file bin/prove writes while the verify command runs (and the kept tail of verify.json after it);
+# key "attach" reads the stage lines attach_api adds as it works. `lines` are the lines after number `since`; `next` is what to ask for next.
+LIVE_MAX = 200
+LIVE_LINE = 400
+LIVE_MEM = {}                    # key -> {"lines": [...], "state": "running"|"done"|"failed", "at": epoch}
+LIVE_LOCK = threading.Lock()
+
+
+def live_clean(text):
+    """Output as safe text lines: no escapes or control characters, clipped, then redacted by the credential scan (which sees the whole chunk)."""
+    import ready as _ready
+    rows = [_ready.plain_text(ln, LIVE_LINE) for ln in str(text).split("\n")]
+    try:
+        import outscan as _os
+        return _os.redact("\n".join(rows)).split("\n")
+    except Exception:
+        return ["(hidden: the credential scan could not run)"] if any(r.strip() for r in rows) else []
+
+
+def live_open(key):
+    with LIVE_LOCK:
+        LIVE_MEM[key] = {"lines": [], "state": "running", "at": time.time()}
+
+
+def live_add(key, line):
+    with LIVE_LOCK:
+        box = LIVE_MEM.get(key)
+        if box is not None:
+            box["lines"].append(str(line)[:LIVE_LINE])
+            del box["lines"][:-LIVE_MAX * 4]
+
+
+def live_close(key, state="done"):
+    with LIVE_LOCK:
+        box = LIVE_MEM.get(key)
+        if box is not None:
+            box["state"] = state
+            box["end"] = time.time()
+
+
+def _file_lines(path, since):
+    """(total newline-ended lines in the file, the text of those after `since`, at most LIVE_MAX of the last ones). Reads the end of a big file only."""
+    total, size = 0, 0
+    try:
+        with open(path, "rb") as f:
+            while True:
+                chunk = f.read(1 << 20)
+                if not chunk:
+                    break
+                total += chunk.count(b"\n")
+                size += len(chunk)
+            want = max(0, min(total - since, LIVE_MAX))
+            f.seek(max(0, size - (1 << 20)))
+            data = f.read().decode("utf-8", "replace")
+    except OSError:
+        return 0, []
+    rows = data.split("\n")[:-1]                      # the last, unfinished line waits until it is finished
+    return total, rows[len(rows) - want:] if want else []
+
+
+def output_view(key, since=0):
+    if DEMO["world"] is not None:
+        return {"state": "idle", "seconds": 0, "lines": [], "next": 0, "total": 0, "replace": False}
+    since = max(0, int(since)) if str(since).isdigit() else 0
+    if key == "attach" or key.startswith("mem:"):
+        with LIVE_LOCK:
+            box = LIVE_MEM.get(key)
+            if not box:
+                return {"state": "idle", "seconds": 0, "lines": [], "next": 0, "total": 0, "replace": False}
+            rows = box["lines"]
+            total, state = len(rows), box["state"]
+            secs = int((box.get("end") or time.time()) - box["at"])
+            restarted = since > total                      # the box was opened again since the page last asked: start over
+            out = list(rows[0 if restarted else since:][-LIVE_MAX:])
+        return {"state": state, "seconds": secs, "lines": live_clean("\n".join(out)) if out else [], "next": total, "total": total, "replace": restarted}
+    if key.startswith("prove:"):
+        import ready as _ready
+        project = key[len("prove:"):]
+        _ticket_entry(project)                      # raises ValueError for a name that is not a registered project
+        if _ready_running(project)["prove"]:
+            lock = STATE / f"prove-{project}.lock"
+            try:
+                secs = int(time.time() - lock.stat().st_mtime)
+            except OSError:
+                secs = 0
+            total, rows = _file_lines(WORKSPACE / f"prove-live-{project}.out", since)
+            return {"state": "running", "seconds": secs, "lines": live_clean("\n".join(rows)) if rows else [], "next": total, "total": total, "replace": False}
+        with TICKET_LOCK:
+            job = READY_JOBS.get((project, "prove"))
+        rec = read_json(STATE / "projects" / project / "verify.json", None)
+        rec = rec if isinstance(rec, dict) else {}
+        kept = [str(x)[:LIVE_LINE] for x in (rec.get("tail") or []) if isinstance(x, str)][-60:]
+        fresh = bool(job and str(rec.get("at", "")) >= job["at"])
+        if job and job.get("stopped") and not fresh:
+            state = "stopped"
+        elif job and not fresh:
+            state = "failed"                         # it ended without keeping a result: the sandbox could not start, or it was killed
+        elif fresh:
+            state = "passed" if rec.get("exit") == 0 else "failed"
+        else:
+            state = "idle"
+        return {"state": state, "seconds": int(rec.get("seconds") or 0) if fresh else 0, "lines": kept if state != "idle" else [], "next": len(kept), "total": len(kept), "replace": True}
+    raise ValueError("unknown live key")
+
+
 def docs_draft_api(b):
     no_demo("draft the docs")
     if b.get("confirm") is not True:
@@ -4528,6 +4679,27 @@ def project_suggested(name, entry):
     on = set(entry.get("duties") or [])
     return [{"duty": d, "why": " ".join(str(v.get("why") or "").split())[:200]} for d, v in sorted((rec.get("duty_reasons") or {}).items())
             if isinstance(v, dict) and v.get("suggested") and d not in on]
+
+
+def project_verify_api(b):
+    """POST /api/project/verify {project, command, confirm}: set the verify command to one the scan finds by name now (ready.verify_candidates). Nothing is
+    run, and a command that is not one of those candidates is refused: typing a command stays with `qtdeck attach --verify`."""
+    import attach as _attach, ready as _ready
+    no_demo("set the verify command")
+    if b.get("confirm") is not True:
+        return 400, {"error": "confirm is required: this sets the project's verify command (it is not run)"}
+    project, cmd = b.get("project"), b.get("command")
+    try:
+        ent = _ticket_entry(project)
+        if ent.get("verify"):
+            return 409, {"error": "this project already has a verify command"}
+        if not isinstance(cmd, str) or cmd not in [c["command"] for c in _ready.verify_candidates(ent.get("path"))]:
+            return 400, {"error": "that is not one of the commands found in the project"}
+        _attach.update_commands(project, {"verify": cmd})
+    except ValueError as e:
+        return 400, {"error": str(e)}
+    _ticket_log("ready-verify-set", project)
+    return 200, {"verify": cmd, "run": False}
 
 
 def project_duties_api(b):
@@ -5892,6 +6064,12 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as e:
                 return self._send(400, json.dumps({"error": str(e)}))
 
+        if u.path == "/api/live":
+            try:
+                return self._send(200, json.dumps(output_view((q.get("key") or [""])[0], (q.get("since") or ["0"])[0])))
+            except ValueError as e:
+                return self._send(400, json.dumps({"error": str(e)}))
+
         if u.path == "/api/board":
             name = (q.get("project") or [""])[0]
             projects = read_json(PROJECTS_FILE, {})
@@ -6144,7 +6322,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(code, json.dumps(body))
 
         for path_, fn_ in (("/api/ticket/draft", ticket_draft_api), ("/api/ticket/file", ticket_file_api), ("/api/ticket/discard", ticket_discard_api), ("/api/repo", repo_api),
-                         ("/api/ready/prove", ready_prove_api), ("/api/docs/draft", docs_draft_api), ("/api/docs/apply", docs_apply_api), ("/api/project/duties", project_duties_api),
+                         ("/api/ready/prove", ready_prove_api), ("/api/ready/prove-stop", ready_prove_stop_api), ("/api/docs/draft", docs_draft_api), ("/api/docs/apply", docs_apply_api), ("/api/project/duties", project_duties_api), ("/api/project/verify", project_verify_api),
                          ("/api/project/guardrails", project_guardrails_api)):
             if u.path == path_:
                 code, body = fn_(b)

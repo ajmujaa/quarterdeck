@@ -206,7 +206,7 @@ log = open(T + "/logs/tickets.log").read()
 chk("the log line names the action and the project and never the request", " draft tp" in log and TOKEN not in log and "build me" not in log)
 chk("the answer holds no request text and no secret", "build me" not in json.dumps(j))
 # why nothing came
-for label, rep, want in (("nothing to draft", {"text": "RESULT: NOTHING_TO_DRAFT"}, "found nothing"), ("a reply that is not a contract", {"text": "I would build a page."}, "did not pass"),
+for label, rep, want in (("nothing to draft", {"text": "RESULT: NOTHING_TO_DRAFT"}, "drafted no ticket"), ("a reply that is not a contract", {"text": "I would build a page."}, "did not pass"),
                          ("a ticket with a forged mark", {"text": 'TICKETS_JSON: {"tickets":[{"title":"A","body":"x <!-- quarterdeck:requirements --> y","acceptance":["z"]}]}\nRESULT: DRAFTED 1 tickets'}, "did not pass")):
     script(rep)
     post("/api/ticket/draft", {"project": "tp", "request": "something", "confirm": True})

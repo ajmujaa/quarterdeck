@@ -4399,6 +4399,13 @@ check("overview: state is blocked for a failed run waiting, needs you for a deci
       (_po["alpha"]["state"], _po["beta"]["state"], _po["gamma"]["state"]) == ("blocked", "needs you", "running"), [o["state"] for o in _po.values()])
 check("overview: last run is the newest row of the ledger for the project, with its duty and verdict; none when it never ran",
       _po["alpha"]["last_run"] == {"at": _po_runs[1]["at"], "duty": "shipwright", "verdict": "ERROR"} and _po["gamma"]["last_run"] is None)
+_po2 = {o["name"]: o for o in d.project_overview({"alpha": {}, "gamma": {}}, [], _po_runs, [], {}, [], [], [], [], [], "", "",
+                                                   proof_of=lambda n: {"at": "2999-01-01T00:00:00Z", "exit": 0} if n == "gamma" else {"at": "2000-01-01T00:00:00Z", "exit": 1})}
+check("overview: a Prove run counts as the last run when it is newer than the ledger's, and loses when it is older",
+      _po2["gamma"]["last_run"] == {"at": "2999-01-01T00:00:00Z", "duty": "verify command (Prove)", "verdict": "PROVEN"} and _po2["alpha"]["last_run"]["duty"] == "shipwright", (_po2["gamma"], _po2["alpha"]))
+_ix = (ROOT / "dashboard" / "index.html").read_text()
+check("project page: a proven project still offers Prove it again, the needs card counts failing-check pull requests and names add-on items, and the Brain project takes its pull request's state",
+      'id="rd-prove-again"' in _ix and "act(\"rdProve\")" in _ix and "failingPrs(sel)" in _ix and "addonNote" in _ix and 'par.state = "attn"' in _ix)
 check("overview: spend is summed from the ledger rows that name the project, today and over seven days (a row from nine days ago and a row with no project do not count)",
       _po["alpha"]["spend_today"] == 1.25 and _po["alpha"]["spend_week"] == 3.25 and _po["beta"]["spend_week"] == 0.5 and _po["gamma"]["spend_week"] == 0, (_po["alpha"], _po["beta"]))
 check("overview: mission counts use the page's states (a pull request waiting, a cycle awaiting review and a running fix are open; a superseded panel is not counted)",

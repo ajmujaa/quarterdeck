@@ -135,10 +135,11 @@ esac
 
 # ---- the builder agent's file ---------------------------------------------------------------------------------------------------------------
 A="$REAL/agents/addon-builder.md"
+EM=$(printf "\342\200\224"); EN=$(printf "\342\200\223")
 ck "the add-on builder is a crew-style file: frontmatter whose name matches the file, a seat and a bias, no project named, no dashes the style forbids" \
-  '[ "$(sed -n 1p "$A")" = --- ] && [ "$(awk "/^---/{c++} c==1 && /^name:/{sub(/^name: */,\"\"); print; exit}" "$A")" = addon-builder ] && grep -q "^seat: ." "$A" && grep -q "^bias: ." "$A" && [ "$(grep -c "^---[[:space:]]*$" "$A")" = 2 ] && ! grep -q "$(printf "\xe2\x80\x94")\|$(printf "\xe2\x80\x93")" "$A"'
+  '[ "$(sed -n 1p "$A")" = --- ] && [ "$(sed -n "s/^name: *//p" "$A" | sed -n 1p)" = addon-builder ] && grep -q "^seat: ." "$A" && grep -q "^bias: ." "$A" && [ "$(grep -c "^---[[:space:]]*$" "$A")" = 2 ] && ! LC_ALL=C grep -q -e "$EM" -e "$EN" "$A"'
 ck "it is read-only toward the service by default, asks before a button, never sees keys, and its output is a diff" 'grep -qi "read-only toward the service" "$A" && grep -qi "ask before any action button" "$A" && grep -qi "never see a key" "$A" && grep -qi "diff" "$A" && grep -qi "only when the owner starts it" "$A"'
-ck "the new docs and the security documents contain no long dashes" '! grep -q "$(printf "\xe2\x80\x94")\|$(printf "\xe2\x80\x93")" "$REAL/docs/public/ADDONS.md" "$REAL/docs/public/AGENTS.md" "$REAL/SECURITY.md" "$REAL/THREAT-MODEL.md"'
+ck "the new docs and the security documents contain no long dashes" '! LC_ALL=C grep -q -e "$EM" -e "$EN" "$REAL/docs/public/ADDONS.md" "$REAL/docs/public/AGENTS.md" "$REAL/SECURITY.md" "$REAL/THREAT-MODEL.md"'
 ck "SECURITY.md and THREAT-MODEL.md say what loading code from the data folder means and how to turn it off" 'grep -q "QUARTERDECK_ADDONS=off" "$REAL/SECURITY.md" && grep -q "QUARTERDECK_ADDONS=off" "$REAL/THREAT-MODEL.md"'
 
 echo; [ "$fails" = 0 ] && echo "  all checks passed" || { echo "  $fails check(s) failed"; exit 1; }

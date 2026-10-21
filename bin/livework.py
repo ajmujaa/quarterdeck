@@ -116,7 +116,17 @@ def _duty_item(a, now):
             "state": "working", "pr": None}
 
 
-def live_work(sources, duties, projects, now=None, installed=None, install_command="", settings=None):
+def _source_item(src, x, now):
+    try:
+        t = datetime.fromisoformat(str(x.get("last_run")).replace("Z", "+00:00")).timestamp()
+    except (ValueError, TypeError):
+        t = None
+    return {"kind": "source", "project": "", "source": str(src.get("id") or "")[:60], "source_title": _clip(src.get("title"), 60), "branch": "", "worktree": "",
+            "agent": _clip(x.get("name"), 80) or NO_DETAIL, "doing": _clip(x.get("detail"), 140) or NO_DETAIL, "since": _iso(t) if t else None,
+            "minutes": max(0, int((now - t) // 60)) if t else 0, "waiting_on_owner": False, "state": "working", "pr": None}
+
+
+def live_work(sources, duties, projects, now=None, installed=None, install_command="", settings=None, agent_sources=None):
     """The whole picture. sources: collect() rows. duties: running agent rows ({project, duty, what, since}). projects: {name: {repo}}.
     Returns {items, worktrees, updated_at, hook_installed, install_command, sources}."""
     now = now or time.time()
@@ -138,6 +148,10 @@ def live_work(sources, duties, projects, now=None, installed=None, install_comma
             trees.append({"project": project, "name": str(w.get("name") or "")[:60], "branch": str(w.get("branch") or "")[:80], "main": bool(w.get("main")),
                           "stage": str(w.get("stage") or "")[:20], "activity": str(w.get("activity") or "")[:10], "changed": int(w.get("changed") or 0),
                           "last_activity_ago": int(min(last)) if last else None, "pr": pr, "session": live.get(w.get("name"))})
+    for a in agent_sources or []:       # agents an added source reports as running (bin/agentsources.py); their text is untrusted and the page shows it as text
+        for x in a.get("agents") or []:
+            if x.get("status") == "running":
+                items.append(_source_item(a, x, now))
     for a in duties or []:
         if a.get("status") == "running":
             items.append(_duty_item(a, now))

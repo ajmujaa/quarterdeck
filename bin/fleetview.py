@@ -28,6 +28,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import agentsources
 import home as _home
 import safegit as _safegit
 CONFIG = _home.resolve() / "config" / "fleet.local.json"
@@ -553,6 +554,7 @@ def snapshot(cfg=None, runner=subprocess.run):
         return command_status(s, runner) if s["kind"] == "command-fleet" else reported_status(s) if s["kind"] == "reported" else repo_status(s, runner)
     with ThreadPoolExecutor(max_workers=6) as pool:                 # each project is its own git and gh calls: read them side by side, keep the order
         out = list(pool.map(one, cfg["sources"]))
+    out += agentsources.fleet_sources()                              # the sources added in a form: their last snapshots, no network here (bin/agentsources.py)
     return {"sources": out, "errors": cfg["errors"], "at": int(time.time())}
 
 

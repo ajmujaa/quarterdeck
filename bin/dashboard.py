@@ -3774,6 +3774,7 @@ def understand(text, views, projects=None, duties_of=None):
 # command pipeline (parse, vet, confirm click). Nothing the model writes reaches an endpoint.
 import chatctx
 import claudeproc
+import agentsources
 import fleetview
 import livework
 import projagents
@@ -3820,7 +3821,9 @@ def live_view(agents, projects, now=None):
         LIVE_KICK["at"] = time.time()
         threading.Thread(target=fleet_view, kwargs={"force": True}, daemon=True).start()
     src = livework.collect(cfg, have, now=now)
-    return livework.live_work(src, agents, projects, now=now, install_command="bash " + shlex.quote(str(ROOT / "bin" / "fleet-hook.sh")) + " install")
+    if not demo_on():
+        agentsources.kick()                                  # sources added in a form: asked at most once a minute, on a background thread
+    return livework.live_work(src, agents, projects, now=now, agent_sources=agentsources.fleet_sources(), install_command="bash " + shlex.quote(str(ROOT / "bin" / "fleet-hook.sh")) + " install")
 
 
 def fleet_action(b):
@@ -3941,6 +3944,34 @@ def connection_test(sid, label, timeout=180):
     line = (r.stdout.strip().splitlines() or [""])[-1]
     why = line.split("failed:", 1)[1].strip() if "failed:" in line else ""
     return {"ok": r.returncode == 0, "message": "Refreshed." if r.returncode == 0 else (why[:200] or "the refresh failed")}
+
+
+def agent_sources_api(b):
+    """Add or remove an agent source (bin/agentsources.py). Both need the owner's confirm. The token goes to the credential store and is never
+    returned or logged; the log line names the source, not its address."""
+    if b.get("confirm") is not True:
+        return 400, {"error": "confirm is required: this adds or removes something Quarterdeck reads"}
+    action = b.get("action")
+    try:
+        if action == "add":
+            src = agentsources.add(b)
+            agentsources.kick()
+            result = {"id": src["id"], "name": src["name"]}
+        elif action == "remove":
+            result = {"removed": agentsources.remove(str(b.get("id") or ""))}
+        else:
+            return 400, {"error": "action must be add or remove"}
+    except ValueError as e:
+        return 400, {"error": str(e)}
+    except OSError as e:
+        return 500, {"error": "could not write: " + type(e).__name__}
+    try:
+        LOGS.mkdir(parents=True, exist_ok=True)
+        with open(LOGS / "connections.log", "a") as f:
+            f.write(f"{iso(now_utc())} {log_field('agent-source-' + str(action))} {log_field(result.get('id') or b.get('id'))}\n")
+    except OSError:
+        pass
+    return 200, result
 
 
 def connections_api(b):
@@ -5808,12 +5839,14 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/rhythm":
             return self._send(200, json.dumps(rhythm_view()))
         if u.path == "/api/connections":
-            return self._send(200, json.dumps({"services": integrations_manifest.status(), "store": integrations_manifest.store_info()}))
+            return self._send(200, json.dumps({"services": integrations_manifest.status(), "store": integrations_manifest.store_info(), "agent_sources": agentsources.settings_view()}))
         if u.path == "/api/settings":
             return self._send(200, json.dumps(settings_view()))
         if u.path == "/api/fleet/projects":
             return self._send(200, json.dumps({"projects": fleetview.projects()}))
         if u.path == "/api/fleet":
+            if not demo_on():
+                agentsources.kick()
             return self._send(200, json.dumps(fleet_view(force=(q.get("fresh") or [""])[0] == "1")))
         if u.path == "/api/attention":
             try:
@@ -6092,6 +6125,10 @@ class Handler(BaseHTTPRequestHandler):
 
         if u.path == "/api/connections":
             code, body = connections_api(b)
+            return self._send(code, json.dumps(body))
+
+        if u.path == "/api/agent-sources":
+            code, body = agent_sources_api(b)
             return self._send(code, json.dumps(body))
 
         if u.path == "/api/settings":

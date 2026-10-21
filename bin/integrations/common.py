@@ -23,6 +23,7 @@ HOME = _home.resolve()                                   # your data (bin/home.p
 STATE = HOME / "state"
 CONFIG_DIR = Path(os.environ.get("QUARTERDECK_SECRETS_DIR") or Path.home() / ".config" / "quarterdeck")
 ENV_NAME = "integrations.env"
+AGENT_SOURCE_KEY = "AGENT_SOURCE_TOKEN"                    # the token of an agent source (bin/agentsources.py), stored as AGENT_SOURCE_TOKEN@<source id>
 EXTRA_KEYS = ("anthropic_api_key",)                      # kept in the same store though no service asks for it (bin/billing.py); moved with the rest
 TIMEOUT = 15
 MAX_ITEMS = 12
@@ -246,6 +247,15 @@ def need(env, key):
         stored = accounts.cred_key(key, getattr(env, "label", accounts.DEFAULT))
         raise IntegrationError(f"needs credentials: add {stored} to ~/.config/quarterdeck/{ENV_NAME}")
     return v
+
+
+def agent_source_ids():
+    """The ids of the agent sources in config/agent-sources.json (names only), so a move between the file and the Keychain carries their tokens too."""
+    try:
+        d = json.loads((HOME / "config" / "agent-sources.json").read_text())
+        return sorted({x["id"] for x in d.get("sources") or [] if isinstance(x, dict) and accounts.valid(x.get("id")) and x["id"] != accounts.DEFAULT})
+    except Exception:
+        return []
 
 
 def load_config():

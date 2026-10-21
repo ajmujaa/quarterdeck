@@ -159,6 +159,22 @@ st_have_browser() {
   [ "$_ST_BROWSER" = yes ]
 }
 st_skip() { printf '  skip  %s\n' "$1"; }
+# st_can_nest_sandbox: 0 when a sandboxed project command can start from here. Outside the sandbox (marker unset) it is always 0, so nothing is
+# ever skipped there. Inside it (QUARTERDECK_IN_SANDBOX=1) the answer is whether a new bubblewrap (Linux) or sandbox-exec (macOS) can really start.
+# ST_NEST_PROBE, a command, replaces the probe (the test of this helper uses it).
+st_can_nest_sandbox() {
+  [ "${QUARTERDECK_IN_SANDBOX:-}" = 1 ] || return 0
+  if [ -n "${ST_NEST_PROBE:-}" ]; then sh -c "$ST_NEST_PROBE" >/dev/null 2>&1; return; fi
+  if [ "$(uname -s)" = Darwin ]; then /usr/bin/sandbox-exec -p '(version 1)(allow default)' /usr/bin/true >/dev/null 2>&1; return; fi
+  ( source "$REAL/bin/lib.sh" >/dev/null 2>&1; _qd_bwrap_usable )
+}
+# st_skip_if_nested_sandbox <suite> [<what>]: at the top of a suite that starts its own sandboxed project command: inside the sandbox, where that
+# cannot nest, print one skip line and exit 0. Anywhere else it does nothing.
+st_skip_if_nested_sandbox() {
+  st_can_nest_sandbox && return 0
+  st_skip "$1: ${2:-needs to start a sandboxed project command, and a sandbox cannot start inside the sandbox it is already in}"
+  exit 0
+}
 # st_http_up <url>... — 0 once every url answers 200 OUTSIDE any sandbox (a test server just started may take a while on a slow machine), 1 when
 # one still does not after ten seconds: then this machine cannot do it at all, and a check that needs it is skipped, saying so.
 st_http_up() { local i u ok; for i in $(seq 1 50); do ok=1; for u in "$@"; do [ "$(curl -s -m 2 -o /dev/null -w '%{http_code}' "$u")" = 200 ] || ok=""; done; [ -n "$ok" ] && return 0; sleep 0.2; done; return 1; }

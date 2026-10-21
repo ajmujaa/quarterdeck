@@ -1189,7 +1189,7 @@ const FIX_STUCK = ["failed", "blocked", "abandoned"];
 function homeFacts(){
   const att = obsAttention(), {fixing, live} = liveOperations();
   const fixes = Object.values(S.fixes || {}).filter(mine);
-  const waiting = fixes.filter(r => r.status === "pr");
+  const waiting = fixes.filter(r => r.status === "pr" && !isOld({state: "awaiting", when: r.finished || r.started || ""}));
   const recent = S.runs.filter(mine).filter(r => !routine(r) && Date.now() - new Date(r.at) < 6 * 3600e3);
   const running = fixing.length + live.length;
   const state = att.length ? "blocked" : waiting.length ? "awaiting" : running ? "running" : recent.length ? "done" : "idle";
@@ -1217,17 +1217,39 @@ function homeHeadline(f, n){
     : [f.running && f.state !== "running" ? f.running + " running" : "", f.state !== "blocked" && f.att.length ? f.att.length + " blocked" : "", f.state !== "awaiting" && f.waiting.length ? f.waiting.length + " waiting for you" : ""].filter(Boolean).join(" · ") || "Nothing is running and nothing is waiting.";
   return {text, sub, state: noProjects ? "idle" : f.state, noProjects};
 }
+// What the lists do with missions that are handled or old. Handled = dismissed, nothing to build (and, in the plain mission list, finished): "Hide handled" (on
+// by default, remembered on this browser) keeps them out of the open lists, and a small "N dismissed" opens the dismissed ones. A stopped, blocked or waiting
+// mission older than 7 days goes under one collapsed group and is not counted as needing you. The server keeps the dismissed list (S.dismissed_missions).
+const OLD_MS = 7 * 864e5;
+let hideHandled = true, showDismissed = false, oldOpen = false;
+try{ hideHandled = localStorage.getItem("quarterdeck.hideHandled") !== "0"; }catch(e){}
+const isOld = x => ["blocked", "awaiting", "idle"].includes(x.state) && !!x.when && Date.now() - new Date(x.when) > OLD_MS;
+function missionSets(limit = 40){
+  const all = recentMissions(limit, true), dis = all.filter(x => x.dismissed), rest = all.filter(x => !x.dismissed);
+  const fin = rest.filter(x => x.state === "done" || x.state === "nothing"), old = rest.filter(isOld);
+  return {all, dis, fin, old, open: rest.filter(x => !fin.includes(x) && !old.includes(x))};
+}
+const missionCompact = x => `<li><button class="mlink title" data-m="${esc(x.id)}" ${act("openMissionPage", x.id)}>${esc(x.title)}</button> ${x.state === "nothing" || x.dismissed ? pill(x.dismissed ? "dismissed" : x.state, x.dismissed ? "Dismissed" : MSTATE[x.state][0]) : ""}<span class="sub"> ${x.project ? esc(x.project) : "no project"}${x.when ? " · " + esc(ago(x.when)) : ""}</span></li>`;
+const oldGroup = old => old.length ? `<div class="old-grp"><button class="mlink link" aria-expanded="${oldOpen}" ${oldOpen ? 'aria-controls="old-list"' : ""} ${act("oldToggle")}>Older than 7 days (${old.length})</button>
+  ${oldOpen ? `<ul id="old-list" class="traj-list">${old.map(missionCompact).join("")}</ul>` : ""}</div>` : "";
+const dismissedList = sets => showDismissed && sets.dis.length ? `<ul id="dismissed-list" class="traj-list" aria-label="Dismissed missions">${sets.dis.map(missionCompact).join("")}</ul>` : "";
+const handledBar = sets => `<div class="handled-bar">${slSwitch("Hide handled", {checked: hideHandled, change: actOn("change", "setHideHandled", T.checked), attrs: 'aria-label="Hide handled missions"'})}
+  ${sets.dis.length ? `<button class="mlink link" aria-pressed="${showDismissed}" ${act("dismissedToggle")}>${sets.dis.length} dismissed</button>` : ""}</div>`;
+function setHideHandled(v){ hideHandled = !!v; try{ localStorage.setItem("quarterdeck.hideHandled", v ? "1" : "0"); }catch(e){} render(); }
+function dismissedToggle(){ showDismissed = !showDismissed; render(); }
+function oldToggle(){ oldOpen = !oldOpen; render(); }
 // Home's Mission trajectory: one self-contained card (it reads recentMissions(), MSTATE and the kit helpers and nothing else on this page), so a later
 // page can move it whole. Open missions come first and large, each naming its project and what is next; finished ones are one small collapsed line.
 let trajOpen = false;
 function trajToggle(){ trajOpen = !trajOpen; render(); }
 function trajectoryCard(f){
-  const all = recentMissions(40), open = all.filter(x => x.state !== "done"), fin = all.filter(x => x.state === "done");
+  const sets = missionSets(60), open = sets.open, fin = sets.fin, all = sets.all;
   const rank = {blocked: 0, awaiting: 1, running: 2};
   open.sort((a, b) => (rank[a.state] ?? 3) - (rank[b.state] ?? 3) || b.when.localeCompare(a.when));
   const next = x => {                                       // what is next, from the kind and the state; nothing here is counted or guessed
     const kind = x.id.split(":")[0];
     if(x.state === "blocked") return "Open it to see why it stopped.";
+    if(x.state === "nothing") return "Nothing is needed. You can close the issue or dismiss it.";
     if(x.state === "running") return "Nothing to do yet. It will say when it needs you.";
     if(x.state === "awaiting") return kind === "brief" ? "Read the brief, then approve it or ask for changes." : kind === "plan" ? "Read the plan and approve it if it looks right."
       : /ticket #/.test(x.title) ? "Review the local branch and merge it yourself." : kind === "panel" ? "Answer the open decision." : "Review the pull request and merge it yourself.";
@@ -1237,12 +1259,12 @@ function trajectoryCard(f){
       <span class="rowcard-top"><b>${esc(x.title)}</b>${pill(x.state, MSTATE[x.state][0])}</span>
       <span class="traj-proj">${x.project ? "in <b>" + esc(x.project) + "</b>" : "no project"}${x.when ? " · " + esc(ago(x.when)) : ""}</span>
       <span class="traj-next">Next: ${esc(next(x))}</span></button>`;
-  const compact = x => `<li><button class="mlink title" data-m="${esc(x.id)}" ${act("openMissionPage", x.id)}>${esc(x.title)}</button><span class="sub"> ${x.project ? esc(x.project) : "no project"}${x.when ? " · " + esc(ago(x.when)) : ""}</span></li>`;
+  const compact = missionCompact;
   const finished = fin.length ? `<div class="traj-fin"><button class="mlink link" aria-expanded="${trajOpen}" ${act("trajToggle")}>Finished recently (${fin.length})</button>
       ${trajOpen ? `<ul id="traj-fin-list" class="traj-list">${fin.map(compact).join("")}</ul>` : ""}</div>` : "";
   const body = open.length ? `<div class="list">${open.map(row).join("")}</div>`
     : emptyState({inline: true, title: all.length ? "Nothing is open." : "Nothing is running.", body: all.length ? "Everything that started has finished." : "A fix, a panel or a run appears here once one has started."});
-  return card(null, body + finished, {kicker: "Mission trajectory", count: f.running ? f.running + " running" : "", actions: `<button class="mlink link" ${act("dockGo", "missions")}>All missions</button>`, cls: "traj", label: "Mission trajectory"});
+  return card(null, body + oldGroup(sets.old) + finished + dismissedList(sets) + handledBar(sets), {kicker: "Mission trajectory", count: f.running ? f.running + " running" : "", actions: `<button class="mlink link" ${act("dockGo", "missions")}>All missions</button>`, cls: "traj", label: "Mission trajectory"});
 }
 // Needs you, as a short list: what is waiting for the owner (the same unacknowledged items the Needs you page lists, plus pull requests waiting for review), each row
 // naming its project or its add-on. `items` and `waiting` are already scoped by the page (all projects on the overview, one project on a project's page).
@@ -1285,11 +1307,12 @@ let finOpen = false;
 function finToggle(){ finOpen = !finOpen; render(); }
 function finishedCard(){
   const runs = S.runs.filter(mine).filter(r => !routine(r)).slice(0, 8).map(r => ({id: runMissionId(r), title: r.duty + (r.detail ? ": " + r.detail.replace(/https?:\/\/\S+\/pull\/(\d+)/, "PR #$1") : ""), project: r.project || "fleet", when: r.at, verdict: r.verdict}));
-  const done = recentMissions(40).filter(x => x.state === "done").slice(0, 8).map(x => ({id: x.id, title: x.title, project: x.project || "no project", when: x.when, verdict: "Done"}));
+  const sets = missionSets(40);
+  const done = [...sets.fin.filter(x => !hideHandled || x.state === "done"), ...(showDismissed ? sets.dis : [])].slice(0, 8).map(x => ({id: x.id, title: x.title, project: x.project || "no project", when: x.when, verdict: x.dismissed ? "Dismissed" : x.state === "nothing" ? "Nothing to build" : "Done"}));
   const rows = [...done, ...runs].filter(x => x.when).sort((a, b) => b.when.localeCompare(a.when)).slice(0, 6);
-  const list = rows.map(x => li({title: mlink(x.id, x.title, "title"), sub: `${esc(x.project)} · ${ago(x.when)}`, end: pill(x.verdict === "Done" ? "good" : verdictClass(x.verdict), x.verdict)})).join("");
-  const body = rows.length ? `<button class="mlink link" aria-expanded="${finOpen}" ${act("finToggle")}>${finOpen ? "Hide" : "Show"} the last ${rows.length}</button>${finOpen ? `<div id="fin-list">${list}</div>${asst ? `<div class="away">${awayText()}</div>` : ""}` : ""}`
-    : `<p class="hint">The first finished run will appear here.</p>`;
+  const list = rows.map(x => li({title: mlink(x.id, x.title, "title"), sub: `${esc(x.project)} · ${ago(x.when)}`, end: pill(x.verdict === "Done" ? "good" : x.verdict === "Dismissed" ? "dismissed" : x.verdict === "Nothing to build" ? "nothing" : verdictClass(x.verdict), x.verdict)})).join("");
+  const body = (rows.length || sets.dis.length ? handledBar(sets) : "") + (rows.length ? `<button class="mlink link" aria-expanded="${finOpen}" ${act("finToggle")}>${finOpen ? "Hide" : "Show"} the last ${rows.length}</button>${finOpen ? `<div id="fin-list">${list}</div>${asst ? `<div class="away">${awayText()}</div>` : ""}` : ""}`
+    : `<p class="hint">The first finished run will appear here.</p>`);
   return card(null, body, {kicker: "Recently finished", count: rows.length || null, label: "Recently finished", cls: "fin"});
 }
 function budgetCard(){
@@ -1555,16 +1578,18 @@ function loadMission(){
 const fixMissionId = r => `fix:${r.panel}#${r.item}`;
 const runMissionId = r => `run:${r.at}|${r.project}|${r.duty}`;
 const attnMissionId = x => x.project && x.at && !isPlace(x.view) ? `run:${x.at}|${x.project}|${x.duty}` : `attn:${x.id}`;
-const MSTATE = {running: ["Running", "blue"], blocked: ["Blocked", "bad"], awaiting: ["Awaiting you", "warn"], done: ["Done", "good"], idle: ["Not started", ""]};
+const MSTATE = {running: ["Running", "blue"], blocked: ["Blocked", "bad"], awaiting: ["Awaiting you", "warn"], done: ["Done", "good"], nothing: ["Nothing to build", "nothing"], idle: ["Not started", ""]};
 const NSTATE = {done: "Done", active: "Active", blocked: "Blocked", awaiting: "Awaiting you", notstarted: "Not started", skipped: "Skipped"};
-const fixStateOf = r => r.status === "running" ? "running" : r.status === "pr" ? "awaiting" : ["failed", "blocked", "abandoned"].includes(r.status) ? "blocked" : "done";
-function recentMissions(limit = 8){
+const fixStateOf = r => r.mstate || (r.status === "running" ? "running" : r.status === "pr" ? "awaiting"
+  : r.status === "nothing" || (["failed", "blocked", "abandoned"].includes(r.status) && /^\s*NO_CHANGE\b/i.test(r.detail || "")) ? "nothing"
+  : ["failed", "blocked", "abandoned"].includes(r.status) ? "blocked" : "done");
+function recentMissions(limit = 8, withDismissed = false){
   const fx = Object.values(S.fixes || {}).filter(mine).map(r => ({id: fixMissionId(r), title: r.title, project: r.project, state: fixStateOf(r), when: r.finished || r.started || ""}));
   const pn = S.panels.filter(mine).filter(p => !p.superseded_by).map(p => ({id: "panel:" + p.id, title: p.headline || p.subject || p.discipline + " panel", project: p.project,
     state: p.status === "running" ? "running" : p.status === "done" ? "done" : "blocked", when: p.finished || p.started || ""}));
   // a cycle (qtdeck cycle) is one mission too; the page reads its record. The only thing it can do is start one (Start a full cycle), never resume or stop it
   const cy = (S.cycles || []).filter(mine).map(c => ({id: "cycle:" + c.id, title: `Cycle · ${Number.isInteger(c.ticket) ? "ticket #" + c.ticket : "#" + c.issue} ${c.title || ""}`.trim(), project: c.project,
-    state: c.status === "running" ? "running" : c.status === "awaiting-review" ? "awaiting" : ["needs-human", "failed", "stopped-cap", "stopped-ceiling"].includes(c.status) ? "blocked" : "done",
+    state: c.status === "running" ? "running" : c.status === "awaiting-review" ? "awaiting" : c.status === "nothing" ? "nothing" : ["needs-human", "failed", "stopped-cap", "stopped-ceiling"].includes(c.status) ? "blocked" : "done",
     when: c.finished || c.started || ""}));
   // a design brief or a sprint plan waiting for you is a mission too; a brief for a new idea has no project yet, so it shows with every project together and under none in particular
   const bf = (S.briefs || []).filter(b => sel ? b.project === sel : true).map(b => ({id: "brief:" + b.id, title: "Brief · " + b.title, project: b.project,
@@ -1572,13 +1597,15 @@ function recentMissions(limit = 8){
       : ["proposed", "changes_requested"].includes(b.status) || b.mockups === "ready" ? "awaiting" : "done", when: b.at || ""}));
   const pl = (S.plans || []).filter(mine).map(p => ({id: "plan:" + p.id, title: `Sprint plan · ${p.project}`, project: p.project,
     state: p.status === "proposed" ? "awaiting" : p.status === "approved" ? "awaiting" : "done", when: p.at || ""}));
-  return [...fx, ...pn, ...cy, ...bf, ...pl].sort((a, b) => b.when.localeCompare(a.when)).slice(0, limit);
+  const dis = S.dismissed_missions || {};
+  return [...fx, ...pn, ...cy, ...bf, ...pl].map(x => ({...x, dismissed: !!dis[x.id]})).filter(x => withDismissed || !x.dismissed)
+    .sort((a, b) => b.when.localeCompare(a.when)).slice(0, limit);
 }
 function missionList(){
-  const rec = recentMissions();
-  return rec.length ? `<div class="mission-list">${rec.map(x => `<button class="mission-li" data-m="${esc(x.id)}" ${act("openMissionPage", x.id)}>
+  const sets = missionSets(60), rec = [...sets.open, ...(hideHandled ? [] : sets.fin)];
+  return sets.all.length ? `${rec.length ? `<div class="mission-list">${rec.slice(0, 30).map(x => `<button class="mission-li" data-m="${esc(x.id)}" ${act("openMissionPage", x.id)}>
       <span class="t">${esc(x.title)}</span><span class="sub">${esc(x.project || "")}${x.when ? " · " + ago(x.when) : ""}</span>
-      ${pill(x.state, MSTATE[x.state][0])}</button>`).join("")}</div>`
+      ${pill(x.state, MSTATE[x.state][0])}</button>`).join("")}</div>` : `<p class="hint">Nothing is open.</p>`}${oldGroup(sets.old)}${dismissedList(sets)}${handledBar(sets)}`
     : emptyState({kicker: "No mission selected", title: "No missions yet.", body: "A fix, a panel or a run shows up here once one has started.", label: "Open the Ledger", click: act("go", "ledger")});
 }
 /* ---- Tickets: say what you want built, check the draft, file it; and the ways forward for a project with no GitHub repo. ----
@@ -1995,7 +2022,7 @@ async function startCycle(){
   if(j.id) openMissionPage("cycle:" + j.id); else go("missions");
 }
 function missionEmpty(){
-  const rec = recentMissions();
+  const rec = missionSets(60).all;
   return cycleCard() + (rec.length ? `<p class="hint" style="margin-bottom:var(--s4)">Pick one to focus on. These are the most recent.</p>` : "") + missionList();
 }
 function pipelineHtml(nodes){
@@ -2016,15 +2043,63 @@ function missionActions(m){
     if(b.rerun && m.kind === "fix" && it){ const pid = m.id.slice(4).split("#")[0]; parts.push(`<span class="fixslot" data-panel="${esc(pid)}" data-item="${it.n}" data-project="${esc(m.project)}" data-title="${esc(it.title || "")}"></span>`); }
   }
   // a fix or a cycle on an issue: a developer can ask for a design brief for that issue. It needs the brief duty switched on for the project.
+  // The hint about adding the duty shows only when the project really lacks it and the mission has no brief; with the duty it is a button; with a brief, a link to it.
   if(m.issue && m.project && (m.kind === "fix" || m.kind === "cycle")){
     const pr = (S.projects || []).find(p => p.name === m.project);
-    parts.push(pr && (pr.duties || []).includes("brief") ? btn("Make a brief for this issue", {size: "small", click: act("briefForIssue", m.project, Number(m.issue))})
-      : `<span class="hint">To make a brief for this issue, add "brief" to the duties of ${esc(m.project)}.</span>`);
+    const made = (S.briefs || []).find(b => b.project === m.project && Number(b.issue) === Number(m.issue));
+    if(made) parts.push(mlink("brief:" + made.id, "Open the brief for this issue", "link"));
+    else if(pr && (pr.duties || []).includes("brief")) parts.push(btn("Make a brief for this issue", {size: "small", click: act("briefForIssue", m.project, Number(m.issue))}));
+    else if(pr) parts.push(`<span class="hint">To make a brief for this issue, add "brief" to the duties of ${esc(m.project)}.</span>`);
   }
   if(!parts.length && m.kind === "fix" && m.state === "idle" && it){ const pid = m.id.slice(4).split("#")[0]; parts.push(`<span class="fixslot" data-panel="${esc(pid)}" data-item="${it.n}" data-project="${esc(m.project)}" data-title="${esc(it.title || "")}"></span>`); }
-  return parts.length ? `<div class="btns mission-actions" style="margin-top:14px">${parts.join("")}</div>` : "";
+  return (parts.length ? `<div class="btns mission-actions" style="margin-top:14px">${parts.join("")}</div>` : "") + missionDoRows(m, parts.some(x => x.includes('variant="primary"')));
 }
-const TONE = {running: "running", blocked: "blocked", awaiting: "awaiting", done: "done", idle: ""};
+// What the owner can do with a finished or stopped mission, each with one line of what it does and what it never does. One primary at most, and none
+// when the row above already has one. The server checks every one again (POST /api/mission/action).
+function missionDoRows(m, hasPrimary){
+  if(m.kind !== "fix" && m.kind !== "cycle") return m.state === "done" || m.state === "blocked" || m.state === "nothing" ? doRows([dismissRow(m)]) : "";
+  const rows = [], repo = ((S.projects || []).find(p => p.name === m.project) || {}).repo || "", pr = m.evidence && m.evidence.pr;
+  let primary = !hasPrimary;
+  const pick = () => { const v = primary ? "primary" : ""; primary = false; return v; };
+  if(m.fix_status === "merged" && pr) rows.push([btn("Open the pull request", {variant: pick(), href: pr}), "Opens the merged pull request on GitHub. Nothing is changed."]);
+  if(m.github && m.github.state === "merged" && m.fix_status && m.fix_status !== "merged")
+    rows.push([btn("Mark as merged", {variant: pick(), click: act("markMerged", m.id)}), "Records here that it merged, after GitHub says so. It never changes anything on GitHub."]);
+  if(m.state === "nothing" && m.kind === "fix" && m.issue && repo){
+    rows.push(m.issue_closed ? [`<span class="hint">Issue #${esc(m.issue)} was closed from here.</span>`, ""]
+      : [btn("Close the issue", {variant: pick(), click: act("closeIssueFor", m.id, repo, Number(m.issue))}), `Closes issue #${esc(m.issue)} on GitHub with a short comment, only after you say yes. It never closes anything else.`]);
+  }
+  if(m.state === "blocked") rows.push([btn("Try again", {variant: pick(), click: act("retryMission", m.id)}), "Starts the same work again within today's budget and limits, after you say yes. It never changes what already ran."]);
+  if(["done", "nothing", "blocked"].includes(m.state)) rows.push(dismissRow(m));
+  return doRows(rows);
+}
+const dismissRow = m => m.dismissed ? [btn("Undo dismiss", {click: act("dismissMission", m.id, true)}), "Brings it back into the lists."]
+  : [btn("Dismiss", {click: act("dismissMission", m.id, false)}), "Dismiss only hides it here. It stays in History and you can undo it."];
+const doRows = rows => rows.length ? `<div class="mact" role="group" aria-label="What you can do">${rows.map(([b, why]) => `<div class="mact-row">${b}${why ? `<span class="hint">${why}</span>` : ""}</div>`).join("")}</div>` : "";
+async function missionPost(id, action, extra){
+  const j = await post("/api/mission/action", {id, action, ...extra});
+  if(!j) return null;
+  delete missionCache[id]; try{ await tick(); }catch(e){}
+  render(); return j;
+}
+async function dismissMission(id, undo){
+  const j = await missionPost(id, undo ? "undo" : "dismiss");
+  if(j) toast(undo ? "Brought back into the lists." : "Dismissed. It is kept in History, and you can undo it here.");
+}
+async function markMerged(id){
+  const j = await missionPost(id, "mark_merged", {});
+  if(j) toast("Marked as merged.");
+}
+async function closeIssueFor(id, repo, issue){
+  if(!await confirmDlg(`Quarterdeck will close issue #${issue} in ${repo} on GitHub and leave a short comment saying it was already fixed. Nothing else is changed. Close it?`, {title: "Close the issue?", ok: "Yes, close the issue"})) return;
+  const j = await missionPost(id, "close_issue", {confirm: true});
+  if(j) toast(`Issue #${issue} closed.`);
+}
+async function retryMission(id){
+  if(!await confirmDlg("Quarterdeck will start the same work again. It uses the same budget and limits as before, and it will not start if one is already running. Start it?", {title: "Try again?", ok: "Yes, start it"})) return;
+  const j = await missionPost(id, "retry", {confirm: true});
+  if(j) toast("Started again. It appears here when it has something to say.");
+}
+const TONE = {running: "running", blocked: "blocked", awaiting: "awaiting", done: "done", nothing: "nothing", idle: ""};
 // A cycle on a local ticket: the crew's steps as the record holds them (a stage that did not apply is "Skipped" with its reason, never a failure), the local
 // branch and the command that shows it as plain selectable text, and one line of what comes next.
 function ticketMission(m){
@@ -5141,6 +5216,7 @@ const ACTIONS = {
   openWhatChanged, palGo, pickCase, planAct, planMove, projSwitch, proposeMissionPlan, publishShowcase, queueAction, replayStep, restartDemo, rhythmScope,
   rowClick, rowKey, runHarbourmaster, runNext, saveFocus, saveMissionDraft, saveMissionEdit, saveShowcaseDraft, saveShowcaseEdit, schedAction,
   selectAddon, selectPlace, selectProject, setBilling, setBrainMode, setCapSave, setFleetView, setHandsFree, setKeyRemove, setKeySave, setLens, setSizeBy, setTheme, sgSpeakToggle, showGuardrails, showLog, showPrivacy,
+  setHideHandled, dismissedToggle, oldToggle, dismissMission, markMerged, closeIssueFor, retryMission,
   startCycle, startMissionPanel, stopRun, talkSubmit, thinkToggle, tlClick, tlHover, tlSet, toggleCalm, toggleDemo, toggleLedger,
   toggleMissionForm, toggleMobileMenu, toggleOld, toggleReplay, toggleSched, toggleSel, toggleShowcaseForm, unpublishShowcase, unqueue, workOn,
   grEdit, grNew, grAdd, grRemove, grMove, grSave, openProject, openProjects, addonNeeds, homeDay, finToggle, trajToggle, tkRequest, tkDraft, tkFile, tkDiscard, tkRepoName, tkRepoSave, tkRepoCreate, tkMission,

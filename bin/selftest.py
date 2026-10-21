@@ -3450,8 +3450,8 @@ _r = _m("fix:pp#1")
 check("steps: a running fix still shows its pending steps as Not started, and has no line", _r["state"] == "running" and _nostart(_r) == ["verify", "review"] and _r["line"] == "")
 _fxd = lambda st, **kw: _m("fix:pp#1", {"pp#1": {**_fx["pp#1"], "status": st, "step": None, "plan": None, "issue": None, "pr": None, "verdict": None, **kw}})
 _r = _fxd("nothing", detail="the code already does it")
-check("steps: a fix with nothing to build is done, every step Skipped with the reason, and the line says nothing more happens",
-      _r["state"] == "done" and not _nostart(_r) and set(_states(_r)) == {"skipped"} and _r["pipeline"][0]["note"] == "Not needed: nothing to build" and "nothing to build" in _r["line"])
+check("steps: a fix with nothing to build is in the calm 'nothing' state (not Done, not Blocked), every step Skipped with the reason, and the line says nothing more happens",
+      _r["state"] == "nothing" and not _nostart(_r) and set(_states(_r)) == {"skipped"} and _r["pipeline"][0]["note"] == "Not needed: nothing to build" and "nothing to build" in _r["line"])
 _r = _fxd("taken")
 check("steps: a fix someone else took is done with no Not started step, and says who", _r["state"] == "done" and not _nostart(_r) and "Someone else" in _r["line"] and _r["pipeline"][2]["note"] == "Not needed: taken by someone else")
 _r = _m("fix:pp#1", {"pp#1": {**_pr, "status": "merged"}})
@@ -3459,8 +3459,8 @@ check("steps: a merged fix is done at every step and says the pull request was m
 _r = _m("fix:pp#1", {"pp#1": {**_pr, "status": "closed"}})
 check("steps: a fix closed without merging keeps Review as Skipped and says so", _r["state"] == "done" and not _nostart(_r) and _states(_r)[4] == "skipped" and "closed without merging" in _r["line"])
 _r = _mcy({**_cy, "status": "nothing", "pr": None, "final": "nothing to build", "stages": _cy["stages"][:2]})
-check("steps: a cycle with nothing to build is done, its later groups Skipped with the reason, and the line says nothing is waiting",
-      _r["state"] == "done" and not _nostart(_r) and _states(_r)[2:] == ["skipped"] * 3 and _r["pipeline"][2]["note"] == "Not needed: nothing to build" and "nothing is waiting" in _r["line"])
+check("steps: a cycle with nothing to build is in the calm 'nothing' state, its later groups Skipped with the reason, and the line says nothing is waiting",
+      _r["state"] == "nothing" and not _nostart(_r) and _states(_r)[2:] == ["skipped"] * 3 and _r["pipeline"][2]["note"] == "Not needed: nothing to build" and "nothing is waiting" in _r["line"])
 _r = _mcy(_cy)
 check("steps: a cycle waiting for review keeps its not-yet-reached group as Not started (it is still to come), and its line is the existing review sentence",
       _r["state"] == "awaiting" and _nostart(_r) == ["seal"] and "Review the branch" not in _r["line"] and _r["line"].startswith("u is open"), _r["line"])

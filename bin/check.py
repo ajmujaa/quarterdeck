@@ -54,6 +54,7 @@ LABELS = {
     "selftest-live.sh": "live work: Running now on Home, a project's Live work, sessions told from duties, no detail reported never invented, Enable on the Crew page with Available (N) folded, Demo shows invented Relay data",
     "selftest-projects.sh": "Home and Projects: Home is the person (five things and one count line), Projects shows a card per project and Open filters the tabs, the scope is in the address, the scope box exists only where it applies, Calm, a phone width",
     "selftest-onboarding.sh": "a smoother first run: the Homebrew formula and npm shim (offline), the first-run checklist and its API, the narrow Copy allowance in the privacy scan, the first-run panel and the guided attach panel in a browser",
+    "selftest-nested.sh": "a suite that needs its own sandbox skips inside the sandbox and runs everywhere else",
     "selftest-prove-live.sh": "Prove shows its output while it runs (a polled small JSON, text only, redacted), keeps the last 60 lines and the line that failed, says what to do next, and Stop keeps nothing",
     "selftest-flow.sh": "the whole flow without a model: attach a sample React app (survey, missing docs by the scribe, the ready checklist), tickets, a cycle to a local branch on the CLI and the dashboard",
 }

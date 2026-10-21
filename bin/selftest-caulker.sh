@@ -4,6 +4,7 @@
 # own branch, or run more than three cycles. Run against stand-ins for the model (which edits a throwaway worktree
 # through a hook) and gh, and a real git repository of invented files.
 source "$(dirname "${BASH_SOURCE[0]}")/selftest-lib.sh"
+st_skip_if_nested_sandbox selftest-caulker
 st_init caulker
 st_repo
 st_pr 1 feat-bug src/calc.js $'// GOOD\nfunction add(a, b) { return a - b }\n' tests/calc.test.js $'assert(add(1, 2) === 3)\n' lib/crypto/key.js $'export const k = 1\n' src/other.js $'x\n'

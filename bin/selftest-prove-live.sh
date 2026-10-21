@@ -122,20 +122,24 @@ chk("the Ready item carries the same tail for the card's Show the output, and is
 chk("nothing is left behind: no live file, no copy, no lock", not [f for f in os.listdir(T + "/workspace") if f.startswith(("prove-live", "prove-tail", "wt-relay"))] and not os.path.exists(T + "/state/prove-relay.lock"))
 print("marker " + ("1" if "QD_SANDBOX_MARKER=1" in ls else "0") + " " + v["sandbox"])
 PY
-OUT=$(python3 "$T/p1.py" 2>&1)
-while IFS= read -r line; do
-  case "$line" in
-    "ok "*)   printf '  ok    %s\n' "${line#ok }"; passed=$((passed + 1)) ;;
-    "FAIL "*) printf '  FAIL  %s\n' "${line#FAIL }"; fails=$((fails + 1)) ;;
-    "marker "*) MARK=${line#marker } ;;
-    *) [ -z "$line" ] || echo "        $line" ;;
+if ! st_can_nest_sandbox; then
+  st_skip "1 the live box over a slow passing command: Prove starts a sandboxed project command, and a sandbox cannot start inside the sandbox this suite is already in"
+else
+  OUT=$(python3 "$T/p1.py" 2>&1)
+  while IFS= read -r line; do
+    case "$line" in
+      "ok "*)   printf '  ok    %s\n' "${line#ok }"; passed=$((passed + 1)) ;;
+      "FAIL "*) printf '  FAIL  %s\n' "${line#FAIL }"; fails=$((fails + 1)) ;;
+      "marker "*) MARK=${line#marker } ;;
+      *) [ -z "$line" ] || echo "        $line" ;;
+    esac
+  done <<<"$OUT"
+  case "${MARK:-0 none}" in
+    "1 "*) ck "a project command is told it is in the sandbox: QUARTERDECK_IN_SANDBOX=1" 'true' ;;
+    "0 none") st_skip "no sandbox on this machine (neither sandbox-exec nor a usable bubblewrap): the marker is only set where a sandbox is applied" ;;
+    *) ck "a project command is told it is in the sandbox: QUARTERDECK_IN_SANDBOX=1" 'false' ;;
   esac
-done <<<"$OUT"
-case "${MARK:-0 none}" in
-  "1 "*) ck "a project command is told it is in the sandbox: QUARTERDECK_IN_SANDBOX=1" 'true' ;;
-  "0 none") st_skip "no sandbox on this machine (neither sandbox-exec nor a usable bubblewrap): the marker is only set where a sandbox is applied" ;;
-  *) ck "a project command is told it is in the sandbox: QUARTERDECK_IN_SANDBOX=1" 'false' ;;
-esac
+fi
 
 # ---- 2. a command that fails: the line it stopped at, and what to do next ----
 setverify "echo 'ok first thing'; echo 'ok second thing'; echo 'FAIL the real problem is here'; echo '3 passed, 1 failed'; exit 1"

@@ -14,6 +14,7 @@
 #   7  qtdeck cycle --ticket: the record, the skipped stages, resume, report only
 ST_PROVIDER=fake
 source "$(dirname "${BASH_SOURCE[0]}")/selftest-lib.sh"
+st_skip_if_nested_sandbox selftest-tickets
 st_init planner purser panel shipwright
 cp "$REAL"/bin/{tickets.py,repo.py,attach.py,scan.py,packs.py,qtdeck,cycle,survey.py,ready.py,docs.py,prove} "$T/bin/"
 cp -R "$REAL/packs" "$T/packs"

@@ -26,7 +26,7 @@ for m in re.finditer(r"""\b(?:querySelector(?:All)?|closest|matches)\(\s*["'`]([
 for m in re.finditer(r"""(?:"|\b)(tone-|c-|dot |pill |sev|stance |rowcard |node |callout |chip )[\w${}\-. ]*""", src): take(m.group(0))
 # tone-<state>, c-<class>, <state> words and a stance's own word are built by concatenation
 dyn = ("tone-", "c-")
-KEEP = {"good", "dead", "stale", "skipped", "you", "off", "sl-toast-stack", "agree", "dispute", "extend", "sev2", "sev3"}
+KEEP = {"good", "dead", "stale", "skipped", "nothing", "dismissed", "you", "off", "sl-toast-stack", "agree", "dispute", "extend", "sev2", "sev3"}
 dead = sorted(c for c in classes if c not in used and c not in KEEP and not c.startswith(dyn))
 dead += sorted(c for c in classes if c.startswith(dyn) and not re.search(re.escape(c.split("-")[0] + "-"), src))
 print("\n".join(dead) if dead else "no dead classes")

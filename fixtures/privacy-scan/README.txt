@@ -1,0 +1,1 @@
+Samples for the privacy scan test (bin/selftest-onboarding.sh). Each bad-*.txt is code the scan must refuse; ok-copy.txt is the one form it allows, and only as a function named copyCommand in dashboard/index.html. They are .txt so the scan does not read them as code.

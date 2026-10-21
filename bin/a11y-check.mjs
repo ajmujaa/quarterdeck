@@ -26,7 +26,7 @@ const QUICK = process.argv.includes("--quick");
 const ALL_VIEWS = ["overview", "projects", "brain", "inbox", "missions", "prs", "board", "timeline", "operations", "ledger", "spend", "log", "crew", "fleet", "connections", "documents", "panels", "notes", "showcase", "settings"];
 // a view may name a project to be on: "missions@saltpan-blog" is the Missions page with that Demo project chosen (a project with no GitHub repo, so the repo options and the tickets list are drawn);
 // "projects@wayfarer-web" is that project's own page (the Projects overview when no project is named)
-const VIEWS = String(arg("views", QUICK ? "overview,projects,projects@wayfarer-web,crew,settings,missions@saltpan-blog" : ALL_VIEWS.join(",") + ",projects@wayfarer-web,projects@saltpan-blog,missions@saltpan-blog,missions@wayfarer-web")).split(",");
+const VIEWS = String(arg("views", QUICK ? "overview,projects,projects@wayfarer-web,crew,crew@wayfarer-web,fleet,settings,missions@saltpan-blog" : ALL_VIEWS.join(",") + ",projects@wayfarer-web,projects@saltpan-blog,missions@saltpan-blog,missions@wayfarer-web")).split(",");
 // the pages that have a project scope, and so show the project select and the scope chip; every other page shows neither (see Navigation, the scope table, in dashboard/UI.md)
 const SCOPED = new Set(["projects", "inbox", "missions", "prs", "board", "ledger", "timeline", "operations", "log", "crew", "fleet", "panels", "documents", "notes"]);
 const THEMES = String(arg("themes", QUICK ? "dark" : "dark,light")).split(",");

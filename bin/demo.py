@@ -27,6 +27,8 @@ SEED = 7
 
 # ---- the fictional world ------------------------------------------------------
 
+SUGGESTED = {"wayfarer-web": [{"duty": "joiner", "why": "invented for the demo: it reviews the interface for small screens"}],
+             "wayfarer-mobile": [{"duty": "lookout", "why": "invented for the demo: the app has screens to look at"}]}
 PROJECTS = {
     "wayfarer-mobile": {"stack": "TypeScript with React Native, tests by Jest, lint by ESLint, package manager npm", "summary": "Trip planner for iOS and Android, offline first", "kind": "mobile app",
                         "duties": ["surveyor", "foreman", "joiner", "shipwright", "panel", "inspector", "harbourmaster", "purser", "trials", "planner", "logkeeper", "bosun"],
@@ -424,6 +426,13 @@ class World:
                                           "verdict": "PROVEN", "detail": "opened by Quarterdeck",
                                           "plan": "wayfarer-web-plan-29.md" if item == 1 else "the ruling item itself, mechanical, no developer panel",
                                           **({"diff": DEMO_DIFF} if item == 1 else {})}
+        # fixes started from a board issue (panel "issue"): one the shipwright found already fixed, one stopped weeks ago, one stopped and then dismissed
+        for n, title, status, detail, mins in ((41, "Round the totals on the invoice page", "blocked", "NO_CHANGE already fixed on main in 4f2a9c1e", 300),
+                                               (12, "Remember the last filter on the list page", "failed", "the shipwright could not get the tests to pass", 60 * 24 * 21),
+                                               (18, "Show the time in the viewer's time zone", "failed", "the shipwright ran out of budget before it finished", 60 * 24 * 2)):
+            out[f"issue#{n}"] = {"project": "wayfarer-web", "panel": "issue", "item": n, "title": title, "kind": "change", "tier": "routine", "batch": None,
+                                 "status": status, "step": None, "lock": f"fix-wayfarer-web-issue-{n}", "fixrun": f"fix-i{n}", "started": self.ago(minutes=mins + 6),
+                                 "finished": self.ago(minutes=mins), "issue": n, "pr": None, "verdict": None, "detail": detail, "plan": None}
         running, finished, _ = self.timeline(t)
         for j in running + finished:
             if j.get("panel") is None:
@@ -962,10 +971,12 @@ class World:
             "crew": [{"name": n, "discipline": d, "panels": d.split(","), "seat": s, "bias": b} for n, d, s, b in CREW],
             "missions": self.missions(), "showcase": self.showcase,
             "inbox": self.inbox(t, runs), "panels": panels, "fixes": fixes, "cycles": self.cycle_list(), "fixqueue": self.queue,
+            "dismissed_missions": {"fix:issue#18": {"at": self.ago(minutes=30)}},
+            "first_run": False,                    # Demo is what the first-run screen's button switches on: it never asks again here
             "briefs": self.maker.summary() if self.maker else [], "plans": self.maker.plan_summary() if self.maker else [],
             "spend": self.spend(t), "schedules": self.schedules(), "docs": self.docs(),
             "projects": [{"name": k, "repo": "" if k in NO_REPO else f"{ORG}/{k}", "summary": v["summary"], "duties": v["duties"], "guardrails": GUARDRAILS,
-                          "verify": v["verify"], "board": None, "cycle": k == "wayfarer-web"} for k, v in sorted(PROJECTS.items())],
+                          "verify": v["verify"], "board": None, "cycle": k == "wayfarer-web", "suggested": SUGGESTED.get(k, [])} for k, v in sorted(PROJECTS.items())],
             "duties": [{"name": n, "summary": f"{n}: {s}", "role": s} for n, s in DUTIES],
             "runs": runs[-200:][::-1],
             "system": {"dry_run": True, "model": "demo", "max_items": "5", "timeout": "900", "rounds": "2", "running": len(running)},
@@ -1163,6 +1174,23 @@ class World:
                  {"id": "e0a9b811", "state": "ended", "worktree": "wayfarer-docs", "branch": "docs/export-guide", "turns": 2, "running_agents": [],
                   "agents_used": {"planner": 1}, "started_ago": 40000, "last_ago": 38000}]}]}
 
+    def live_inputs(self, state):
+        """What S.live is composed from in Demo mode (the dashboard hands it to livework.live_work, the function the real one uses): invented Relay sessions and worktrees,
+        the made-up projects and now."""
+        now = time.time()
+        fl = self.fleet()["sources"][1]
+        tree = lambda name, branch, stage, ago, pr=None, changed=0: {"name": name, "main": False, "branch": branch, "changed": changed, "last_commit_ago": ago, "touched_ago": ago,
+                                                                       "ahead": 1, "behind": 0, "pr": pr, "activity": "active", "stage": stage}
+        web = {"id": "relay-web", "title": "Relay", "project": "wayfarer-web", "last_event": now - 40, "worktrees": [
+            tree("web-search", "feat/search-filters", "draft", 900, {"number": 91, "title": "Add filters to trip search", "state": "open", "draft": True, "review": "", "checks_ok": 3, "checks_bad": 0, "checks_wait": 1}, 2)],
+            "sessions": [{"id": "a4410c20", "state": "working", "worktree": "web-search", "branch": "feat/search-filters", "turns": 4, "running_agents": ["reviewer"], "agents_used": {"reviewer": 1},
+                          "started_ago": 2400, "last_ago": 40, "state_ago": 300}]}
+        scratch = {"id": "relay-scratch", "title": "Relay", "project": "", "last_event": now - 5400, "worktrees": [],
+                   "sessions": [{"id": "c90ee1f2", "state": "idle", "worktree": "scratch", "branch": "", "turns": 1, "running_agents": [], "agents_used": {}, "started_ago": 7000, "last_ago": 5400, "state_ago": 5400}]}
+        api = {"id": "relay-api", "title": "Relay", "project": fl["project"], "last_event": now - 12, "worktrees": fl["worktrees"], "sessions": fl["sessions"]}
+        projects = {p["name"]: p for p in state["projects"]}
+        return [api, web, scratch], projects, now
+
     def connections(self):
         """Invented services in each state, so the page can be seen full."""
         def row(i, label, what, state, ago, error="", cred=True, local=False, others=()):
@@ -1342,7 +1370,7 @@ class World:
             return 400, {"error": "Demo mode: nothing is drafted, filed or created."}
         if path in ("/api/ready/prove", "/api/docs/draft", "/api/docs/apply", "/api/project/duties"):
             return 400, {"error": "Demo mode: nothing is run, drafted or changed."}
-        if path == "/api/project/guardrails":
+        if path in ("/api/project/guardrails", "/api/mission/action"):
             return 400, {"error": "Demo mode: nothing is changed."}
         if path == "/api/work":
             project, issue, action = b.get("project"), b.get("issue"), b.get("action")

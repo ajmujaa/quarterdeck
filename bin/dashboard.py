@@ -22,6 +22,7 @@ import atexit
 import hashlib
 import importlib.util
 import json
+import shlex
 import os
 import re
 import secrets
@@ -42,6 +43,7 @@ from pathlib import Path
 from urllib.parse import urlparse, parse_qs, quote
 
 import home as _home
+import firstrun as _firstrun                            # the first-run checklist and its one small state file (bin/firstrun.py)
 import markers as _markers                              # the marks written into GitHub bodies (bin/markers.py)
 import safegit as _safegit
 import packs as _packs_mod                              # stack and infrastructure packs (bin/packs.py)
@@ -60,6 +62,7 @@ PROJECTS_FILE = HOME / "config" / "projects.json"
 SCHEDULES_FILE = STATE / "schedules.json"
 MISSIONS_FILE = STATE / "missions.json"
 INBOX_ACK_FILE = STATE / "inbox_ack.json"
+DISMISSED_FILE = STATE / "dismissed-missions.json"
 SHOWCASE_FILE = STATE / "showcase.json"
 PORT = int(os.environ.get("QUARTERDECK_DASHBOARD_PORT", "7878"))
 
@@ -320,6 +323,33 @@ def demo_set(on, restart=False):
         DEMO["world"] = None
 
 
+def firstrun_projects():
+    """The registered projects, read straight from the registry file so the answer is the same in Demo mode (the first-run screen reads no project data)."""
+    try:
+        d = json.loads(PROJECTS_FILE.read_text())
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def firstrun_api(b=None):
+    """GET /api/firstrun -> (200, {first, items, done_at}); POST {action: demo|dismiss, confirm: true} records it in state/first-run.json and, for demo,
+    switches Demo on through the same switch as the Demo toggle. Nothing else is written; no secret is read."""
+    if b is None:
+        return 200, _firstrun.status(HOME, firstrun_projects())
+    if b.get("confirm") is not True:
+        return 400, {"error": "confirm is required: this records that you have seen the first-run screen"}
+    if b.get("action") not in ("demo", "dismiss"):
+        return 400, {"error": "action must be demo or dismiss"}
+    try:
+        st = _firstrun.record(HOME, b["action"])
+    except OSError as e:
+        return 500, {"error": "could not save it: " + type(e).__name__}
+    if b["action"] == "demo":
+        demo_set(True)
+    return 200, {"first": False, "done_at": st.get("done_at"), "demo": demo_on()}
+
+
 # ---- extensions ---------------------------------------------------------------
 # An optional add-on is one file, bin/ext_<name>.py, with one function, install(core). It is handed this module's own
 # names (read live, so a test that moves STATE moves it too) and fills the hooks below; nothing in this file knows what
@@ -521,7 +551,7 @@ def relocate_state(root):
     hand back to restore_state. Logs move too, so a test never writes the real ones."""
     names = {"STATE": root, "LOGS": root.parent / (root.name + "-logs"), "PANELS": root / "panels",
              "SCHEDULES_FILE": root / "schedules.json", "MISSIONS_FILE": root / "missions.json",
-             "INBOX_ACK_FILE": root / "inbox_ack.json", "SHOWCASE_FILE": root / "showcase.json",
+             "INBOX_ACK_FILE": root / "inbox_ack.json", "DISMISSED_FILE": root / "dismissed-missions.json", "SHOWCASE_FILE": root / "showcase.json",
              "FIXES": root / "fixes", "CYCLES": root / "cycles", "FIXQ": root / "fixqueue", "USAGE_MARK": root / "usage-limit",
              "SPEND": root / "spend.jsonl", "CAPTURE": root / "capture.jsonl",
              "CONNECTORS": root / "connectors"}
@@ -1039,7 +1069,7 @@ def _sync_fix_status():
         if not repo or project not in rulings:
             continue
         try:
-            r = subprocess.run(["gh", "pr", "list", "-R", repo, "--state", "all", "--limit", "100",
+            r = subprocess.run([gh_bin(), "pr", "list", "-R", repo, "--state", "all", "--limit", "100",
                                 "--json", "number,url,state,mergedAt,body,closingIssuesReferences"],
                                capture_output=True, text=True, timeout=60)
             prs = json.loads(r.stdout or "[]") if r.returncode == 0 else None
@@ -1058,7 +1088,105 @@ def _sync_fix_status():
             FIXES.mkdir(parents=True, exist_ok=True)
             write_json(f, rec)
             written += 1
-    return written
+    return written + _sync_pr_records()
+
+
+# ---- a pull request that merged, whatever started the fix -----------------------
+# The pass above only knows records tied to a panel ruling. A fix started from a GitHub issue is stored as state/fixes/issue-<n>.json
+# (panel "issue") and would say "Awaiting you" for ever. So every record with a pull request URL is asked about, by that URL, whatever its panel:
+# `gh pr view <url> --json state,mergedAt,mergeCommit`. Merged becomes merged, closed becomes closed, open and "gh failed" change nothing, and a
+# record the owner marked (source "owner") or that is merged already is never moved back.
+PR_URL = re.compile(r"https://github\.com/[\w.-]+/[\w.-]+/pull/\d+")
+_pr_checked = {}                       # pull request URL -> (time, answer): what a mission being opened may reuse for a few seconds
+PR_REUSE = 20
+
+
+def gh_bin():
+    """The gh program: QUARTERDECK_GH names a stand-in (as the shell scripts honour it), else the one on PATH."""
+    return os.environ.get("QUARTERDECK_GH") or "gh"
+
+
+def pr_state(url, timeout=20):
+    """What GitHub says about one pull request: {"state": "merged"|"pr"|"closed", "at": time|None, "commit": sha|None}, or None when it cannot say
+    (no gh, a bad URL, a failure, a timeout). Never raises."""
+    if not isinstance(url, str) or not PR_URL.fullmatch(url) or demo_on():
+        return None
+    try:
+        r = subprocess.run([gh_bin(), "pr", "view", url, "--json", "state,mergedAt,mergeCommit"], capture_output=True, text=True, timeout=timeout)
+        if r.returncode != 0:
+            return None
+        j = json.loads(r.stdout or "{}")
+    except Exception:
+        return None
+    st = PR_STATUS.get(j.get("state")) if isinstance(j, dict) else None
+    if not st:
+        return None
+    oid = (j.get("mergeCommit") or {}).get("oid") if isinstance(j.get("mergeCommit"), dict) else None
+    return {"state": st, "at": j.get("mergedAt") if isinstance(j.get("mergedAt"), str) else None,
+            "commit": oid if isinstance(oid, str) and re.fullmatch(r"[0-9a-f]{7,40}", oid) else None}
+
+
+def apply_pr_state(rec, info):
+    """Pure: the record as GitHub's answer changes it, or None when it stays. An open pull request, a running fix, a merged record and a record
+    the owner marked are left alone; a pull request that merged after being closed is a fact and wins."""
+    if not isinstance(rec, dict) or not info or rec.get("status") in ("running", "merged") or rec.get("source") == "owner":
+        return None
+    if info["state"] == "merged":
+        return {**rec, "status": "merged", "merged": info.get("at"), "merge_commit": info.get("commit"), "source": "github",
+                "detail": "The pull request was merged."}
+    if info["state"] == "closed" and rec.get("status") == "pr":
+        return {**rec, "status": "closed", "source": "github", "detail": "The pull request was closed without merging."}
+    return None
+
+
+def fix_path(rec):
+    return FIXES / f'{rec["panel"]}-{rec["item"]}.json'
+
+
+def refresh_fix(rec, timeout, reuse=0):
+    """Ask GitHub about one fix record's pull request and write what changed; the record now (changed or not). A record that is not waiting on a
+    pull request is not asked about."""
+    if not isinstance(rec, dict) or rec.get("status") not in ("pr", "closed") or not isinstance(rec.get("pr"), str):
+        return rec
+    hit = _pr_checked.get(rec["pr"])
+    if hit and time.time() - hit[0] < reuse:
+        info = hit[1]
+    else:
+        info = pr_state(rec["pr"], timeout)
+        if reuse:
+            _pr_checked[rec["pr"]] = (time.time(), info)       # only a mission being opened keeps the answer; the scheduled pass always asks
+    new = apply_pr_state(rec, info)
+    if not new:
+        return rec
+    cur = read_json(fix_path(rec), None)                    # the fix may have moved on while GitHub was being asked
+    if isinstance(cur, dict) and (cur.get("status") != rec.get("status") or cur.get("source") == "owner"):
+        return cur
+    FIXES.mkdir(parents=True, exist_ok=True)
+    write_json(fix_path(rec), new)
+    return new
+
+
+def _sync_pr_records():
+    """The scheduled pass: every fix record with a pull request URL, whatever its panel."""
+    if demo_on():
+        return 0
+    n = 0
+    for rec in list(fix_index(running_locks()).values()):
+        if rec.get("status") in ("pr", "closed") and refresh_fix(rec, 20) is not rec:
+            n += 1
+    return n
+
+
+def open_fix_mission(mid):
+    """A fix mission is being opened: refresh that one record now, not in up to 10 minutes. Bounded (a short timeout, and never again within a few
+    seconds), and quiet when GitHub cannot be asked: the page then shows what the record already says."""
+    m = re.fullmatch(r"fix:([\w.-]+)#(\d+)", mid or "")
+    if not m or demo_on():
+        return
+    try:
+        refresh_fix(fix_index(running_locks()).get(f"{m.group(1)}#{m.group(2)}"), 2.5, PR_REUSE)
+    except Exception as e:
+        log_error("open_fix_mission", e)
 
 
 # ---- the fix queue ------------------------------------------------------------
@@ -1338,11 +1466,11 @@ def _mission_state(kind, r):
     """The state word the page gives a mission (dashboard/index.html recentMissions + MSTATE), so a count here equals the rows there."""
     st = r.get("status")
     if kind == "fix":
-        return "running" if st == "running" else "awaiting" if st == "pr" else "blocked" if st in ("failed", "blocked", "abandoned") else "done"
+        return _fix_state(r)
     if kind == "panel":
         return "running" if st == "running" else "done" if st == "done" else "blocked"
     if kind == "cycle":
-        return ("running" if st == "running" else "awaiting" if st == "awaiting-review"
+        return ("running" if st == "running" else "awaiting" if st == "awaiting-review" else "nothing" if st == "nothing"
                 else "blocked" if st in ("needs-human", "failed", "stopped-cap", "stopped-ceiling") else "done")
     if kind == "brief":
         mk = r.get("mockups")
@@ -1351,11 +1479,12 @@ def _mission_state(kind, r):
     return "awaiting" if st in ("proposed", "approved") else "done"          # plan
 
 
-def project_overview(projects, agents, runs, inbox, fixes, cycles, panels, briefs, plans, spend_rows, since_today, since_week, stack_of=None):
+def project_overview(projects, agents, runs, inbox, fixes, cycles, panels, briefs, plans, spend_rows, since_today, since_week, stack_of=None, dismissed=None, now=None):
     """One small summary per registered project, for the Projects page. Pure: every figure is counted from the lists the state already holds,
     never estimated. needs/top come from the unacknowledged inbox items of that project (the list Needs you shows, add-on items have no project
     and are counted on the page); last run from the runs ledger; spend from the spend ledger rows that name the project; the mission counts
-    use the page's own state words. state: blocked (a failed run or blocker waits), needs you, running, or idle."""
+    use the page's own state words; "nothing to build" and a dismissed mission are not open, and a stopped, blocked or waiting mission older than OLD_DAYS days
+    is not counted as open either (the page lists those under "Older than 7 days"). state: blocked (a failed run or blocker waits), needs you, running, or idle."""
     out = []
     names = sorted(projects) if isinstance(projects, dict) else sorted(p.get("name") for p in projects)      # the registry (a dict) or the state's list
     for name in names:
@@ -1365,11 +1494,14 @@ def project_overview(projects, agents, runs, inbox, fixes, cycles, panels, brief
         ran = [r for r in runs if r.get("project") == name and r.get("at")]
         last = max(ran, key=lambda r: r["at"]) if ran else None
         sp = [r for r in spend_rows if r.get("project") == name]
-        states = ([_mission_state("fix", r) for r in (fixes or {}).values() if r.get("project") == name]
-                  + [_mission_state("cycle", r) for r in cycles if r.get("project") == name]
-                  + [_mission_state("panel", r) for r in panels if r.get("project") == name and not r.get("superseded_by")]
-                  + [_mission_state("brief", r) for r in briefs if r.get("project") == name]
-                  + [_mission_state("plan", r) for r in plans if r.get("project") == name])
+        rows = ([(f"fix:{r.get('panel')}#{r.get('item')}", _mission_state("fix", r), r.get("finished") or r.get("started")) for r in (fixes or {}).values() if r.get("project") == name]
+                + [(f"cycle:{r.get('id')}", _mission_state("cycle", r), r.get("finished") or r.get("started")) for r in cycles if r.get("project") == name]
+                + [(f"panel:{r.get('id')}", _mission_state("panel", r), r.get("finished") or r.get("started")) for r in panels if r.get("project") == name and not r.get("superseded_by")]
+                + [(f"brief:{r.get('id')}", _mission_state("brief", r), r.get("at")) for r in briefs if r.get("project") == name]
+                + [(f"plan:{r.get('id')}", _mission_state("plan", r), r.get("at")) for r in plans if r.get("project") == name])
+        states = [st for _, st, _ in rows]
+        counted = [st for mid, st, when in rows
+                   if mid not in (dismissed or {}) and not (st in ("blocked", "awaiting") and mission_is_old(when, now))]
         running = (sum(1 for a in agents if a.get("project") == name and a.get("status") == "running")
                    + sum(1 for s in states if s == "running"))
         bad = bool(top) and any((x.get("severity") in ("BLOCKED", "ERROR", "FAILED", "bad") or x.get("blocker") == "config") for x in mine)
@@ -1381,7 +1513,7 @@ def project_overview(projects, agents, runs, inbox, fixes, cycles, panels, brief
             "last_run": {"at": last["at"], "duty": last.get("duty") or "", "verdict": last.get("verdict") or ""} if last else None,
             "spend_today": round(sum(float(r.get("cost") or 0) for r in sp if (r.get("at") or "") >= since_today), 4),
             "spend_week": round(sum(float(r.get("cost") or 0) for r in sp if (r.get("at") or "") >= since_week), 4),
-            "missions_open": sum(1 for s in states if s != "done"), "missions_done": sum(1 for s in states if s == "done"),
+            "missions_open": sum(1 for s in counted if s not in ("done", "nothing")), "missions_done": sum(1 for mid, st, _ in rows if st in ("done", "nothing") and mid not in (dismissed or {})),
             "stack": (stack_of(name) if stack_of else "") or "",
         })
     return out
@@ -1689,6 +1821,7 @@ def fix_nodes(r):
         states = ["done"] * at + ["active"] + ["notstarted"] * (4 - at)
     else:
         shipped = st in ("pr", "merged", "closed")
+        failed = st in FIX_FAILED and not fix_is_nothing(r)
         verdict = r.get("verdict") or ""
         have = {"brief": bool(r.get("issue")) or shipped, "panel": bool(r.get("plan")) or shipped,
                 "build": bool(r.get("pr")) or shipped,
@@ -1702,7 +1835,7 @@ def fix_nodes(r):
             elif key == "verify" and shipped:
                 states.append("skipped")
             else:
-                states.append("blocked" if st in FIX_FAILED else "notstarted")
+                states.append("blocked" if failed else "notstarted")
                 stopped = True
         states.append("done" if st == "merged" else "awaiting" if st == "pr"
                       else "skipped" if st == "closed" else "notstarted")
@@ -1719,9 +1852,31 @@ def fix_nodes(r):
     return out
 
 
+# A shipwright that answers NO_CHANGE (already fixed on main, or nothing should change) is not a failure. The fix script files it as blocked with
+# the answer in the detail, so the mission reads it from there: state "nothing", a calm word, and the reason in plain words.
+NOCHANGE_RX = re.compile(r"^\s*NO_CHANGE\b[\s:,-]*", re.I)
+
+
+def fix_is_nothing(r):
+    st = r.get("status")
+    return st == "nothing" or (st in FIX_FAILED and NOCHANGE_RX.match(str(r.get("detail") or "")) is not None)
+
+
+def nothing_view(r):
+    """{"reason": plain words, "commit": sha or None} for a fix or cycle that found nothing to build. The reason is the commit when one is named,
+    else the answer's one line, clipped; the page escapes it."""
+    d = NOCHANGE_RX.sub("", str(r.get("detail") or r.get("final") or ""), count=1)
+    d = re.sub(r"\s+\u2014\s+(?:#\d+|item \d+ of \S+|started from the board)\s*$", "", d)
+    d = " ".join(d.replace(" \u2014 ", ", ").replace("\u2014", ",").replace("\u2013", "-").split())
+    m = re.search(r"\b(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b", d)
+    commit = m.group(0)[:12] if m else None
+    reason = f"Already fixed on main in {commit}" if commit else (d[:1].upper() + d[1:] if d else "Nothing needed to change")
+    return {"reason": _clip(reason, 160).rstrip(".") + ".", "commit": commit}
+
+
 def _fix_state(r):
     st = r.get("status")
-    return ("running" if st == "running" else "awaiting" if st == "pr"
+    return ("running" if st == "running" else "awaiting" if st == "pr" else "nothing" if fix_is_nothing(r)
             else "blocked" if st in FIX_FAILED else "done")
 
 
@@ -1733,6 +1888,8 @@ def _fix_detail(r):
         return "Waiting for you", "The pull request is open. Review it and merge it yourself; nothing here merges it for you."
     if st == "merged":
         return "Merged", d or "The pull request was merged."
+    if fix_is_nothing(r):
+        return "Nothing to build", nothing_view(r)["reason"]
     if st in FIX_FAILED:
         return {"blocked": "Not built"}.get(st, (st or "").capitalize()), d or "No reason was recorded."
     return {"nothing": "Nothing to build", "taken": "Taken by someone else", "closed": "Closed"}.get(st, st or "Recorded"), d
@@ -1833,7 +1990,7 @@ def cycle_mission(r, out):
     what = f"ticket #{r.get('ticket')}" if isinstance(r.get("ticket"), int) else f"#{r.get('issue')}"
     out.update(project=r.get("project"), title=f"Cycle · {what} {r.get('title') or ''}".strip(),
                mission_ref=f"cycle {r.get('id')}", pipeline=cycle_nodes(r), issue=r.get("issue") if isinstance(r.get("issue"), int) else None,
-               state={"running": "running", "awaiting-review": "awaiting"}.get(status, "blocked" if status in CYCLE_BAD else "done"))
+               state={"running": "running", "awaiting-review": "awaiting", "nothing": "nothing"}.get(status, "blocked" if status in CYCLE_BAD else "done"))
     running = next((x for x in stages if x.get("state") == "running"), None)
     local_done = isinstance(r.get("ticket"), int) and not isinstance(r.get("ticket"), bool) and isinstance(r.get("branch"), str) and r.get("branch")
     body = {"running": f"The cycle is working on {running.get('title') if running else 'its next stage'}.",
@@ -1994,14 +2151,23 @@ def compose_mission(mid, get_panel, fixes, runs, inbox, queue, get_cycle=None, g
                        mission_ref=f"issue #{rec['issue']}" if (rec or {}).get("issue") else f"item {n}",
                        items=[item] if item else [], decision=_open_decision([item]) if item else None)
             if rec:
-                hint = rec.get("status")
+                hint = "nothing" if fix_is_nothing(rec) else rec.get("status")
                 if isinstance(rec.get("issue"), int):
                     out["issue"] = rec["issue"]                 # the page offers "Make a brief for this issue"
+                if hint == "nothing":
+                    out["nothing"] = nothing_view(rec)
+                    out["issue_closed"] = rec.get("issue_closed")
+                if rec.get("status") == "merged":
+                    out["merged"] = {"at": rec.get("merged"), "commit": rec.get("merge_commit"), "by": rec.get("source")}
+                if rec.get("pr"):
+                    seen = _pr_checked.get(rec["pr"])           # what GitHub last said about it, when this process asked
+                    out["github"] = {"state": seen[1]["state"] if seen and seen[1] else None}
+                out["fix_status"] = rec.get("status")
                 out["pipeline"] = fix_nodes(rec)
                 out["state"] = _fix_state(rec)
                 t, b = _fix_detail(rec)
                 out["detail"] = {"title": t, "body": b}
-                if rec.get("status") in FIX_FAILED:
+                if rec.get("status") in FIX_FAILED and hint != "nothing":
                     out["blocker"] = {"cause": b, "cls": None, "rerun": item is not None}
                 v = rec.get("verdict") or ""
                 diff = rec.get("diff") if isinstance(rec.get("diff"), str) else ""
@@ -2030,8 +2196,8 @@ def compose_mission(mid, get_panel, fixes, runs, inbox, queue, get_cycle=None, g
             return compose_mission(f"fix:{hit['panel']}#{hit['item']}", get_panel, fixes, runs, inbox, queue)
         bad = (r.get("verdict") or "") in BAD_VERDICTS
         out.update(project=project, title=f"{duty}: {r.get('detail') or r.get('verdict') or 'run'}", mission_ref=f"{duty} run",
-                   state="blocked" if bad else "done",
-                   detail={"title": r.get("verdict") or "Recorded", "body": r.get("detail") or "No detail was recorded."},
+                   state="blocked" if bad else "nothing" if (r.get("verdict") or "") == "NO_CHANGE" else "done",
+                   detail={"title": "Nothing to build" if (r.get("verdict") or "") == "NO_CHANGE" else r.get("verdict") or "Recorded", "body": r.get("detail") or "No detail was recorded."},
                    history=[{"at": x.get("at"), "duty": x.get("duty"), "verdict": x.get("verdict"), "detail": x.get("detail")}
                             for x in runs if x.get("project") == project and x.get("duty") == duty][:20])
         if bad:
@@ -2076,7 +2242,7 @@ def compose_mission(mid, get_panel, fixes, runs, inbox, queue, get_cycle=None, g
 # A mission still under way keeps its pending steps as "Not started": those are still to come.
 def _settle_steps(out, hint=None):
     nodes = out.get("pipeline")
-    if not nodes or out.get("state") != "done":
+    if not nodes or out.get("state") not in ("done", "nothing"):
         return
     kind, ref = out.get("kind"), out.get("mission_ref") or ""
     why = {"brief": "Optional, not made", "cycle": "Not needed for a cycle mission"}.get(kind) or f"Not needed for a {kind if kind != 'panel' else (ref or 'panel')} mission"
@@ -2094,7 +2260,7 @@ def mission_line(out, hint=None):
     body = (out.get("detail") or {}).get("body") or ""
     if kind == "cycle" and state == "awaiting":
         return (out.get("ticket") or {}).get("next") or body
-    if state != "done":
+    if state not in ("done", "nothing"):
         return ""
     if kind == "panel":
         n, k = len(out.get("items") or []), out.get("fixes_started") or 0
@@ -2122,6 +2288,150 @@ def mission_view(mid):
         [_split_verdict(r) for r in rows[-400:][::-1]], inbox_items(last), queue_view(),
         get_cycle=lambda cid: cycle_record(cid, running_locks()),
         get_brief=lambda bid: _safe(lambda: brief_public(brief_load(bid))), get_plan=lambda pid: _safe(lambda: plan_load(pid)))
+
+
+# ---- what the owner can do with a finished or stopped mission -------------------
+# POST /api/mission/action {id, action, confirm?}. Every action is guarded like the other writes (pairing, same origin, this tab's token: the
+# handler's own gate) and answers 400 "Demo mode: nothing is changed." in Demo mode. The log line (logs/missions.log) names the action, the project
+# and the mission id and never a word of the issue.
+#   dismiss / undo   hide a mission from the lists, or bring it back. Writes only state/dismissed-missions.json in the data folder.
+#   close_issue      "Nothing to build" with a GitHub issue: `gh issue close` with a fixed comment, only with confirm:true.
+#   retry            start the same duty again through the guarded start paths, only with confirm:true.
+#   mark_merged      GitHub says the pull request merged and the record does not yet: write merged, source "owner".
+DISMISS_STATES = ("done", "nothing", "blocked")             # a mission that is finished or has stopped; never one still running or waiting for the owner
+OLD_DAYS = 7
+MISSION_ACTIONS = ("dismiss", "undo", "close_issue", "retry", "mark_merged")
+
+
+def load_dismissed():
+    d = read_json(DISMISSED_FILE, {})
+    return {k: v for k, v in d.items() if isinstance(k, str) and isinstance(v, dict)} if isinstance(d, dict) else {}
+
+
+def save_dismissed(d):
+    """Atomic and private (0600): a temp file made with that mode, then renamed over the old one. The data folder is the only place it writes."""
+    no_demo("write the dismissed list")
+    DISMISSED_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = Path(str(DISMISSED_FILE) + ".tmp")
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(json.dumps(d, indent=2))
+    os.chmod(str(tmp), 0o600)
+    tmp.replace(DISMISSED_FILE)
+
+
+def mission_is_old(when, now=None, days=OLD_DAYS):
+    """Pure. True when `when` (an ISO time) is more than `days` days before `now`. A mission with no time is not old."""
+    t, n = _ts(when), now or now_utc()
+    return bool(t) and (n - t) > timedelta(days=days)
+
+
+def log_mission(action, project, mid):
+    try:
+        LOGS.mkdir(exist_ok=True)
+        with open(LOGS / "missions.log", "a") as f:
+            f.write(f"{iso(now_utc())} {action} project={project or '-'} mission={mid}\n")
+    except OSError:
+        pass
+
+
+def _mission_rec(mid):
+    """(mission, fix record or None) for a mission id, read from the records; (None, None) when it names nothing."""
+    m = mission_view(mid)
+    mt = re.fullmatch(r"fix:([\w.-]+)#(\d+)", mid or "")
+    return m, (fix_index(running_locks()).get(f"{mt.group(1)}#{mt.group(2)}") if mt else None)
+
+
+def mission_action(b):
+    """The one entry for the actions above. Returns a dict; raises ValueError (400) or MissionRefused (409)."""
+    no_demo("change a mission")
+    mid, action = b.get("id"), b.get("action")
+    if action not in MISSION_ACTIONS:
+        raise ValueError("not something this can do")
+    if not isinstance(mid, str) or not mid or len(mid) > 300:
+        raise ValueError("bad mission")
+    m, rec = _mission_rec(mid)
+    if not m:
+        raise ValueError("that mission is not on record")
+    project = m.get("project")
+    if action in ("dismiss", "undo"):
+        d = load_dismissed()
+        if action == "dismiss":
+            if m.get("state") not in DISMISS_STATES:
+                raise ValueError("only a finished or stopped mission can be dismissed")
+            d[mid] = {"at": iso(now_utc())}
+        else:
+            if mid not in d:
+                raise ValueError("that mission is not dismissed")
+            d.pop(mid)
+        save_dismissed(d)
+        log_mission(action, project, mid)
+        return {"id": mid, "dismissed": action == "dismiss"}
+    if m.get("kind") not in ("fix", "cycle"):
+        raise ValueError("this mission has nothing to " + action.replace("_", " "))
+    if action == "mark_merged":
+        if not rec or not rec.get("pr") or rec.get("status") not in ("pr", "closed"):
+            raise ValueError("this mission has no open pull request to mark")
+        info = pr_state(rec["pr"], 8)
+        if not info:
+            raise MissionRefused("GitHub could not be asked just now, so nothing was changed")
+        if info["state"] != "merged":
+            raise MissionRefused("GitHub does not say this pull request is merged")
+        new = {**rec, "status": "merged", "merged": info.get("at"), "merge_commit": info.get("commit"), "source": "owner",
+               "detail": "The pull request was merged."}
+        write_json(fix_path(rec), new)
+        log_mission(action, project, mid)
+        return {"id": mid, "status": "merged"}
+    if b.get("confirm") is not True:
+        raise ValueError("this reaches outside Quarterdeck's own data: confirm it")
+    projects = read_json(PROJECTS_FILE, {})
+    if action == "close_issue":
+        if m.get("state") != "nothing" or not rec or not isinstance(rec.get("issue"), int) or isinstance(rec.get("issue"), bool):
+            raise ValueError("only a mission with nothing to build, on a GitHub issue, can close the issue")
+        repo = (projects.get(project) or {}).get("repo")
+        if not repo or not re.fullmatch(r"[\w.-]+/[\w.-]+", repo):
+            raise ValueError(f"'{project}' has no GitHub repository")
+        if rec.get("issue_closed"):
+            raise MissionRefused("this issue was already closed from here")
+        commit = (m.get("nothing") or {}).get("commit")
+        comment = ("Closing this: it was already fixed on main" + (f" in {commit}" if commit else "")
+                   + ". Closed from Quarterdeck at the owner's request.")
+        r = subprocess.run([gh_bin(), "issue", "close", str(rec["issue"]), "-R", repo, "--comment", comment],
+                           capture_output=True, text=True, timeout=60)
+        if r.returncode != 0:
+            raise MissionRefused("GitHub did not close the issue: " + ((r.stderr or r.stdout or "gh failed").strip().splitlines() or ["gh failed"])[0][:200])
+        write_json(fix_path(rec), {**rec, "issue_closed": iso(now_utc())})
+        log_mission(action, project, mid)
+        return {"id": mid, "closed": rec["issue"]}
+    # retry
+    if m.get("state") != "blocked":
+        raise ValueError("only a stopped mission can be tried again")
+    if not shutil.which(gh_bin()) and (projects.get(project) or {}).get("repo"):
+        raise MissionRefused("GitHub's command line (gh) is not installed here, so nothing can be started")
+    if over_budget():
+        raise MissionRefused("today's budget is spent: a new run would stop at once")
+    if m["kind"] == "cycle":
+        cyc = cycle_record(mid.split(":", 1)[1], running_locks()) or {}
+        if isinstance(cyc.get("ticket"), int) and not isinstance(cyc.get("ticket"), bool):
+            got = start_cycle(project, None, True, cyc["ticket"])
+        else:
+            got = start_cycle(project, cyc.get("issue"), True)
+        what = got.get("started")
+    elif rec and rec.get("panel") == "issue":
+        what = start_work(project, rec.get("item"), "start")
+    elif rec:
+        _, queued, skipped = enqueue(rec["panel"], [rec["item"]])
+        if not queued:
+            raise MissionRefused("not started: " + "; ".join(str(x.get("why")) for x in skipped[:2]))
+        what = f"fix {project} --panel {rec['panel']} --item {rec['item']}"
+    else:
+        raise ValueError("this mission cannot be started again from here")
+    log_mission(action, project, mid)
+    return {"id": mid, "started": what}
+
+
+class MissionRefused(ValueError):
+    """Allowed in principle, not possible now (409)."""
 
 
 # ---- showcase case study: a private preview of one finished, verified fix ------
@@ -2624,7 +2934,7 @@ def issue_progress(repo):
     hit = PROGRESS_CACHE.get(repo)
     if not hit or time.time() - hit["at"] > BOARD_TTL:
         def gh(kind, fields):
-            r = subprocess.run(["gh", kind, "list", "-R", repo, "--state", "all", "--limit", "200",
+            r = subprocess.run([gh_bin(), kind, "list", "-R", repo, "--state", "all", "--limit", "200",
                                 "--json", fields], capture_output=True, text=True, timeout=60)
             if r.returncode != 0:
                 raise RuntimeError((r.stderr or "gh failed").strip()[:300])
@@ -2652,7 +2962,7 @@ def open_prs(project, repo, runs, fixes):
     hit = PR_CACHE.get(repo)
     if not hit or time.time() - hit["at"] > BOARD_TTL:
         r = subprocess.run(
-            ["gh", "pr", "list", "-R", repo, "--state", "open", "--limit", "50", "--json",
+            [gh_bin(), "pr", "list", "-R", repo, "--state", "open", "--limit", "50", "--json",
              "number,title,url,headRefName,headRefOid,baseRefName,createdAt,isDraft,body,"
              "closingIssuesReferences,reviewDecision,statusCheckRollup,additions,deletions,"
              "changedFiles,mergeable,mergeStateStatus"],
@@ -2735,7 +3045,7 @@ def merge_pr(project, number, head_sha):
     if not isinstance(head_sha, str) or not re.fullmatch(r"[0-9a-f]{7,40}", head_sha or ""):
         raise ValueError("bad commit sha")
     r = subprocess.run(
-        ["gh", "pr", "merge", str(number), "-R", repo, "--merge", "--delete-branch",
+        [gh_bin(), "pr", "merge", str(number), "-R", repo, "--merge", "--delete-branch",
          "--match-head-commit", head_sha],
         capture_output=True, text=True, timeout=60)
     if r.returncode != 0:
@@ -2815,7 +3125,7 @@ def card_view(project, number, kind="issue", fresh=False):
     fields = CARD_FIELDS + (",isDraft,closingIssuesReferences" if kind == "pr" else ",closedByPullRequestsReferences")
 
     def call(f):
-        return subprocess.run(["gh", kind, "view", number, "-R", repo, "--json", f], capture_output=True, text=True, timeout=60)
+        return subprocess.run([gh_bin(), kind, "view", number, "-R", repo, "--json", f], capture_output=True, text=True, timeout=60)
     r = call(fields)
     if r.returncode != 0 and "Unknown JSON field" in (r.stderr or ""):
         r = call(CARD_FIELDS + (",isDraft" if kind == "pr" else ""))      # an older gh without the link fields: show the card without them
@@ -3437,6 +3747,7 @@ def understand(text, views, projects=None, duties_of=None):
 import chatctx
 import claudeproc
 import fleetview
+import livework
 import projagents
 from integrations import accounts as integrations_accounts
 from integrations import manifest as integrations_manifest
@@ -3466,6 +3777,22 @@ def fleet_view(force=False):
     if start:
         threading.Thread(target=refresh, daemon=True).start()
     return have if have is not None else {"sources": [], "errors": ["still reading the fleets"], "at": 0}
+
+
+LIVE_KICK = {"at": 0.0}
+
+
+def live_view(agents, projects, now=None):
+    """S.live: the sessions the hook reports and the duties running now, across every project (bin/livework.py). Sessions are read from the event files on
+    every call (cheap); worktrees and pull requests come from the cached fleet document, which is refreshed in the background so a state read never waits on git."""
+    cfg = fleetview.load_config()
+    with FLEET_LOCK:
+        have, age, busy = FLEET["data"], time.time() - FLEET["at"], FLEET.get("busy")
+    if (have is None or age > 20) and not busy and time.time() - LIVE_KICK["at"] > 10 and any(x["kind"] == "repo-agents" for x in cfg["sources"]):
+        LIVE_KICK["at"] = time.time()
+        threading.Thread(target=fleet_view, kwargs={"force": True}, daemon=True).start()
+    src = livework.collect(cfg, have, now=now)
+    return livework.live_work(src, agents, projects, now=now, install_command="bash " + shlex.quote(str(ROOT / "bin" / "fleet-hook.sh")) + " install")
 
 
 def fleet_action(b):
@@ -3661,18 +3988,31 @@ def project_agents_api(name):
     return 200, {"project": name, **projagents.project_agents(str(root))}
 
 
+def clean_path(raw):
+    """A pasted folder path as a plain path: spaces and one pair of quotes around it go, a terminal's backslash before a space goes, and so do trailing slashes."""
+    p = str(raw or "").strip()
+    if len(p) > 1 and p[0] == p[-1] and p[0] in "\"'`":
+        p = p[1:-1].strip()
+    p = p.replace("\\ ", " ")
+    while len(p) > 1 and p[-1] in "/\\":
+        p = p[:-1]
+    return p
+
+
 def attach_api(b):
     """Look at a folder and propose how the crew should work on it; with apply and confirm, register it. Read-only until the owner confirms."""
     import attach as _attach, scan as _scan, survey as _survey, ready as _ready
-    raw = str(b.get("path") or "").strip()
+    raw = clean_path(b.get("path"))
     if not raw:
         return 400, {"error": "say which folder"}
     try:
         path = check_project_folder(raw)
     except ValueError as e:
         return 400, {"error": str(e)}
+    if not path.exists():
+        return 400, {"error": f"{raw} is not a folder (there is nothing at that path)"}
     if not path.is_dir():
-        return 400, {"error": f"{raw} is not a folder"}
+        return 400, {"error": f"{raw} is a file, not a folder"}
     try:
         prof = _scan.scan(path)
         prop = proposed = _attach.propose(prof, str(b.get("name") or "").strip() or None)
@@ -4122,6 +4462,15 @@ def docs_apply_api(b):
     return 200, {"started": True, "pull_request": bool(ent.get("repo"))}
 
 
+def project_suggested(name, entry):
+    """[{duty, why}]: the duties the stack scan found to fit this project and that are still off, with the scan's reason. Read from the attach record."""
+    import ready as _ready
+    rec = _ready.attach_record(name) or {}
+    on = set(entry.get("duties") or [])
+    return [{"duty": d, "why": " ".join(str(v.get("why") or "").split())[:200]} for d, v in sorted((rec.get("duty_reasons") or {}).items())
+            if isinstance(v, dict) and v.get("suggested") and d not in on]
+
+
 def project_duties_api(b):
     """Turn duties on or off, and allow or forbid full cycles: attach.set_duties, the function `qtdeck enable` and `qtdeck disable` use."""
     import attach as _attach
@@ -4245,7 +4594,7 @@ def briefs_summary(limit=12):
         if r.get("status") == "superseded":
             continue
         p = brief_public(r)
-        out.append({"id": p["id"], "status": p["status"], "project": p["project"] or "", "mockups": p["mockups"].get("state", "none"),
+        out.append({"id": p["id"], "status": p["status"], "project": p["project"] or "", "mockups": p["mockups"].get("state", "none"), "issue": p.get("issue"),
                     "title": (p["brief"] or {}).get("title") or (p["idea"] or "")[:60] or "A new idea", "at": p["updated"] or p["created"]})
     return sorted(out, key=lambda x: x["at"] or "", reverse=True)[:limit]
 
@@ -5124,22 +5473,25 @@ def _build_state():
         "showcase": _safe(load_showcase, []),
         "inbox": inbox,
         "panels": panels,
-        "fixes": fixes,
-        "cycles": cycles,
+        "fixes": {k: {**r, "mstate": _fix_state(r)} for k, r in fixes.items()},
+        "cycles": [{**c, "mstate": _mission_state("cycle", c)} for c in cycles],
+        "dismissed_missions": _safe(load_dismissed, {}),
         "briefs": briefs,
         "plans": plans,
         "fixqueue": _safe(queue_view, {}),
         "spend": _safe(spend_summary, {}),
         "schedules": _safe(schedules_view, []),
+        "first_run": _safe(lambda: _firstrun.is_first(HOME, projects), False),
         "docs": _safe(lambda: [{**d, "superseded_by": stale_docs.get(d["name"]),
                                 **classify(d["name"], doc_kind)}
                                for d in doc_list(list(projects), filed)], []),
+        "live": _safe(lambda: live_view(agents, projects), {"items": [], "worktrees": [], "updated_at": None, "hook_installed": False, "install_command": "", "sources": []}),
         "overview": _safe(lambda: project_overview(projects, agents, runs, inbox, fixes, cycles, panels, briefs, plans, spend_rows(),
-                                                   local_midnight_utc(), local_midnight_utc(6), _stack_sentence), []),
+                                                   local_midnight_utc(), local_midnight_utc(6), _stack_sentence, _safe(load_dismissed, {})), []),
         "projects": [
             {"name": k, "repo": v.get("repo", ""), "summary": v.get("summary", ""),
              "duties": v.get("duties", []), "guardrails": v.get("guardrails", []),
-             "verify": v.get("verify", ""), "cycle": v.get("cycle") is True,
+             "verify": v.get("verify", ""), "cycle": v.get("cycle") is True, "suggested": _safe(lambda k=k, v=v: project_suggested(k, v), []),
              "board": (f'https://github.com/users/{v["board"]["owner"]}'
                        f'/projects/{v["board"]["number"]}' if v.get("board") else None)}
             for k, v in sorted(projects.items())
@@ -5353,6 +5705,10 @@ class Handler(BaseHTTPRequestHandler):
         if u.path.startswith("/api/") and not self._read_ok():
             return self._send(401, json.dumps({"error": "unpaired: open Quarterdeck from the link that `qtdeck dashboard` prints"}))
 
+        if u.path == "/api/firstrun":               # about this machine, not the owner's projects, so it answers the same with Demo on
+            code, body = firstrun_api()
+            return self._send(code, json.dumps(body))
+
         if u.path.startswith("/api/") and demo_on():
             # Answered entirely from the made-up world; a path it does not know is a 404,
             # never a fall-through to the real handler below.
@@ -5364,6 +5720,8 @@ class Handler(BaseHTTPRequestHandler):
                 w = DEMO["world"]; st = w.state()
                 m = compose_mission((q.get("id") or [""])[0], w.panel_transcript, st["fixes"], st["runs"], st["inbox"], st["fixqueue"],
                                     get_cycle=w.cycle_record, get_brief=w.maker.brief, get_plan=w.maker.plan)
+                if m:
+                    m["dismissed"] = m["id"] in (st.get("dismissed_missions") or {})
                 return self._demo_reply((200, m) if m else (404, {"error": "no such mission"}))
             if u.path == "/api/cycle/estimate":
                 w = DEMO["world"]; pr = (q.get("project") or [""])[0]
@@ -5393,7 +5751,9 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/state":              # the made-up state, with the Projects summary counted by the same function the real one uses
                 w = DEMO["world"]; st = w.state(); t = w.elapsed(); today, week = w.midnights(t)
                 st["overview"] = project_overview(st["projects"], st["agents"], st["runs"], st["inbox"], st["fixes"], st["cycles"], st["panels"], st["briefs"],
-                                                  st["plans"], w.spend_ledger(t), today, week, lambda n: demo.PROJECTS.get(n, {}).get("stack", ""))
+                                                  st["plans"], w.spend_ledger(t), today, week, lambda n: demo.PROJECTS.get(n, {}).get("stack", ""), st.get("dismissed_missions"))
+                src, pj, at = w.live_inputs(st)
+                st["live"] = livework.live_work(src, st["agents"], pj, now=at, installed=True, install_command="bash bin/fleet-hook.sh install")
                 return self._demo_reply((200, st))
             return self._demo_reply(DEMO["world"].get(u.path, q))
 
@@ -5549,7 +5909,11 @@ class Handler(BaseHTTPRequestHandler):
                 {x["name"]: x["role"] for x in duty_list()}, owner_names())))
 
         if u.path == "/api/mission":
-            m = _safe(lambda: mission_view((q.get("id") or [""])[0]))
+            mid = (q.get("id") or [""])[0]
+            open_fix_mission(mid)                   # a pull request that merged since the last look is seen now, not in ten minutes
+            m = _safe(lambda: mission_view(mid))
+            if m:
+                m["dismissed"] = mid in load_dismissed()
             return self._send(200, json.dumps(m)) if m else self._send(404, json.dumps({"error": "no such mission"}))
 
         if u.path == "/api/panel":
@@ -5664,6 +6028,10 @@ class Handler(BaseHTTPRequestHandler):
             b = self._body()
             demo_set(bool(b.get("on")), bool(b.get("restart")))
             return self._send(200, json.dumps({"on": demo_on()}))
+
+        if u.path == "/api/firstrun":
+            code, body = firstrun_api(self._body())
+            return self._send(code, json.dumps(body))
 
         # Voice is the one thing demo mode leaves on (the talk is about directing agents by voice).
         # It reads no project data there: what it is told about projects comes from the made-up world.
@@ -5834,6 +6202,16 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 return self._send(500, json.dumps({"error": str(e)}))
             return self._send(200, json.dumps(rec))
+
+        if u.path == "/api/mission/action":
+            try:
+                return self._send(200, json.dumps(mission_action(b)))
+            except MissionRefused as e:
+                return self._send(409, json.dumps({"error": str(e)}))
+            except ValueError as e:
+                return self._send(409 if "already" in str(e) else 400, json.dumps({"error": str(e)}))
+            except Exception as e:
+                return self._send(500, json.dumps({"error": str(e)[:200]}))
 
         if u.path == "/api/missions":
             try:

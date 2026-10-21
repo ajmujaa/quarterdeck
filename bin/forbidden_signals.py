@@ -44,6 +44,26 @@ ALLOW = {
         '_fbad = "x = pb" + "paste\\n"',                                           # the B1b sample file body, written to a temp folder
     ],
 }
+# The one narrow allowance, for a Copy button: the page may WRITE one command the person just chose to copy, by one write-only call, inside one named function.
+# Nothing in the clipboard rule is relaxed except that single call in that single function: every read form (readText, read(, clipboardData, paste and copy
+# listeners, execCommand paste or copy) is still a hit everywhere, and so is the same write call anywhere else, or a second one in that function.
+COPY_FILE, COPY_FUNC, COPY_CALL, COPY_MAX = "dashboard/index.html", "function copyCommand(", "navigator.clipboard.writeText(", 800
+
+
+def _without_copy_call(text):
+    """`text` with the one allowed write call taken out of the copy function, if that function is there, short, and holds exactly that call."""
+    i = text.find(COPY_FUNC)
+    if i < 0 or text.find(COPY_FUNC, i + 1) >= 0:
+        return text
+    j, depth = text.index("{", i), 0
+    for k in range(j, min(len(text), i + COPY_MAX)):
+        depth += (text[k] == "{") - (text[k] == "}")
+        if depth == 0:
+            body = text[j:k + 1]
+            return text if body.count(COPY_CALL) != 1 else text[:j] + body.replace(COPY_CALL, "(", 1) + text[k + 1:]
+    return text
+
+
 RULES = {
     "keystrokes": r"CGEventTap|CGEventSource|IOHIDManager|pynput|NSEvent\s*\.\s*addGlobalMonitor|addGlobalMonitorForEvents|keyboard\.Listener|"
                   r"key[_ ]?logger|keylog|getKeyState|GetAsyncKeyState",
@@ -53,7 +73,9 @@ RULES = {
                          r"History\.db|places\.sqlite|Library/Safari|Application Support/(?:Google/Chrome|Firefox|BraveSoftware|Arc)|"
                          r"BrowserHistory|chrome://history|browsingData|chrome\.history|webNavigation|tabs\.query",
     "clipboard": r"pbpaste|pbcopy|NSPasteboard|UIPasteboard|clipboard\.read|navigator\.clipboard\.read|readText\s*\(|"
-                 r"clipboardData\.getData|ClipboardEvent",
+                 r"clipboardData|ClipboardEvent|ClipboardItem|clipboard\s*\.\s*(?:read|write)\w*|"
+                 r"addEventListener\s*\(\s*(?:paste|copy|cut)\b|\bon(?:paste|copy|cut)\s*=|data-on-(?:paste|copy|cut)|actOn\s*\(\s*(?:paste|copy|cut)\b|"
+                 r"execCommand\s*\(\s*(?:paste|copy|cut)\b",
     "location": r"CoreLocation|CLLocationManager|navigator\.geolocation|ipinfo\.io|ip-api\.com|geoip|geolocation",
     # The other half of the promise: no file outside the registered projects and state/. Most of that is the sandbox's job at run time; this catches
     # code that names another app's personal data store outright.
@@ -114,6 +136,8 @@ def scan(root=ROOT):
             if allowed not in text:
                 hits.append(("allow-list", str(rel), 0, f"stale entry, no longer in the file: {allowed[:80]}"))
             text = text.replace(allowed, "")
+        if rel.as_posix() == COPY_FILE:
+            text = _without_copy_call(text)
         for n, line in enumerate(normalise(text).splitlines(), 1):
             for kind, rx in COMPILED.items():
                 if rx.search(line):

@@ -46,9 +46,12 @@ LABELS = {
     "selftest-connections.sh": "connections: instructions, several accounts per service",
     "selftest-stack.sh": "the stack scan: framework and tools named, build and lint proposed, a reason per duty",
     "selftest-tickets.sh": "tickets: drafted from a request, filed only with --apply, local tickets and branches when there is no repo, repo create after a yes",
+    "selftest-missions.sh": "missions that tell the truth: a merged pull request is Merged, NO_CHANGE is Nothing to build, the buttons on a finished or stopped mission do only what they say, old stops are grouped",
     "selftest-tickets-ui.sh": "tickets on the dashboard: draft first, file on a click, the repo options, a mission from a ticket, Demo mode does nothing",
     "selftest-nav.sh": "navigation: the address holds the page, project and mission (Back, Forward, reload, deep links, hostile addresses), the scope chip where a scope applies, mission steps by kind, the trajectory on Projects, add-ons in the scope box",
+    "selftest-live.sh": "live work: Running now on Home, a project's Live work, sessions told from duties, no detail reported never invented, Enable on the Crew page with Available (N) folded, Demo shows invented Relay data",
     "selftest-projects.sh": "Home and Projects: Home is the person (five things and one count line), Projects shows a card per project and Open filters the tabs, the scope is in the address, the scope box exists only where it applies, Calm, a phone width",
+    "selftest-onboarding.sh": "a smoother first run: the Homebrew formula and npm shim (offline), the first-run checklist and its API, the narrow Copy allowance in the privacy scan, the first-run panel and the guided attach panel in a browser",
     "selftest-flow.sh": "the whole flow without a model: attach a sample React app (survey, missing docs by the scribe, the ready checklist), tickets, a cycle to a local branch on the CLI and the dashboard",
 }
 

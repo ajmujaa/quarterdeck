@@ -302,6 +302,7 @@ def stage_of(t):
 
 
 PR_CACHE = {}
+GH = os.environ.get("QUARTERDECK_GH") or "gh"          # the GitHub command line; a test points this at a stand-in
 
 
 def _checks(rollup):
@@ -342,7 +343,7 @@ def pull_request_for(repo, branch, runner=subprocess.run, ttl=600):
     pr = None
     try:
         e = _env(); e["GH_PROMPT_DISABLED"] = "1"
-        r = runner(["gh", "pr", "list", "-R", repo, "--head", branch, "--state", "all", "--limit", "1", "--json", PR_FIELDS],
+        r = runner([GH, "pr", "list", "-R", repo, "--head", branch, "--state", "all", "--limit", "1", "--json", PR_FIELDS],
                    capture_output=True, text=True, timeout=25, env=e)
         rows = json.loads(r.stdout) if r.returncode == 0 else []
         pr = _pr_row(rows[0]) if rows else None
@@ -361,7 +362,7 @@ def pull_requests(repo, runner=subprocess.run, ttl=90, branches=()):
     out = {}
     try:
         e = _env(); e["GH_PROMPT_DISABLED"] = "1"
-        r = runner(["gh", "pr", "list", "-R", repo, "--author", "@me", "--state", "all", "--limit", "100", "--json", PR_FIELDS],
+        r = runner([GH, "pr", "list", "-R", repo, "--author", "@me", "--state", "all", "--limit", "100", "--json", PR_FIELDS],
                    capture_output=True, text=True, timeout=25, env=e)
         for pr in (json.loads(r.stdout) if r.returncode == 0 else []):
             if pr.get("headRefName") and pr["headRefName"] not in out:        # newest first: the first one for a branch wins
@@ -491,8 +492,9 @@ def build_sessions(events, now=None):
         if now - e["t"] > SESSION_KEEP:
             continue
         s = by.setdefault(e["session"], {"id": e["session"][:8], "first": e["t"], "last": e["t"], "worktree": "", "branch": "", "state": "idle",
-                                           "open": {}, "used": {}, "turns": 0})
+                                           "open": {}, "used": {}, "turns": 0, "state_t": e["t"]})
         s["last"] = max(s["last"], e["t"])
+        before = s["state"]
         if e["worktree"]:
             s["worktree"], s["branch"] = e["worktree"], e["branch"] or s["branch"]
         k = e["event"]
@@ -512,6 +514,8 @@ def build_sessions(events, now=None):
             s["open"][e["agent"]] -= 1
             if not s["open"][e["agent"]]:
                 del s["open"][e["agent"]]
+        if s["state"] != before:
+            s["state_t"] = e["t"]
     out = []
     for s in by.values():
         age = now - s["last"]
@@ -519,7 +523,7 @@ def build_sessions(events, now=None):
             s["state"] = "quiet"
         out.append({"id": s["id"], "state": s["state"], "worktree": s["worktree"], "branch": s["branch"], "turns": s["turns"],
                     "running_agents": sorted(s["open"]), "agents_used": dict(sorted(s["used"].items(), key=lambda kv: -kv[1])),
-                    "started_ago": int(now - s["first"]), "last_ago": int(age)})
+                    "started_ago": int(now - s["first"]), "last_ago": int(age), "state_ago": int(now - s["state_t"])})
     rank = {"working": 0, "idle": 1, "quiet": 2, "ended": 3}
     return sorted(out, key=lambda x: (rank[x["state"]], x["last_ago"]))
 

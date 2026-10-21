@@ -1,0 +1,2 @@
+# the old rule, a command built from pieces
+x = 'pb' + 'paste'

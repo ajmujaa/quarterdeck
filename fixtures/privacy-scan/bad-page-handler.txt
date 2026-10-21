@@ -1,0 +1,2 @@
+# a paste handler wired through the page's own action table
+const h = actOn('paste', 'x');

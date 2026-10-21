@@ -1,0 +1,2 @@
+# a second write call in the allowed function
+function copyCommand(t){ navigator.clipboard.writeText(t); navigator.clipboard.writeText('again'); }

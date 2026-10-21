@@ -1,0 +1,2 @@
+# a paste listener
+document.addEventListener('paste', f);

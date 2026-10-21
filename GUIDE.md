@@ -12,11 +12,12 @@ Quarterdeck runs on your own machine. It gives you one dashboard for all your pr
 
 ```bash
 git clone https://github.com/ajmujaa/quarterdeck.git && cd quarterdeck   # 1. get the program
-bin/qtdeck setup                       # 2. checks the tools, prints the install command for anything missing, makes your data folder
-bin/qtdeck dashboard                   # 3. opens the dashboard on this machine (a one-time link)
-                                       # 4. switch Demo on to look around with invented data before you connect anything
-bin/qtdeck attach ~/Projects/my-app    # 5. shows what it found and what the crew would do; add --apply to register it
+bin/qtdeck dashboard                   # 2. opens the dashboard on this machine (a one-time link); the first-run screen lists what is missing
+                                       # 3. "Look around in Demo" shows invented data before you connect anything
+                                       # 4. Add a project: paste a folder path, then scan, missing docs, crew, ready
 ```
+
+Prefer the terminal? `bin/qtdeck setup` checks the tools and prints the install command for anything missing, and `bin/qtdeck attach ~/Projects/my-app` does the same as the Add a project panel (add `--apply` to register it).
 
 `bin/qtdeck help` lists the day-one commands, `bin/qtdeck help more` all of them. `bin/qtdeck doctor` checks the wiring in a few seconds; `bin/qtdeck check` runs every test.
 
@@ -71,9 +72,13 @@ Every model call uses your own account and your own usage limits. Quarterdeck ne
 
 ## First run
 
+Ways to install: today you clone (above). A Homebrew formula (`brew install ajmujaa/quarterdeck/qtdeck`) and an npm wrapper (`npm install -g qtdeck`) are prepared in `packaging/` and will be the macOS path and the Node path once they are published; `packaging/README.md` says how. Neither is published yet.
+
 ```bash
 bin/qtdeck dashboard              # or --no-open to print the link without opening a browser
 ```
+
+**The first-run screen.** The first time, Home shows one panel instead of anything else: a checklist of what this machine has and lacks (`claude`, `gh`, `git`, `node`, `python3` 3.10 or newer, whether `claude` and `gh` are signed in, and whether an API key is stored). These are the same checks as `qtdeck doctor`, taken from the same code. For anything missing it shows the exact command in a small box with a **Copy** button; Quarterdeck never runs an installer or signs you in, you do. The one primary button, **Look around in Demo**, switches Demo on; **Skip, I will set it up myself** closes the panel. Either way it does not come back, and it is also gone once you register a project. The only thing recorded is one small file, `state/first-run.json`, in your data folder. The Copy button writes the one command you clicked to the clipboard and never reads the clipboard; if your browser refuses, the command is selected for you to copy with Cmd+C or Ctrl+C.
 
 This starts the dashboard and opens a one-time pairing link to `http://127.0.0.1:7878`. The server listens on your own machine only (loopback).
 
@@ -83,11 +88,13 @@ This starts the dashboard and opens a one-time pairing link to `http://127.0.0.1
 
 ![Home, in demo mode](images/home.png)
 
+**Running now.** Under the next action, Home lists what is running right now across all projects, one line each: the project, the branch or worktree, which agent or duty, what it is doing in plain words, how long, and whether it is waiting for you. A *session* is a live agent process you have open in a registered repository; a *duty* is a Quarterdeck run. Sessions come from a small hook (`bin/fleet-hook.sh install`, for the registered repositories only; the line at the top of the card says when the live data was last updated, and says plainly when the hook is not installed). It records only that a turn started or finished, which agent started or stopped, and the session, worktree and branch names, so where it has no detail the line says "no detail reported". Each project's page has a **Live work** card with its worktrees, their pull requests (drafts marked) and the session or duty working in each; with All projects chosen it is the same list grouped by project. The full Fleet page is one click from both.
+
 **Home is you; Projects is where the work is.** Home shows your day, your notes (Brain dump), the whole fleet on one timeline, what finished lately and what today has cost against your daily budget, plus one line that says how many things need you and opens Projects. It shows nothing that belongs to one project. **Projects** opens on every project together: one card each with its state, what needs you, its last run and its spend. Press Open on a card and the same place shows only that project: its facts, its Ready card, its tickets and guardrails, and its Needs you, Missions, Pull requests, Board and Ledger. The project you are looking at is the **scope**. It is in the address (`?project=<name>`) and shown at the top of every page where it means something; Home, the Brain, Spend, Connections and Settings are not about one project, so they show no scope box. An add-on's alert (Relay, for example) is listed under Add-ons on the Projects overview, never at the top of Home.
 
 ## Attach a project
 
-Use **Add a project** in the dashboard, or the command line. Quarterdeck reads the folder first: languages, test command, CI, where it deploys, folders that need care. It says what it found and what the crew would do, and registers the project only when you say so. It never opens secret files and never changes the project. What it proposed and what you approved are kept in your data folder.
+Use **Attach a project** in the dashboard, or the command line. The dashboard panel is the guided way: **1. Folder** (paste one folder path, for example `~/Projects/my-app`; quotes, spaces around it and a trailing slash are fine; nothing is read until you press **Scan**, and Quarterdeck never scans your home folder), **2. Scan** (the stack sentence, the verify, build and lint commands and what was found), **3. Missing docs** (what is missing and the scribe commands, with Copy; nothing is written), **4. Crew** (the duties that are on, each with its reason, and the ones that also fit, switched off, with a switch each) and **5. Ready** (the checklist and one next action, once you press Attach). A folder that does not exist, a file, a hidden folder, one outside your home folder, or your home folder itself gets one plain line under the field and nothing is scanned. After your first project, Home offers one next action only: "File your first ticket", or, when live work is not connected, "Start the dashboard sessions hook" with its command and a Copy button. Quarterdeck reads the folder first: languages, test command, CI, where it deploys, folders that need care. It says what it found and what the crew would do, and registers the project only when you say so. It never opens secret files and never changes the project. What it proposed and what you approved are kept in your data folder.
 
 ```bash
 bin/qtdeck attach ~/Projects/my-app            # shows what it found and proposes a set-up; changes nothing
@@ -142,6 +149,8 @@ Each ticket has a title, a body and acceptance checks a person could try. The pl
 
 **On the dashboard** the same things sit on a project's own page (Projects, then Open). The New ticket box ("What do you want built?", up to 2000 characters, one button, Draft tickets) starts the planner and shows the draft first: each ticket with its body and acceptance checks. Only then does one button file it, and it says where: "File 3 issues on owner/name" (after a confirmation) when the project has a repo, "Save 3 tickets on this computer" when it has none, with "Save on this computer only" and "Discard draft" beside it. The list below shows each ticket with its status; "Start a mission" opens the full-cycle dialog for it (the project needs `"cycle": true`; the page tells you the line to add and never edits the registry itself). A project with no repo also shows the four options above as four short rows: a field for the repo you have, "Create a private GitHub repo" (two confirmations, the second for the push), the sign-up steps, and "Not now". A mission started from a local ticket shows the crew's steps, the stages that need a pull request as Skipped with the reason, the local branch and the command that shows it, and what to do next. In Demo mode all of this is invented and every action only says that nothing is drafted, filed or created.
 
+**What a mission can show, and what its buttons do.** A mission page tells you where a piece of work stands: Running, Awaiting you (a pull request is open), Merged (GitHub says so; Quarterdeck asks GitHub about every pull request it knows, every ten minutes and again when you open the mission), Closed, Nothing to build (the crew found it already fixed on main; this is calm, not a failure, and the reason is in plain words), or Blocked (a real stop, with its cause). A finished or stopped mission has buttons, each with a line saying what it does. **Dismiss** only hides it from the lists here; it stays in History and **Undo dismiss** brings it back. **Close the issue** (on Nothing to build) asks first, then closes the GitHub issue with a short fixed comment. **Try again** (on Blocked) asks first, then starts the same work again within the same budget and limits. **Open the pull request** and **Mark as merged** appear when GitHub says it merged. The lists have a Hide handled switch (on by default) and a count of dismissed missions, and stops older than 7 days sit in one collapsed group that does not count as needing you.
+
 **Try the whole flow without a model.** `fixtures/sample-react` is a tiny Vite and React todo app, and `bash bin/selftest-flow.sh` walks through everything above on a temporary copy of it: attach, the stack sentence, tickets drafted by a stand-in model, a cycle from a ticket on the command line and the same through the dashboard, then the local branch and the verify result. It uses no network, no real model and no GitHub, and it never touches your own data folder. Its verify command is `node --test` because the project's own `npm test` runs Vitest, which needs an install. Read the script to see each step as a command you could run yourself.
 
 ## The crew and what each does
@@ -180,7 +189,9 @@ Beyond the single duties:
 
 The crew themselves are files in `crew/`. Each knows no project and holds one point of view, such as a security reviewer, a copy editor, or someone whose only question is what an earlier fix could have broken. Read `crew/_README.md` to add one.
 
-**A project's own agents.** On the Agents page, a project that keeps Claude Code agents in its own `.claude/agents/` folder sees them listed under "This project's own agents", marked "from the project", with a note on which of the crew's jobs they plausibly cover and which Quarterdeck's crew still covers for it. It reads only the name, description, tools and model line at the top of each file in that one folder (at most 50 files, 64 KB each, a link is followed only to a file inside the same project, the prompt itself never read or shown), only for projects you registered, and writes nothing. The matches are a keyword guess, labelled as such. Quarterdeck cannot run a project's own agents; that would be a separate step you opt into.
+**The Crew page.** For one project it shows the agents that are enabled first, grouped by job, and folds every other agent into one list, "Available (N)", one line each. Agents the stack scan suggested come first with its reason, and each has an **Enable** button that asks first (what the agent does, why it is suggested, and that it stays report-only until you run it with Write for real) and then turns it on for that project, the same guarded change as `qtdeck enable`. The header counts running *sessions* and running *duties* separately and links to the project's Live work.
+
+**A project's own agents.** On the Agents page, a project that keeps Claude Code agents in its own `.claude/agents/` folder sees them listed under "This project's own agents", marked "from the project", with a note on which of the crew's jobs they plausibly cover and which Quarterdeck's crew still covers for it. It reads only the name, description, tools and model line at the top of each file in that one folder (at most 50 files, 64 KB each, a link is followed only to a file inside the same project, the prompt itself never read or shown), only for projects you registered, and writes nothing. The matches are a keyword guess, labelled as such. A project with none of its own shows one sentence saying so instead of an empty list. Quarterdeck cannot run a project's own agents; that would be a separate step you opt into.
 
 ## Back, Forward and links
 

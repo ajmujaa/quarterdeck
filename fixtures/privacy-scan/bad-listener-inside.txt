@@ -1,0 +1,2 @@
+# a paste listener inside the allowed function
+function copyCommand(t){ navigator.clipboard.writeText(t); document.addEventListener('paste', f); }

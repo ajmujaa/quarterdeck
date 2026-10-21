@@ -1,0 +1,2 @@
+# execCommand paste
+document.execCommand('paste');

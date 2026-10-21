@@ -55,6 +55,14 @@ ok("the table of addresses is the one in the docs", () => {
   assert.equal(parseHash("#/projects/mission/cycle%3Aabc?project=mastyard", known).id, "cycle:abc");
   assert.equal(parseHash("#/projects/mission/cycle%3Aabc?project=mastyard", known).project, "mastyard");
 });
+ok("the Fleet and Crew pages take the project scope from the address, and the address round-trips", () => {
+  for (const v of ["fleet", "crew"]) {
+    const r = parseHash("#/agents/" + v + "?project=mastyard", known);
+    assert.deepEqual(fields(r), {group: "agents", view: v, id: "", project: "mastyard", addon: "", brain: ""});
+    assert.equal(buildHash({group: "agents", view: v, project: "mastyard"}), "#/agents/" + v + "?project=mastyard");
+  }
+  assert.equal(parseHash("#/agents/fleet?project=nobody", known).ok, false, "a project that is not registered is no scope");
+});
 ok("an add-on's place and its pages, and the add-on scope on Needs you", () => {
   assert.deepEqual(fields(parseHash("#/addon/relay", known)), {group: "addon", view: "relay", id: "", project: "", addon: "relay", brain: ""});
   assert.equal(parseHash("#/addon/relay/relay-log", known).view, "relay-log");

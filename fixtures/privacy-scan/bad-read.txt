@@ -1,0 +1,2 @@
+# reading the clipboard with read()
+navigator.clipboard.read().then(f);

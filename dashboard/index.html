@@ -406,6 +406,7 @@ function fieldError(el, msg){
 document.addEventListener("sl-input", e => { if(e.target.hasAttribute && e.target.hasAttribute("data-error")) fieldError(e.target, ""); });
 let lastPostError = "";
 async function post(path, body){
+  if(path === "/api/demo") HR.hold = true;           // Demo is being switched: no per-project reads of the old world until the next state arrives (see loadHomeReady)
   const r = await fetch(path, {method:"POST",
     headers:{"Content-Type":"application/json","X-Quarterdeck-Token":TOKEN}, body:JSON.stringify(body)});
   const j = await r.json().catch(() => ({}));
@@ -1189,7 +1190,7 @@ const FIX_STUCK = ["failed", "blocked", "abandoned"];
 function homeFacts(){
   const att = obsAttention(), {fixing, live} = liveOperations();
   const fixes = Object.values(S.fixes || {}).filter(mine);
-  const waiting = fixes.filter(r => r.status === "pr");
+  const waiting = fixes.filter(r => r.status === "pr" && !isOld({state: "awaiting", when: r.finished || r.started || ""}));
   const recent = S.runs.filter(mine).filter(r => !routine(r) && Date.now() - new Date(r.at) < 6 * 3600e3);
   const running = fixing.length + live.length;
   const state = att.length ? "blocked" : waiting.length ? "awaiting" : running ? "running" : recent.length ? "done" : "idle";
@@ -1217,17 +1218,39 @@ function homeHeadline(f, n){
     : [f.running && f.state !== "running" ? f.running + " running" : "", f.state !== "blocked" && f.att.length ? f.att.length + " blocked" : "", f.state !== "awaiting" && f.waiting.length ? f.waiting.length + " waiting for you" : ""].filter(Boolean).join(" · ") || "Nothing is running and nothing is waiting.";
   return {text, sub, state: noProjects ? "idle" : f.state, noProjects};
 }
+// What the lists do with missions that are handled or old. Handled = dismissed, nothing to build (and, in the plain mission list, finished): "Hide handled" (on
+// by default, remembered on this browser) keeps them out of the open lists, and a small "N dismissed" opens the dismissed ones. A stopped, blocked or waiting
+// mission older than 7 days goes under one collapsed group and is not counted as needing you. The server keeps the dismissed list (S.dismissed_missions).
+const OLD_MS = 7 * 864e5;
+let hideHandled = true, showDismissed = false, oldOpen = false;
+try{ hideHandled = localStorage.getItem("quarterdeck.hideHandled") !== "0"; }catch(e){}
+const isOld = x => ["blocked", "awaiting", "idle"].includes(x.state) && !!x.when && Date.now() - new Date(x.when) > OLD_MS;
+function missionSets(limit = 40){
+  const all = recentMissions(limit, true), dis = all.filter(x => x.dismissed), rest = all.filter(x => !x.dismissed);
+  const fin = rest.filter(x => x.state === "done" || x.state === "nothing"), old = rest.filter(isOld);
+  return {all, dis, fin, old, open: rest.filter(x => !fin.includes(x) && !old.includes(x))};
+}
+const missionCompact = x => `<li><button class="mlink title" data-m="${esc(x.id)}" ${act("openMissionPage", x.id)}>${esc(x.title)}</button> ${x.state === "nothing" || x.dismissed ? pill(x.dismissed ? "dismissed" : x.state, x.dismissed ? "Dismissed" : MSTATE[x.state][0]) : ""}<span class="sub"> ${x.project ? esc(x.project) : "no project"}${x.when ? " · " + esc(ago(x.when)) : ""}</span></li>`;
+const oldGroup = old => old.length ? `<div class="old-grp"><button class="mlink link" aria-expanded="${oldOpen}" ${oldOpen ? 'aria-controls="old-list"' : ""} ${act("oldToggle")}>Older than 7 days (${old.length})</button>
+  ${oldOpen ? `<ul id="old-list" class="traj-list">${old.map(missionCompact).join("")}</ul>` : ""}</div>` : "";
+const dismissedList = sets => showDismissed && sets.dis.length ? `<ul id="dismissed-list" class="traj-list" aria-label="Dismissed missions">${sets.dis.map(missionCompact).join("")}</ul>` : "";
+const handledBar = sets => `<div class="handled-bar">${slSwitch("Hide handled", {checked: hideHandled, change: actOn("change", "setHideHandled", T.checked), attrs: 'aria-label="Hide handled missions"'})}
+  ${sets.dis.length ? `<button class="mlink link" aria-pressed="${showDismissed}" ${act("dismissedToggle")}>${sets.dis.length} dismissed</button>` : ""}</div>`;
+function setHideHandled(v){ hideHandled = !!v; try{ localStorage.setItem("quarterdeck.hideHandled", v ? "1" : "0"); }catch(e){} render(); }
+function dismissedToggle(){ showDismissed = !showDismissed; render(); }
+function oldToggle(){ oldOpen = !oldOpen; render(); }
 // Home's Mission trajectory: one self-contained card (it reads recentMissions(), MSTATE and the kit helpers and nothing else on this page), so a later
 // page can move it whole. Open missions come first and large, each naming its project and what is next; finished ones are one small collapsed line.
 let trajOpen = false;
 function trajToggle(){ trajOpen = !trajOpen; render(); }
 function trajectoryCard(f){
-  const all = recentMissions(40), open = all.filter(x => x.state !== "done"), fin = all.filter(x => x.state === "done");
+  const sets = missionSets(60), open = sets.open, fin = sets.fin, all = sets.all;
   const rank = {blocked: 0, awaiting: 1, running: 2};
   open.sort((a, b) => (rank[a.state] ?? 3) - (rank[b.state] ?? 3) || b.when.localeCompare(a.when));
   const next = x => {                                       // what is next, from the kind and the state; nothing here is counted or guessed
     const kind = x.id.split(":")[0];
     if(x.state === "blocked") return "Open it to see why it stopped.";
+    if(x.state === "nothing") return "Nothing is needed. You can close the issue or dismiss it.";
     if(x.state === "running") return "Nothing to do yet. It will say when it needs you.";
     if(x.state === "awaiting") return kind === "brief" ? "Read the brief, then approve it or ask for changes." : kind === "plan" ? "Read the plan and approve it if it looks right."
       : /ticket #/.test(x.title) ? "Review the local branch and merge it yourself." : kind === "panel" ? "Answer the open decision." : "Review the pull request and merge it yourself.";
@@ -1237,12 +1260,12 @@ function trajectoryCard(f){
       <span class="rowcard-top"><b>${esc(x.title)}</b>${pill(x.state, MSTATE[x.state][0])}</span>
       <span class="traj-proj">${x.project ? "in <b>" + esc(x.project) + "</b>" : "no project"}${x.when ? " · " + esc(ago(x.when)) : ""}</span>
       <span class="traj-next">Next: ${esc(next(x))}</span></button>`;
-  const compact = x => `<li><button class="mlink title" data-m="${esc(x.id)}" ${act("openMissionPage", x.id)}>${esc(x.title)}</button><span class="sub"> ${x.project ? esc(x.project) : "no project"}${x.when ? " · " + esc(ago(x.when)) : ""}</span></li>`;
+  const compact = missionCompact;
   const finished = fin.length ? `<div class="traj-fin"><button class="mlink link" aria-expanded="${trajOpen}" ${act("trajToggle")}>Finished recently (${fin.length})</button>
       ${trajOpen ? `<ul id="traj-fin-list" class="traj-list">${fin.map(compact).join("")}</ul>` : ""}</div>` : "";
   const body = open.length ? `<div class="list">${open.map(row).join("")}</div>`
     : emptyState({inline: true, title: all.length ? "Nothing is open." : "Nothing is running.", body: all.length ? "Everything that started has finished." : "A fix, a panel or a run appears here once one has started."});
-  return card(null, body + finished, {kicker: "Mission trajectory", count: f.running ? f.running + " running" : "", actions: `<button class="mlink link" ${act("dockGo", "missions")}>All missions</button>`, cls: "traj", label: "Mission trajectory"});
+  return card(null, body + oldGroup(sets.old) + finished + dismissedList(sets) + handledBar(sets), {kicker: "Mission trajectory", count: f.running ? f.running + " running" : "", actions: `<button class="mlink link" ${act("dockGo", "missions")}>All missions</button>`, cls: "traj", label: "Mission trajectory"});
 }
 // Needs you, as a short list: what is waiting for the owner (the same unacknowledged items the Needs you page lists, plus pull requests waiting for review), each row
 // naming its project or its add-on. `items` and `waiting` are already scoped by the page (all projects on the overview, one project on a project's page).
@@ -1285,11 +1308,12 @@ let finOpen = false;
 function finToggle(){ finOpen = !finOpen; render(); }
 function finishedCard(){
   const runs = S.runs.filter(mine).filter(r => !routine(r)).slice(0, 8).map(r => ({id: runMissionId(r), title: r.duty + (r.detail ? ": " + r.detail.replace(/https?:\/\/\S+\/pull\/(\d+)/, "PR #$1") : ""), project: r.project || "fleet", when: r.at, verdict: r.verdict}));
-  const done = recentMissions(40).filter(x => x.state === "done").slice(0, 8).map(x => ({id: x.id, title: x.title, project: x.project || "no project", when: x.when, verdict: "Done"}));
+  const sets = missionSets(40);
+  const done = [...sets.fin.filter(x => !hideHandled || x.state === "done"), ...(showDismissed ? sets.dis : [])].slice(0, 8).map(x => ({id: x.id, title: x.title, project: x.project || "no project", when: x.when, verdict: x.dismissed ? "Dismissed" : x.state === "nothing" ? "Nothing to build" : "Done"}));
   const rows = [...done, ...runs].filter(x => x.when).sort((a, b) => b.when.localeCompare(a.when)).slice(0, 6);
-  const list = rows.map(x => li({title: mlink(x.id, x.title, "title"), sub: `${esc(x.project)} · ${ago(x.when)}`, end: pill(x.verdict === "Done" ? "good" : verdictClass(x.verdict), x.verdict)})).join("");
-  const body = rows.length ? `<button class="mlink link" aria-expanded="${finOpen}" ${act("finToggle")}>${finOpen ? "Hide" : "Show"} the last ${rows.length}</button>${finOpen ? `<div id="fin-list">${list}</div>${asst ? `<div class="away">${awayText()}</div>` : ""}` : ""}`
-    : `<p class="hint">The first finished run will appear here.</p>`;
+  const list = rows.map(x => li({title: mlink(x.id, x.title, "title"), sub: `${esc(x.project)} · ${ago(x.when)}`, end: pill(x.verdict === "Done" ? "good" : x.verdict === "Dismissed" ? "dismissed" : x.verdict === "Nothing to build" ? "nothing" : verdictClass(x.verdict), x.verdict)})).join("");
+  const body = (rows.length || sets.dis.length ? handledBar(sets) : "") + (rows.length ? `<button class="mlink link" aria-expanded="${finOpen}" ${act("finToggle")}>${finOpen ? "Hide" : "Show"} the last ${rows.length}</button>${finOpen ? `<div id="fin-list">${list}</div>${asst ? `<div class="away">${awayText()}</div>` : ""}` : ""}`
+    : `<p class="hint">The first finished run will appear here.</p>`);
   return card(null, body, {kicker: "Recently finished", count: rows.length || null, label: "Recently finished", cls: "fin"});
 }
 function budgetCard(){
@@ -1309,6 +1333,93 @@ function homeCount(){
   const where = [projects.size ? `in ${projects.size} ${plural(projects.size, "project")}` : "", addons.size ? `from ${addons.size} ${plural(addons.size, "add-on")}` : ""].filter(Boolean).join(" and ");
   return `<p class="home-count"><button class="mlink link" ${act("openProjects")}>${n} ${plural(n, "thing needs", "things need")} you${where ? " " + where : ""}</button></p>`;
 }
+/* ---- First run: the first time, one panel over Home says what this machine has and lacks (the same checks as `qtdeck doctor`, from /api/firstrun), with the exact
+   command for each missing piece and a Copy button. One primary button, "Look around in Demo". Nothing is installed or run for the person. ---- */
+const FR = {data: null, loading: false, gone: false, busy: false, focused: false};
+async function loadFirstRun(){
+  if(FR.loading || FR.data) return;
+  FR.loading = true;
+  try{
+    const r = await fetch("/api/firstrun");
+    if(r.status === 401){ showUnpaired(); return; }
+    if(r.ok){ FR.data = await r.json(); if(view === "overview" && !tkTyping()) render(); }
+  }catch(e){ /* the next poll asks again */ }
+  finally{ FR.loading = false; }
+}
+const FR_PILL = {have: ["good", "Have"], lack: ["warn", "Missing"], unknown: ["", "Not checked"]};
+// The one place the page writes to the clipboard: the single command the person just chose to copy, and nothing else. It never reads the clipboard.
+// If the browser refuses, the command is selected in its read-only box and the person is told to press Cmd+C or Ctrl+C.
+function copyCommand(text){
+  let done;
+  try{ done = navigator.clipboard.writeText(String(text)); }catch(e){ done = Promise.reject(e); }
+  done.then(() => { toast("Copied. Paste it into a terminal."); announce("Copied."); }, () => selectCommand(text));
+}
+function selectCommand(text){
+  const box = [...document.querySelectorAll(".fr-cmd")].find(c => c.textContent === String(text));
+  if(box){ const r = document.createRange(); r.selectNodeContents(box); const g = getSelection(); g.removeAllRanges(); g.addRange(r); box.focus(); }
+  toast("Press Cmd+C or Ctrl+C to copy it.");
+}
+function firstRunCard(){
+  const head = `<h2 class="card-t fr-title" id="fr-title" tabindex="-1">Welcome to Quarterdeck</h2>`;
+  if(!FR.data) return card(null, `${head}<p class="hint" role="status"><sl-spinner></sl-spinner> Checking this machine…</p>`, {kicker: "First run", cls: "fr-card", label: "First run"});
+  if(!FR.focused){ FR.focused = true; focusSoon("#fr-title"); }
+  const rows = FR.data.items.map(i => { const [tone, word] = FR_PILL[i.state] || FR_PILL.unknown;
+    return `<li class="fr-item" data-key="${esc(i.key)}"><div class="fr-row"><span class="fr-label">${esc(i.label)}</span>${pill(tone, word)}<span class="sub">${esc(i.detail)}</span></div>`
+      + (i.fix ? `<div class="fr-fix"><code class="fr-cmd" tabindex="0">${esc(i.fix.command)}</code>${btn("Copy", {size: "small", click: act("copyCommand", i.fix.command), attrs: `aria-label="Copy the command for ${esc(i.label)}"`})}</div>${i.fix.note ? `<p class="hint fr-note">${esc(i.fix.note)}</p>` : ""}` : "") + `</li>`; }).join("");
+  return card(null, `${head}<p>Here is what this machine has and what it lacks. Nothing is installed for you: each missing piece shows the command to run yourself.</p>
+    <ul class="fr-list" aria-label="What this machine has">${rows}</ul>
+    <p class="hint">These are the same checks as <code>qtdeck doctor</code>.</p>
+    <div class="btns">${btn("Look around in Demo", {variant: "primary", click: act("firstRunDemo")})}${btn("Skip, I will set it up myself", {click: act("firstRunSkip")})}</div>
+    <p class="hint">Demo is a made-up world. Nothing real is read or changed in it, and you can switch it off at the top.</p>`, {kicker: "First run", cls: "fr-card", label: "First run"});
+}
+async function firstRunDemo(){
+  if(FR.busy) return; FR.busy = true;
+  const j = await post("/api/firstrun", {action: "demo", confirm: true});
+  FR.busy = false;
+  if(!j) return;
+  FR.gone = true; await tick(); render();
+  toast("Demo is on. Everything you see is made up."); announce("Demo is on. Everything you see is made up."); focusSoon("#ptitle");
+}
+async function firstRunSkip(){
+  if(FR.busy) return; FR.busy = true;
+  const j = await post("/api/firstrun", {action: "dismiss", confirm: true});
+  FR.busy = false;
+  if(!j) return;
+  FR.gone = true; await tick(); render(); focusSoon("#ptitle");
+}
+function focusWhen(sel, tries = 20){ const e = $(sel); if(e){ e.scrollIntoView({block: "center"}); e.focus(); } else if(tries) setTimeout(() => focusWhen(sel, tries - 1), 250); }
+function homeTicket(project){ openProject(project); focusWhen("#tk-request"); }
+// After the first project, one next action and only one. When nothing more urgent is waiting: file the first ticket in a project that is ready and has none;
+// else, with every project ready, start the sessions hook if live work is not connected. A project that is not ready yet has its own Ready card.
+const HR = {data: {}, at: 0, loading: false, hold: false};
+async function loadHomeReady(){
+  const names = (S.projects || []).slice(0, 3).map(p => p.name);
+  if(HR.loading || HR.hold || !names.length || Date.now() - HR.at < 15000) return;
+  HR.loading = true; HR.at = Date.now();
+  try{
+    let changed = false;
+    for(const n of names){
+      if(HR.hold) break;
+      const r = await fetch("/api/ready?project=" + encodeURIComponent(n));
+      if(r.status === 401){ showUnpaired(); return; }
+      const j = r.ok ? await r.json() : null;
+      if(j && JSON.stringify(HR.data[n]) !== JSON.stringify(j)){ HR.data[n] = j; changed = true; }
+    }
+    if(changed && view === "overview" && !filter && !tkTyping()) render();
+  }catch(e){ /* the next poll asks again */ }
+  finally{ HR.loading = false; }
+}
+const hookCommand = () => liveOf().install_command || "bash bin/fleet-hook.sh install";
+function quietNext(){
+  const names = (S.projects || []).slice(0, 3).map(p => p.name);
+  if(!names.length) return null;
+  loadHomeReady();
+  if(!names.every(n => HR.data[n])) return null;
+  const first = names.find(n => { const d = HR.data[n]; return d.ready && d.next && d.next.kind === "ticket" && /first ticket/.test(d.next.text); });
+  if(first) return {tag: first, title: "File your first ticket", why: `${first} is ready. Say what you want built and the planner drafts the tickets.`, label: "File your first ticket", step: "ticket", project: first};
+  if(names.every(n => HR.data[n].ready) && !liveOf().hook_installed) return {tag: names[0], title: "Start the dashboard sessions hook", why: "Live work shows the coding sessions running on this machine, in every project. Run this once in a terminal:", cmd: hookCommand(), label: "Copy the command", step: "hook"};
+  return null;
+}
 // The next action: the person's day first (an overdue reminder, or a meeting in the next three hours), else the one most urgent thing across projects, always saying whose it is.
 function homeNext(){
   const now = Date.now(), rem = connOf("reminders"), cal = connOf("calendar");
@@ -1322,7 +1433,7 @@ function homeNext(){
   if(n.act === "attach") return {tag: "", title: n.title, why: n.why, label: n.label, n};
   if(/^Nothing needs you/.test(n.title)){
     const x = att[0];
-    if(!x) return null;                                    // nothing is pressing: nothing is shown
+    if(!x) return quietNext();                             // nothing is pressing: the one gentle next step, or nothing
     n = nextCur = {title: x.source, why: x.text, label: x.blocker === "config" ? "Inspect blocker" : "Inspect", go: x.view, project: x.project};
     return {tag: x.addon ? "Add-on: " + x.addon.label : x.project || "", title: n.title, why: n.why, label: n.label, n};
   }
@@ -1345,14 +1456,83 @@ function homeTimeline(){
     : `<p class="hint">Nothing has run in the last 24 hours.</p>`) : `<p class="hint">Reading the ledger…</p>`;
   return card(null, body, {kicker: "Fleet timeline", cls: "timeline-card", attrs: 'data-calm="hide"', count: "last 24 hours", actions: `<button class="mlink link" ${act("dockGo", "timeline")}>Open the full timeline</button>`, label: "Fleet timeline"});
 }
+/* ---- Live work: every session and duty running now, across projects. S.live is composed on the server (bin/livework.py) from the events the sessions hook writes
+   and from the live locks; a session comes from the hook, a duty is a Quarterdeck run. Everything from the hook is untrusted text, shown only through esc(). A field
+   the hook did not report says "no detail reported". The Running now strip is on Home, the Live work card on the Projects page, and the full fleet view stays a page. ---- */
+const NO_DETAIL = "no detail reported";
+const LIVE_NONE = {items: [], worktrees: [], updated_at: null, hook_installed: false, install_command: "", sources: []};
+const liveOf = () => (S && S.live) || LIVE_NONE;
+const minWords = m => m < 1 ? "less than a minute" : m < 60 ? m + " " + plural(m, "minute") : m < 1440 ? Math.floor(m / 60) + " " + plural(Math.floor(m / 60), "hour") : Math.floor(m / 1440) + " " + plural(Math.floor(m / 1440), "day");
+function liveHeader(){
+  const L = liveOf();
+  const cmd = `<code class="tk-sel">${esc(L.install_command || "bin/fleet-hook.sh install")}</code>`;
+  if(!L.hook_installed && L.updated_at) return `<p class="live-head">The sessions hook is not installed, so no new live data arrives. The last update was ${minWords(Math.max(0, Math.floor((Date.now() - Date.parse(L.updated_at)) / 60000)))} ago. Install it with: ${cmd}</p>`;
+  if(!L.hook_installed) return `<p class="live-head">No live data: the sessions hook is not installed. Install it with: ${cmd}</p>`;
+  if(!L.updated_at) return `<p class="live-head">The sessions hook is installed. No session has reported yet.</p>`;
+  const m = Math.max(0, Math.floor((Date.now() - Date.parse(L.updated_at)) / 60000));
+  return `<p class="live-head">Live data updated ${m < 1 ? "less than a minute" : minWords(m)} ago.</p>`;
+}
+function liveRow(i, o = {}){
+  const duty = i.kind === "duty", agent = i.agent === NO_DETAIL ? "Agent: " + NO_DETAIL : (duty ? "Duty: " : "Agent: ") + i.agent;
+  const where = duty ? "A Quarterdeck duty" : (i.branch ? `<span class="mono">${esc(i.branch)}</span>` : "") + (i.worktree ? (i.branch ? " in " : "") + esc(i.worktree) : "") || "No branch reported";
+  const st = i.state === "working" ? pill("running", "working") : i.waiting_on_owner ? pill("awaiting", "waiting for you") : pill("", i.state);
+  const pr = i.pr ? pill(i.pr.draft ? "" : "running", (i.pr.draft ? "draft " : "") + "PR #" + i.pr.number) : "";
+  const title = `${o.project === false ? "" : esc(i.project || "Other") + " "}${pill("", duty ? "duty" : "session")}`;
+  return `<div class="live-row" data-kind="${esc(i.kind)}" data-state="${esc(i.state)}">${li({title, end: st + pr,
+    sub: `${where}<br>${esc(agent)} · ${esc(i.doing)} · ${esc(minWords(i.minutes))}${!i.project ? "<br>Not in a registered project." : ""}`})}</div>`;
+}
+const liveSplit = items => ({work: items.filter(i => i.state === "working"), wait: items.filter(i => i.state === "idle" && i.waiting_on_owner), idle: items.filter(i => i.state === "idle" && !i.waiting_on_owner)});
+// Home: one line per session or duty working or waiting for you, the quiet ones folded into "N idle sessions", the finished ones not shown.
+function runningStrip(){
+  const L = liveOf(), {work, wait, idle} = liveSplit(L.items);
+  const rows = [...work, ...wait].map(i => liveRow(i)).join("");
+  const more = idle.length ? `<sl-details class="live-more" summary="${idle.length} idle ${plural(idle.length, "session")}" data-fk="live:idle" ${fleetOpen.has("live:idle") ? "open" : ""}>${idle.map(i => liveRow(i)).join("")}</sl-details>` : "";
+  const empty = rows || more ? "" : `<p class="hint">Nothing is running right now.${L.hook_installed ? "" : " Duties show here as they start. Sessions cannot be seen until the hook is installed."}</p>`;
+  return card(null, liveHeader() + rows + empty + more, {kicker: "Running now", label: "Running now", cls: "running-now",
+    count: work.length || wait.length ? `${work.length} working${wait.length ? ", " + wait.length + " waiting for you" : ""}` : null,
+    actions: `<button class="mlink link" ${act("go", "fleet")}>Open the full fleet view</button>`});
+}
+const TREE_STATE = {working: "changes, not committed", committed: "committed, no pull request", draft: "draft pull request", "in review": "in review", merged: "merged", closed: "closed", clean: "clean"};
+function liveTree(w, items){
+  const it = w.session ? items.find(i => i.kind === "session" && i.worktree === w.name && i.state !== "finished") : null;
+  const pr = w.pr ? `${w.pr.draft ? "Draft pull request" : "Pull request"} #${esc(w.pr.number)}${w.pr.title ? " " + esc(w.pr.title) : ""} (${esc(w.pr.state)})` : "No pull request";
+  const who = w.session ? `Session ${esc(w.session.state === "working" ? "working" : "open")}${it ? ": " + esc(it.agent === NO_DETAIL ? NO_DETAIL : it.agent) + " · " + esc(it.doing) : ""}` : "Nobody working in it";
+  const prBtn = w.pr && w.pr.url ? " " + btn("Open pull request #" + w.pr.number, {size: "small", variant: "text", href: w.pr.url}) : "";
+  return `<div class="live-row" data-tree="${esc(w.name)}">${li({title: `<span class="mono">${esc(w.branch || "no branch")}</span>${w.main ? " " + pill("", "main checkout") : ""}`,
+    sub: `${esc(w.name)} · last activity ${esc(agoS(w.last_activity_ago))}${w.changed ? " · " + w.changed + " changed " + plural(w.changed, "file") : ""}<br>${pr}<br>${who}`,
+    end: prBtn + pill(["working", "draft", "in review"].includes(w.stage) || w.session ? "running" : "", TREE_STATE[w.stage] || w.stage || "unknown")})}</div>`;
+}
+function liveProject(name, L){
+  const trees = L.worktrees.filter(w => w.project === name), items = L.items.filter(i => i.project === name && i.state !== "finished");
+  const busy = w => w.session || ["working", "committed", "draft", "in review"].includes(w.stage);
+  const hot = trees.filter(busy).sort((a, b) => (a.last_activity_ago ?? 1e9) - (b.last_activity_ago ?? 1e9)), calm = trees.filter(w => !busy(w));
+  const duties = items.filter(i => i.kind === "duty"), known = new Set(trees.map(w => w.name)), loose = items.filter(i => i.kind === "session" && !known.has(i.worktree));
+  if(!hot.length && !duties.length && !loose.length) return "";
+  const quiet = calm.length ? `<sl-details class="live-more" summary="${calm.length} quiet ${plural(calm.length, "worktree")}" data-fk="live:q:${esc(name)}" ${fleetOpen.has("live:q:" + name) ? "open" : ""}>${calm.map(w => liveTree(w, items)).join("")}</sl-details>` : "";
+  return hot.map(w => liveTree(w, items)).join("") + duties.map(i => liveRow(i, {project: false})).join("") + loose.map(i => liveRow(i, {project: false})).join("") + quiet;
+}
+// The Projects page: worktrees (branch, state, last activity, pull request, the session in it) and the running duties of the chosen project, or the same list for every project grouped by project.
+function liveWorkCard(project){
+  const L = liveOf(), names = project ? [project] : [...S.projects.map(p => p.name), ""];
+  const blocks = names.map(n => ({n, html: liveProject(n, L)})).filter(b => b.html);
+  const idle = names.length - blocks.length;
+  const body = liveHeader() + (blocks.length
+    ? blocks.map(b => (project ? "" : `<h3 class="live-proj" data-live-project="${esc(b.n)}">${esc(b.n || "Other (not in a registered project)")}</h3>`) + b.html).join("") + (!project && idle ? `<p class="hint">${idle} ${plural(idle, "project has", "projects have")} nothing in flight.</p>` : "")
+    : `<p class="hint">${project ? "Nothing is in flight in this project." : "Nothing is in flight in any project."} No worktree has changes, an open pull request or a session working in it.</p>`);
+  const n = L.items.filter(i => i.state !== "finished" && (!project || i.project === project)).length;
+  return `<div id="live-work" tabindex="-1">${card(null, body, {kicker: "Live work", label: "Live work", cls: "live-work", count: n ? `${n} running or open` : null,
+    actions: `<button class="mlink link" ${act("go", "fleet")}>Open the full fleet view</button>`})}</div>`;
+}
+function liveJump(){ if(sel) go("projects"); else openProjects(); focusSoon("#live-work"); }
 function viewCommandCenterNew(){
   if(filter) return viewHomeSearch();
+  if(S.first_run && !FR.gone){ loadFirstRun(); return firstRunCard(); }
   if(S.projects.length) loadBrainPrs();
   const nx = homeNext();
-  const nextBlock = nx ? `<section class="card next-card tone-${nx.n && /failed|blocked|BLOCKED/.test(nx.title) ? "blocked" : "awaiting"}" aria-label="Next action"><div><div class="kicker">Next${nx.tag ? " · " + esc(nx.tag) : ""}</div><h2>${esc(nx.title)}</h2><p>${esc(nx.why)}</p></div>
-      ${btn(esc(nx.label), {variant: "primary", click: nx.day ? act("homeDay") : act("runNext")})}</section>` : "";
+  const nextBlock = nx ? `<section class="card next-card tone-${nx.n && /failed|blocked|BLOCKED/.test(nx.title) ? "blocked" : "awaiting"}" aria-label="Next action"><div><div class="kicker">Next${nx.tag ? " · " + esc(nx.tag) : ""}</div><h2>${esc(nx.title)}</h2><p>${esc(nx.why)}</p>${nx.cmd ? `<div class="fr-fix"><code class="fr-cmd" tabindex="0">${esc(nx.cmd)}</code></div>` : ""}</div>
+      ${btn(esc(nx.label), {variant: "primary", click: nx.day ? act("homeDay") : nx.step === "hook" ? act("copyCommand", nx.cmd) : nx.step === "ticket" ? act("homeTicket", nx.project) : act("runNext")})}</section>` : "";
   if(!S.projects.length) return nextBlock + `<div style="margin-top:20px">${homeNow()}</div>`;
-  return nextBlock + homeCount() + homeNow() + homeTimeline() + `<div class="home-row">${calmHide(finishedCard())}${calmHide(budgetCard())}</div>`;
+  return nextBlock + runningStrip() + homeCount() + homeNow() + homeTimeline() + `<div class="home-row">${calmHide(finishedCard())}${calmHide(budgetCard())}</div>`;
 }
 /* ---- Projects: the place where the work is. It opens on every project together (one card each, then the add-ons, what needs you, and the missions);
    choosing a project (the Open button, a berth or the scope box) makes the same place show that project: its facts, its Ready card, its tickets and
@@ -1393,7 +1573,7 @@ function projectsOverview(){
   const f = homeFacts(), ov = (S.overview || []).filter(o => S.projects.some(p => p.name === o.name));
   const cards = ov.length ? `<div class="pj-grid">${ov.map(o => projectCard(o)).join("")}</div>`
     : emptyState({inline: true, title: "The project summaries could not be read just now.", body: "The pages of each project are still under the tabs. This page tries again by itself."});
-  return `<div class="stack">${calmHide(fleetStrip(f))}${cards}${addonsStrip()}${needsCard(f.att, f.waiting)}${calmHide(trajectoryCard(f))}</div>`;
+  return `<div class="stack">${calmHide(fleetStrip(f))}${cards}${addonsStrip()}${liveWorkCard("")}${needsCard(f.att, f.waiting)}${calmHide(trajectoryCard(f))}</div>`;
 }
 /* ---- Guardrails: the rules every agent is given for a project. The card is a function of the project and lives in #guardrails-slot; it reads GET /api/guardrails and
    saves the full ordered list with POST /api/project/guardrails (bin/guardrails.py). The three locked rules are shown, never editable or removable. ---- */
@@ -1491,7 +1671,7 @@ function guardrailsCard(project){
 }
 function projectPage(){
   const o = pjOf(sel), f = homeFacts();
-  return `<div class="stack pj-page">${o ? projectCard(o, {open: false}) : ""}${needsCard(f.att.filter(x => !x.addon), f.waiting, 3)}${readyCard(sel)}${readyLink(sel)}${repoOptionsCard(sel)}${ticketsCard(sel)}
+  return `<div class="stack pj-page">${o ? projectCard(o, {open: false}) : ""}${liveWorkCard(sel)}${needsCard(f.att.filter(x => !x.addon), f.waiting, 3)}${readyCard(sel)}${readyLink(sel)}${repoOptionsCard(sel)}${ticketsCard(sel)}
     <div id="guardrails-slot">${guardrailsCard(sel)}</div></div>`;
 }
 function viewProjects(){
@@ -1555,16 +1735,18 @@ function loadMission(){
 const fixMissionId = r => `fix:${r.panel}#${r.item}`;
 const runMissionId = r => `run:${r.at}|${r.project}|${r.duty}`;
 const attnMissionId = x => x.project && x.at && !isPlace(x.view) ? `run:${x.at}|${x.project}|${x.duty}` : `attn:${x.id}`;
-const MSTATE = {running: ["Running", "blue"], blocked: ["Blocked", "bad"], awaiting: ["Awaiting you", "warn"], done: ["Done", "good"], idle: ["Not started", ""]};
+const MSTATE = {running: ["Running", "blue"], blocked: ["Blocked", "bad"], awaiting: ["Awaiting you", "warn"], done: ["Done", "good"], nothing: ["Nothing to build", "nothing"], idle: ["Not started", ""]};
 const NSTATE = {done: "Done", active: "Active", blocked: "Blocked", awaiting: "Awaiting you", notstarted: "Not started", skipped: "Skipped"};
-const fixStateOf = r => r.status === "running" ? "running" : r.status === "pr" ? "awaiting" : ["failed", "blocked", "abandoned"].includes(r.status) ? "blocked" : "done";
-function recentMissions(limit = 8){
+const fixStateOf = r => r.mstate || (r.status === "running" ? "running" : r.status === "pr" ? "awaiting"
+  : r.status === "nothing" || (["failed", "blocked", "abandoned"].includes(r.status) && /^\s*NO_CHANGE\b/i.test(r.detail || "")) ? "nothing"
+  : ["failed", "blocked", "abandoned"].includes(r.status) ? "blocked" : "done");
+function recentMissions(limit = 8, withDismissed = false){
   const fx = Object.values(S.fixes || {}).filter(mine).map(r => ({id: fixMissionId(r), title: r.title, project: r.project, state: fixStateOf(r), when: r.finished || r.started || ""}));
   const pn = S.panels.filter(mine).filter(p => !p.superseded_by).map(p => ({id: "panel:" + p.id, title: p.headline || p.subject || p.discipline + " panel", project: p.project,
     state: p.status === "running" ? "running" : p.status === "done" ? "done" : "blocked", when: p.finished || p.started || ""}));
   // a cycle (qtdeck cycle) is one mission too; the page reads its record. The only thing it can do is start one (Start a full cycle), never resume or stop it
   const cy = (S.cycles || []).filter(mine).map(c => ({id: "cycle:" + c.id, title: `Cycle · ${Number.isInteger(c.ticket) ? "ticket #" + c.ticket : "#" + c.issue} ${c.title || ""}`.trim(), project: c.project,
-    state: c.status === "running" ? "running" : c.status === "awaiting-review" ? "awaiting" : ["needs-human", "failed", "stopped-cap", "stopped-ceiling"].includes(c.status) ? "blocked" : "done",
+    state: c.status === "running" ? "running" : c.status === "awaiting-review" ? "awaiting" : c.status === "nothing" ? "nothing" : ["needs-human", "failed", "stopped-cap", "stopped-ceiling"].includes(c.status) ? "blocked" : "done",
     when: c.finished || c.started || ""}));
   // a design brief or a sprint plan waiting for you is a mission too; a brief for a new idea has no project yet, so it shows with every project together and under none in particular
   const bf = (S.briefs || []).filter(b => sel ? b.project === sel : true).map(b => ({id: "brief:" + b.id, title: "Brief · " + b.title, project: b.project,
@@ -1572,13 +1754,15 @@ function recentMissions(limit = 8){
       : ["proposed", "changes_requested"].includes(b.status) || b.mockups === "ready" ? "awaiting" : "done", when: b.at || ""}));
   const pl = (S.plans || []).filter(mine).map(p => ({id: "plan:" + p.id, title: `Sprint plan · ${p.project}`, project: p.project,
     state: p.status === "proposed" ? "awaiting" : p.status === "approved" ? "awaiting" : "done", when: p.at || ""}));
-  return [...fx, ...pn, ...cy, ...bf, ...pl].sort((a, b) => b.when.localeCompare(a.when)).slice(0, limit);
+  const dis = S.dismissed_missions || {};
+  return [...fx, ...pn, ...cy, ...bf, ...pl].map(x => ({...x, dismissed: !!dis[x.id]})).filter(x => withDismissed || !x.dismissed)
+    .sort((a, b) => b.when.localeCompare(a.when)).slice(0, limit);
 }
 function missionList(){
-  const rec = recentMissions();
-  return rec.length ? `<div class="mission-list">${rec.map(x => `<button class="mission-li" data-m="${esc(x.id)}" ${act("openMissionPage", x.id)}>
+  const sets = missionSets(60), rec = [...sets.open, ...(hideHandled ? [] : sets.fin)];
+  return sets.all.length ? `${rec.length ? `<div class="mission-list">${rec.slice(0, 30).map(x => `<button class="mission-li" data-m="${esc(x.id)}" ${act("openMissionPage", x.id)}>
       <span class="t">${esc(x.title)}</span><span class="sub">${esc(x.project || "")}${x.when ? " · " + ago(x.when) : ""}</span>
-      ${pill(x.state, MSTATE[x.state][0])}</button>`).join("")}</div>`
+      ${pill(x.state, MSTATE[x.state][0])}</button>`).join("")}</div>` : `<p class="hint">Nothing is open.</p>`}${oldGroup(sets.old)}${dismissedList(sets)}${handledBar(sets)}`
     : emptyState({kicker: "No mission selected", title: "No missions yet.", body: "A fix, a panel or a run shows up here once one has started.", label: "Open the Ledger", click: act("go", "ledger")});
 }
 /* ---- Tickets: say what you want built, check the draft, file it; and the ways forward for a project with no GitHub repo. ----
@@ -1843,15 +2027,20 @@ function readyItemsHtml(items, d){
   return `<div class="rd-list" role="list">${items.map(i => `<details class="rd-item" role="listitem"${(RD.open[i.key] === undefined ? i.state === "blocked" : RD.open[i.key]) ? " open" : ""}><summary ${act("rdToggle", i.key)}><span class="rd-label">${esc(i.label)}</span>${rdPill(i)}
     <span class="sub">${esc(rdShort(i.detail))}</span></summary><div class="rd-body">${d ? rdItemBody(i, d) : `<p>${esc(i.detail)}</p>`}</div></details>`).join("")}</div>`;
 }
+function rdOne(d){        // exactly one next step: the checklist's own, except that a ready project with tickets already filed and no sessions hook is shown the hook instead
+  const n = d.next;
+  if(d.ready && n.kind === "ticket" && !/first ticket/.test(n.text) && !liveOf().hook_installed) return {kind: "hook", text: "Start the dashboard sessions hook: " + hookCommand(), command: hookCommand()};
+  return n;
+}
 function rdNextLabel(n){
-  return ({"set-verify": "Set a verify command", "fix-verify": "Prove it again", "enable-cycle": "Allow cycles"})[n.kind] || String(n.text).split(":")[0];
+  return ({"set-verify": "Set a verify command", "fix-verify": "Prove it again", "enable-cycle": "Allow cycles", hook: "Copy the install command"})[n.kind] || String(n.text).split(":")[0];
 }
 function readyCard(project){
   rdScope(project || "");
   const d = project ? rdData(project) : null;
   if(!project || !d) return "";
   if(d.ready && !RD.show) return "";
-  const n = d.next, busy = !!RD.busy || d.running.prove || d.running.docs;
+  const n = rdOne(d), busy = !!RD.busy || d.running.prove || d.running.docs;
   const head = d.ready ? `<p class="hint" role="status">${esc(project)} is ready for a first ticket. The rest below is optional.</p>`
     : `<p class="hint" role="status">${esc(project)} is not ready yet. One thing is left before a ticket makes sense.</p>`;
   const run = busy ? callout("running", d.running.prove || RD.busy === "prove" ? "Proving" : "Working", d.running.prove || RD.busy === "prove"
@@ -1859,7 +2048,7 @@ function readyCard(project){
   const err = RD.error && !busy ? callout("blocked", "That did not finish", esc(RD.error)) : "";
   const how = RD.how && !busy ? `<div class="note-line">Run this in a terminal: <code class="tk-sel">${esc(n.command)}</code></div>` : "";
   const go = btn(esc(rdNextLabel(n)), {variant: "primary", click: act("rdNext"), disabled: busy, attrs: 'id="rd-next"'});
-  return card("Is it ready?", `${head}${readyItemsHtml(d.items, d)}${run}${err}${how}<div class="btns rd-go">${go}</div><p class="sub" id="rd-next-line">Next: ${esc(n.text)}</p>`,
+  return card("Is it ready?", `${head}${readyItemsHtml(d.items, d)}${run}${err}${how}<div class="btns rd-go">${go}</div><p class="sub" id="rd-next-line">Next: ${esc(n.text)}</p>${n.kind === "hook" ? `<div class="fr-fix"><code class="fr-cmd" tabindex="0">${esc(n.command)}</code></div>` : ""}`,
     {kicker: "Ready? · " + project, label: "Is it ready?", cls: "rd-card"});
 }
 function readyLink(project){
@@ -1875,7 +2064,8 @@ function rdShow(){ rdScope(sel); RD.show = true; render(); focusSoon("#rd-next")
 async function rdNext(){
   const d = rdData(sel);
   if(!d || RD.busy) return;
-  const n = d.next;
+  const n = rdOne(d);
+  if(n.kind === "hook") return copyCommand(n.command);
   if(n.kind === "prove" || n.kind === "fix-verify") return rdProve();
   if(n.kind === "ticket"){ const b = $("#tk-request"); if(b){ b.scrollIntoView({block: "center"}); b.focus(); } else window.scrollTo(0, document.body.scrollHeight); return; }
   if(n.kind === "mission"){ const m = /ticket (\d+)/.exec(n.text); if(m) return tkMission(Number(m[1]), null); return; }
@@ -1995,7 +2185,7 @@ async function startCycle(){
   if(j.id) openMissionPage("cycle:" + j.id); else go("missions");
 }
 function missionEmpty(){
-  const rec = recentMissions();
+  const rec = missionSets(60).all;
   return cycleCard() + (rec.length ? `<p class="hint" style="margin-bottom:var(--s4)">Pick one to focus on. These are the most recent.</p>` : "") + missionList();
 }
 function pipelineHtml(nodes){
@@ -2016,15 +2206,63 @@ function missionActions(m){
     if(b.rerun && m.kind === "fix" && it){ const pid = m.id.slice(4).split("#")[0]; parts.push(`<span class="fixslot" data-panel="${esc(pid)}" data-item="${it.n}" data-project="${esc(m.project)}" data-title="${esc(it.title || "")}"></span>`); }
   }
   // a fix or a cycle on an issue: a developer can ask for a design brief for that issue. It needs the brief duty switched on for the project.
+  // The hint about adding the duty shows only when the project really lacks it and the mission has no brief; with the duty it is a button; with a brief, a link to it.
   if(m.issue && m.project && (m.kind === "fix" || m.kind === "cycle")){
     const pr = (S.projects || []).find(p => p.name === m.project);
-    parts.push(pr && (pr.duties || []).includes("brief") ? btn("Make a brief for this issue", {size: "small", click: act("briefForIssue", m.project, Number(m.issue))})
-      : `<span class="hint">To make a brief for this issue, add "brief" to the duties of ${esc(m.project)}.</span>`);
+    const made = (S.briefs || []).find(b => b.project === m.project && Number(b.issue) === Number(m.issue));
+    if(made) parts.push(mlink("brief:" + made.id, "Open the brief for this issue", "link"));
+    else if(pr && (pr.duties || []).includes("brief")) parts.push(btn("Make a brief for this issue", {size: "small", click: act("briefForIssue", m.project, Number(m.issue))}));
+    else if(pr) parts.push(`<span class="hint">To make a brief for this issue, add "brief" to the duties of ${esc(m.project)}.</span>`);
   }
   if(!parts.length && m.kind === "fix" && m.state === "idle" && it){ const pid = m.id.slice(4).split("#")[0]; parts.push(`<span class="fixslot" data-panel="${esc(pid)}" data-item="${it.n}" data-project="${esc(m.project)}" data-title="${esc(it.title || "")}"></span>`); }
-  return parts.length ? `<div class="btns mission-actions" style="margin-top:14px">${parts.join("")}</div>` : "";
+  return (parts.length ? `<div class="btns mission-actions" style="margin-top:14px">${parts.join("")}</div>` : "") + missionDoRows(m, parts.some(x => x.includes('variant="primary"')));
 }
-const TONE = {running: "running", blocked: "blocked", awaiting: "awaiting", done: "done", idle: ""};
+// What the owner can do with a finished or stopped mission, each with one line of what it does and what it never does. One primary at most, and none
+// when the row above already has one. The server checks every one again (POST /api/mission/action).
+function missionDoRows(m, hasPrimary){
+  if(m.kind !== "fix" && m.kind !== "cycle") return m.state === "done" || m.state === "blocked" || m.state === "nothing" ? doRows([dismissRow(m)]) : "";
+  const rows = [], repo = ((S.projects || []).find(p => p.name === m.project) || {}).repo || "", pr = m.evidence && m.evidence.pr;
+  let primary = !hasPrimary;
+  const pick = () => { const v = primary ? "primary" : ""; primary = false; return v; };
+  if(m.fix_status === "merged" && pr) rows.push([btn("Open the pull request", {variant: pick(), href: pr}), "Opens the merged pull request on GitHub. Nothing is changed."]);
+  if(m.github && m.github.state === "merged" && m.fix_status && m.fix_status !== "merged")
+    rows.push([btn("Mark as merged", {variant: pick(), click: act("markMerged", m.id)}), "Records here that it merged, after GitHub says so. It never changes anything on GitHub."]);
+  if(m.state === "nothing" && m.kind === "fix" && m.issue && repo){
+    rows.push(m.issue_closed ? [`<span class="hint">Issue #${esc(m.issue)} was closed from here.</span>`, ""]
+      : [btn("Close the issue", {variant: pick(), click: act("closeIssueFor", m.id, repo, Number(m.issue))}), `Closes issue #${esc(m.issue)} on GitHub with a short comment, only after you say yes. It never closes anything else.`]);
+  }
+  if(m.state === "blocked") rows.push([btn("Try again", {variant: pick(), click: act("retryMission", m.id)}), "Starts the same work again within today's budget and limits, after you say yes. It never changes what already ran."]);
+  if(["done", "nothing", "blocked"].includes(m.state)) rows.push(dismissRow(m));
+  return doRows(rows);
+}
+const dismissRow = m => m.dismissed ? [btn("Undo dismiss", {click: act("dismissMission", m.id, true)}), "Brings it back into the lists."]
+  : [btn("Dismiss", {click: act("dismissMission", m.id, false)}), "Dismiss only hides it here. It stays in History and you can undo it."];
+const doRows = rows => rows.length ? `<div class="mact" role="group" aria-label="What you can do">${rows.map(([b, why]) => `<div class="mact-row">${b}${why ? `<span class="hint">${why}</span>` : ""}</div>`).join("")}</div>` : "";
+async function missionPost(id, action, extra){
+  const j = await post("/api/mission/action", {id, action, ...extra});
+  if(!j) return null;
+  delete missionCache[id]; try{ await tick(); }catch(e){}
+  render(); return j;
+}
+async function dismissMission(id, undo){
+  const j = await missionPost(id, undo ? "undo" : "dismiss");
+  if(j) toast(undo ? "Brought back into the lists." : "Dismissed. It is kept in History, and you can undo it here.");
+}
+async function markMerged(id){
+  const j = await missionPost(id, "mark_merged", {});
+  if(j) toast("Marked as merged.");
+}
+async function closeIssueFor(id, repo, issue){
+  if(!await confirmDlg(`Quarterdeck will close issue #${issue} in ${repo} on GitHub and leave a short comment saying it was already fixed. Nothing else is changed. Close it?`, {title: "Close the issue?", ok: "Yes, close the issue"})) return;
+  const j = await missionPost(id, "close_issue", {confirm: true});
+  if(j) toast(`Issue #${issue} closed.`);
+}
+async function retryMission(id){
+  if(!await confirmDlg("Quarterdeck will start the same work again. It uses the same budget and limits as before, and it will not start if one is already running. Start it?", {title: "Try again?", ok: "Yes, start it"})) return;
+  const j = await missionPost(id, "retry", {confirm: true});
+  if(j) toast("Started again. It appears here when it has something to say.");
+}
+const TONE = {running: "running", blocked: "blocked", awaiting: "awaiting", done: "done", nothing: "nothing", idle: ""};
 // A cycle on a local ticket: the crew's steps as the record holds them (a stage that did not apply is "Skipped" with its reason, never a failure), the local
 // branch and the command that shows it as plain selectable text, and one line of what comes next.
 function ticketMission(m){
@@ -2541,8 +2779,7 @@ function crewRow(r){
   if(st === "running"){
     const first = r.live.map(x => x.since).sort()[0], what = r.live[0].what;
     line = `Running now${many ? " on " + esc([...new Set(r.live.map(x => x.project))].join(", ")) : ""} · ${elapsedSpan(first)}${what ? " · " + esc(what) : ""}${r.live.length > 1 ? ` · ${r.live.length} at once` : ""}`;
-  } else if(st === "off") line = `Not enabled for this project. <button class="mlink link" ${act("crewEnableHelp", project, duty)}>How to enable it</button>`;
-  else if(st === "unbuilt") line = "Listed for this project, but its script is not built yet.";
+  } else if(st === "unbuilt") line = "Listed for this project, but its script is not built yet.";
   else if(st === "never") line = many ? "Never run." : "Never run for this project.";
   else line = `${st === "attention" ? "<b>Needs attention.</b> " : ""}Last result: ${esc(a.last_verdict || "ran")}${many ? " on " + esc(a.project) : ""} · ${ago(a.last_at)}${a.last_detail ? `<span data-calm="hide"> · ${esc(crewDetail(a.last_detail))}</span>` : ""}`;
   const can = st !== "off" && st !== "unbuilt";
@@ -2552,25 +2789,56 @@ function crewRow(r){
   return `<div class="crew-row tone-${st}">${li({title: `<span class="mono">${esc(duty)}</span>${sel ? "" : ` <span class="crew-proj">${esc(where)}</span>`} ${badge}`,
     sub: `${esc(crewMod.sentence(duty, r.role))}<br><span class="crew-last">${line}</span>`, end})}</div>`;
 }
+const suggestedOf = project => ((S.projects.find(x => x.name === project) || {}).suggested) || [];
+// One line in the folded Available list: the name, what it does, why the scan suggests it (when it does) and, for a chosen project, a button that turns it on.
+function crewAvailRow(r, project){
+  const sg = project ? suggestedOf(project).find(x => x.duty === r.duty) : null;
+  return `<div class="li crew-avail-row" data-avail="${esc(r.duty)}"><div><b class="mono">${esc(r.duty)}</b> ${sg ? pill("", "suggested") + " " : ""}<span class="sub">${esc(crewMod.sentence(r.duty, r.role))}</span>${sg && sg.why ? `<br><span class="why">Suggested for this project: ${esc(sg.why)}</span>` : ""}</div>
+    ${project ? `<div class="end">${btn("Enable", {size: "small", click: act("crewEnable", project, r.duty), attrs: `data-enable="${esc(r.duty)}" aria-label="Enable the ${esc(r.duty)} for ${esc(project)}"`})}</div>` : ""}</div>`;
+}
+function crewAvailable(rows, project){
+  if(!rows.length) return "";
+  const order = crewMod.groupDuties(rows.map(r => r.duty)).flatMap(g => g.duties), sg = new Set(project ? suggestedOf(project).map(x => x.duty) : []);
+  const list = order.map(d => rows.find(r => r.duty === d)).sort((x, y) => (sg.has(y.duty) ? 1 : 0) - (sg.has(x.duty) ? 1 : 0));      // the scan's suggestions first, the rest in the page's job order
+  return `<sl-details class="crew-avail" summary="Available (${list.length})" data-fk="crew:avail" ${fleetOpen.has("crew:avail") ? "open" : ""}>
+    <p class="hint">${project ? `Not enabled for ${esc(project)}. Enable one and it moves up to the agents above.` : "Not enabled for any project. Choose a project to enable one."}</p>${list.map(r => crewAvailRow(r, project)).join("")}</sl-details>`;
+}
+async function crewEnable(project, duty){
+  if(!crewMod) return;
+  const role = (S.duties.find(d => d.name === duty) || {}).role || "", sg = suggestedOf(project).find(x => x.duty === duty);
+  const msg = `${crewMod.sentence(duty, role)}${sg && sg.why ? " Why it is suggested: " + sg.why + "." : ""} Enabling it lets ${project} run it. It stays report-only until you run it with Write for real (--apply).`;
+  if(!await confirmDlg(msg, {title: `Enable the ${duty} for ${project}?`, ok: "Enable"})) return;
+  const j = await post("/api/project/duties", {project, add: [duty], confirm: true});
+  if(!j) return;
+  toast(`Enabled the ${duty} for ${project}.`); announce(`The ${duty} is enabled for ${project} and is now listed with the enabled agents.`);
+  await tick();
+  setTimeout(() => focusRun(project + "/" + duty), 120);
+}
 function viewCrew(){
   if(crewMod === null) return `<div class="stack"><sl-skeleton effect="sheen" style="height:90px"></sl-skeleton><sl-skeleton effect="sheen" style="height:200px"></sl-skeleton></div>`;
   if(crewMod === false) return emptyState({kicker: "Crew", title: "The list of agents did not load.", body: "Reload the page to try again.", label: "Reload", click: act("reloadPage")});
   if(!S.projects.some(p => !sel || p.name === sel)) return fleetProjects.has(sel)
     ? emptyState({kicker: "Crew", title: `${sel}'s agents live in its own repository.`, body: "They are not part of Quarterdeck's crew. Fleet lists them.", label: "Open its Fleet", click: act("go", "fleet")})
     : emptyState({kicker: "Crew", title: "No agents for this project.", body: "Add a project and the crew shows here.", label: "Add a project", click: act("openAttach")});
-  const all = crewRows().filter(r => hit(r.duty, r.project || r.projects.join(" "), r.role, crewMod.sentence(r.duty, r.role)));
-  const on = all.filter(r => r.state !== "off"), nRun = on.filter(r => r.state === "running").length, nAtt = on.filter(r => r.state === "attention").length;
+  const rows = crewRows().filter(r => hit(r.duty, r.project || r.projects.join(" "), r.role, crewMod.sentence(r.duty, r.role)));
+  const all = rows.filter(r => r.state !== "off"), off = rows.filter(r => r.state === "off");
+  const nameList = [...new Set([...(S.duties || []).map(d => d.name), ...S.agents.map(a => a.duty)])];
+  const unused = sel ? off : nameList.filter(d => !all.some(r => r.duty === d)).map(d => ({duty: d, role: ((S.duties || []).find(x => x.name === d) || {}).role || ""})).filter(r => hit(r.duty, r.role, crewMod.sentence(r.duty, r.role)));
+  const nRun = all.filter(r => r.state === "running").length, nAtt = all.filter(r => r.state === "attention").length;
+  const nSes = liveOf().items.filter(i => i.kind === "session" && i.state === "working" && (!sel || i.project === sel)).length;
   const tab = (k, label, n, tone) => `<button class="stat ${tone} ${crewFilter === k ? "on" : ""}" aria-pressed="${crewFilter === k}" ${act("crewFilter", k)}>${kicker(label)}<b>${n}</b></button>`;
-  const strip = `<div class="crew-sum" role="group" aria-label="Show">${tab("all", "Agents", on.length, "")}${tab("running", "Running now", nRun, nRun ? "running" : "")}${tab("attention", "Need attention", nAtt, nAtt ? "awaiting" : "")}</div>`;
+  const now = `<div class="stat live-link ${nSes || nRun ? "running" : ""}" role="group" aria-label="Running now">${kicker("Running now")}<span class="live-two"><button class="mlink link" ${act("liveJump")} aria-label="${nSes} ${plural(nSes, "session")} working, see the live work">${nSes} ${plural(nSes, "session")}</button> and <button class="mlink link" ${act("crewFilter", "running")} aria-label="${nRun} ${plural(nRun, "duty", "duties")} running, show them">${nRun} ${plural(nRun, "duty", "duties")}</button></span></div>`;
+  const strip = `<div class="crew-sum" role="group" aria-label="Show">${tab("all", "Agents", all.length, "")}${now}${tab("attention", "Need attention", nAtt, nAtt ? "awaiting" : "")}</div>`;
   const shown = all.filter(r => crewFilter === "all" || r.state === crewFilter);
   const groups = crewMod.groupDuties([...new Set(all.map(r => r.duty))]).map(g => {
-    const rows = shown.filter(r => g.duties.includes(r.duty)).sort((x, y) => crewRank[x.state] - crewRank[y.state] || g.duties.indexOf(x.duty) - g.duties.indexOf(y.duty) || x.project.localeCompare(y.project));
-    return rows.length ? card(g.title, `<p class="hint crew-why" data-calm="hide">${esc(g.why)}</p>${rows.map(crewRow).join("")}`, {count: `${rows.length} ${plural(rows.length, "agent")}`, label: g.title, cls: "crew-group"}) : "";
+    const rs = shown.filter(r => g.duties.includes(r.duty)).sort((x, y) => crewRank[x.state] - crewRank[y.state] || g.duties.indexOf(x.duty) - g.duties.indexOf(y.duty) || x.project.localeCompare(y.project));
+    return rs.length ? card(g.title, `<p class="hint crew-why" data-calm="hide">${esc(g.why)}</p>${rs.map(crewRow).join("")}`, {count: `${rs.length} ${plural(rs.length, "agent")}`, label: g.title, cls: "crew-group"}) : "";
   }).join("");
   const none = crewFilter === "attention" ? emptyState({inline: true, title: "Nothing needs attention.", body: "Every agent's last run finished cleanly.", label: "Show all agents", click: act("crewFilter", "all")})
-    : crewFilter === "running" ? emptyState({inline: true, title: "Nothing is running.", body: "Pick an agent below and press Run.", label: "Show all agents", click: act("crewFilter", "all")})
-    : emptyState({inline: true, title: "No agent matches the search.", body: "Clear the search box to see them all."});
-  return strip + (groups ? `<div class="stack">${groups}</div>` : none) + `<div class="stack">${ownAgents()}</div>`;
+    : crewFilter === "running" ? emptyState({inline: true, title: "No duty is running.", body: "Pick an agent below and press Run. Sessions are listed under Live work.", label: "Show all agents", click: act("crewFilter", "all")})
+    : all.length ? emptyState({inline: true, title: "No agent matches the search.", body: "Clear the search box to see them all."})
+    : emptyState({inline: true, title: "No agent is enabled for this project yet.", body: unused.length ? "Open Available below and enable one." : "Add a project and its agents show here."});
+  return strip + (groups ? `<div class="stack">${groups}</div>` : none) + crewAvailable(unused, sel) + `<div class="stack">${ownAgents()}</div>`;
 }
 function crewFilterSet(k){ crewFilter = k; render(); }
 /* A project's own agents (.claude/agents in its folder): read-only, listed beside the crew, never run from here. Everything from the file is text, escaped. */
@@ -2593,11 +2861,11 @@ function ownAgents(){
     return card(title, `${rows}<p class="hint">Choose a project to see its agents and what Quarterdeck's crew covers for it.</p>`, {label: title});
   }
   const o = ownAg[sel] || {};
-  if(!o.data) return card(title, `<p class="hint">${o.bad ? "This project's agents could not be read." : "Looking."}</p>`, {label: title});
+  if(!o.data) return o.bad ? `<p class="hint">This project's agents could not be read.</p>` : "";
   const ag = o.data.agents;
-  const list = ag.length ? ag.map(a => li({title: `<span class="mono">${esc(a.name)}</span> ${pill("", "from the project")}`,
-      sub: `${esc(a.description || "No description.")}${a.model ? `<br><span class="sub">Model: ${esc(a.model)}</span>` : ""}`})).join("")
-    : emptyState({inline: true, title: "This project has no agents of its own.", body: "Quarterdeck's crew covers every job."});
+  if(!ag.length) return `<p class="hint">This project keeps no agents of its own.</p>`;
+  const list = ag.map(a => li({title: `<span class="mono">${esc(a.name)}</span> ${pill("", "from the project")}`,
+      sub: `${esc(a.description || "No description.")}${a.model ? `<br><span class="sub">Model: ${esc(a.model)}</span>` : ""}`})).join("");
   const lead = Object.fromEntries(crewMod.GROUPS.map(g => [g.id, g]));
   const cov = (o.data.coverage || []).filter(c => lead[c.job]).map(c => { const g = lead[c.job];
     return li({title: esc(g.title), sub: c.fits.length ? `Suggested match, not confirmed: ${c.fits.map(esc).join(", ")}.`
@@ -2671,13 +2939,6 @@ $("#run-dlg").addEventListener("sl-after-hide", e => {            // back to the
   runBack = {key, until: Date.now() + 6000};
   setTimeout(() => focusRun(key), 60);                           // after Shoelace has let go of focus
 });
-function crewEnableHelp(project, duty){
-  $("#dtitle").textContent = `Switch on the ${duty} for ${project}`;
-  $("#dbody").innerHTML = `<p>${esc(crewMod ? crewMod.sentence(duty, (S.duties.find(d => d.name === duty) || {}).role) : "")}</p>
-    <h2>How</h2><p>Add <code>"${esc(duty)}"</code> to the <code>duties</code> list of <b>${esc(project)}</b> in <code>config/projects.json</code> and save the file. This page picks it up within a few seconds; nothing needs restarting.</p>
-    <p class="hint">A project only runs the agents it lists, so an agent it does not list can never start by accident.</p>`;
-  openDrawer(drawerFoot(btn("Close", {variant: "primary", click: act("closeDrawer")})));
-}
 /* ---- spend ---- */
 const usd = v => v == null ? "none" : "$" + (v >= 100 ? v.toFixed(0) : v.toFixed(2));
 // Rough cost of one fix by tier until real fixes have run, then the measured
@@ -3441,77 +3702,101 @@ async function openDoc(name){
 /* ---- add a project: look at a folder, say what was found, register it only on a click ---- */
 let attachLast = null;
 const cap = t => t ? t[0].toUpperCase() + t.slice(1) : t;
+const AT_STEPS = ["Folder", "Scan", "Missing docs", "Crew", "Ready"];
+function atSteps(n){        // n: the step the person is on (1 to 5); earlier steps are marked done
+  const el = $("#at-steps"); if(!el) return;
+  el.innerHTML = AT_STEPS.map((s, i) => `<li${i + 1 === n ? ' aria-current="step"' : ""} class="${i + 1 < n ? "done" : i + 1 === n ? "now" : ""}">${i + 1 < n ? '<span class="sr-only">Done: </span>' : ""}${esc(s)}</li>`).join("");
+}
+// What was pasted, made into a plain path: quotes and spaces around it, a trailing slash and a backslash before a space (as a terminal writes it) go. The server checks the rest.
+function cleanPath(raw){
+  let p = String(raw || "").trim();
+  if(p.length > 1 && /^(["'`]).*\1$/.test(p)) p = p.slice(1, -1).trim();
+  p = p.replace(/\\ /g, " ");
+  while(p.length > 1 && /[\/\\]$/.test(p)) p = p.slice(0, -1);
+  return p;
+}
 function openAttach(path){
-  $("#dtitle").textContent = "Add a project";
-  $("#dbody").innerHTML = `<p>Name a folder on this computer. Quarterdeck looks inside it, reads nothing secret, changes nothing, and tells you what it found. It is added only when you click.</p>
-    ${slInput({id: "at-path", label: "Folder", placeholder: "~/Projects/my-app", value: path || "", keydown: actOn("keydown", "onEnter", "attachLook")})}
-    <div class="btns">${btn("Look at it", {variant: "primary", click: act("attachLook")})}</div>
+  $("#dtitle").textContent = "Attach a project";
+  $("#dbody").innerHTML = `<ol class="at-steps" id="at-steps" aria-label="The five steps"></ol>
+    <section class="at-step" aria-labelledby="at-h1"><h3 id="at-h1" tabindex="-1">Step 1 of 5 · Paste the folder</h3>
+    <p>Paste the full path of one project folder.</p>
+    ${slInput({id: "at-path", label: "Project folder", placeholder: "~/Projects/my-app", value: path || "", help: "For example ~/Projects/my-app. It must be under your home folder and not a hidden folder.", keydown: actOn("keydown", "onEnter", "attachLook")})}
+    <p class="hint">Nothing is read until you press Scan. Quarterdeck never scans your home folder.</p>
+    <div class="btns">${btn("Scan", {variant: "primary", click: act("attachLook")})}</div></section>
     <div id="at-out" role="status" aria-live="polite"></div>
     <h3 style="margin-top:28px">Or start something new</h3>
-    <p>Makes a folder with a git repository and a README, then shows it here so you can add it. It writes nothing else.</p>
+    <p>Makes a folder with a git repository and a README, then shows it here so you can attach it. It writes nothing else.</p>
     ${slInput({id: "nw-name", label: "Name", placeholder: "my-new-app"})}
     ${slInput({id: "nw-about", label: "What it is for, in a sentence"})}
     ${slInput({id: "nw-folder", label: "Where to put it", value: "~/Projects"})}
     <div class="btns">${btn("Create it", {click: act("attachNew")})}</div>
     <div id="nw-idea" aria-live="polite"></div>`;
+  atSteps(1);
   nwBrief = {id: "", name: "", busy: false};
   if(!drawerOn()) openDrawer();
   setTimeout(() => { const i = $("#at-path"); if(i) i.focus(); }, 120);
 }
 async function attachLook(){
-  const path = $("#at-path").value.trim(), out = $("#at-out");
-  if(!path){ out.innerHTML = ""; return fieldError($("#at-path"), "Type a folder first."); }
-  fieldError($("#at-path"), "");
-  out.innerHTML = `<p class="hint" style="margin-top:var(--s4)"><sl-spinner></sl-spinner> Looking…</p>`;
+  const field = $("#at-path"), path = cleanPath(field.value), out = $("#at-out");
+  if(!path){ out.innerHTML = ""; atSteps(1); return fieldError(field, "Paste a folder path first."); }
+  fieldError(field, "");
+  out.innerHTML = `<p class="hint" style="margin-top:var(--s4)"><sl-spinner></sl-spinner> Scanning…</p>`;
   const r = await fetch("/api/attach", {method:"POST", headers:{"Content-Type":"application/json","X-Quarterdeck-Token":TOKEN}, body:JSON.stringify({path})});
   const j = await r.json().catch(() => ({}));
-  if(!r.ok){ out.innerHTML = ""; return fieldError($("#at-path"), j.error || "Could not look at that folder."); }
+  if(!r.ok){ out.innerHTML = ""; atSteps(1); return fieldError(field, j.error || "Could not scan that folder."); }
   attachLast = j;
   const p = j.profile, e = j.proposal.entry, list = k => p[k].map(i => i.name).join(", ");
   const line = (label, k) => p[k].length ? `<li><b>${label}</b> ${esc(list(k))}</li>` : "";
   const plan = j.proposal.duty_reasons || {}, sugg = j.proposal.suggested || [], role = Object.fromEntries(j.duty_options.map(o => [o.name, o.role]));
-  const dutyBox = (name, checked) => slCheckbox(`${esc(name)}<small> ${esc((plan[name] || {}).why || role[name] || "")}</small>`, {attrs: `data-ad="${esc(name)}"${checked ? " checked" : ""}`});
+  const dutyBox = (name, checked) => `<div class="at-duty">${slSwitch(`${esc(name)}<small> ${esc((plan[name] || {}).why || role[name] || "")}</small>`, {attrs: `data-ad="${esc(name)}"`, checked})}</div>`;
   const dutyGroup = names => names.length ? `<div class="focus-rows" style="flex-direction:column;align-items:flex-start;gap:0">${names.map(n => dutyBox(n, e.duties.includes(n))).join("")}</div>` : "";
   const known = j.duty_options.map(o => o.name);
   const dOn = known.filter(n => e.duties.includes(n)), dSug = known.filter(n => !e.duties.includes(n) && sugg.includes(n)), dRest = known.filter(n => !e.duties.includes(n) && !sugg.includes(n));
   const cmdHelp = (k, none) => e[k] ? cap(j.proposal.reasons[k] || "") + ". One plain command." : none;
-  out.innerHTML = `<h3>What was found in ${esc(p.name)}</h3>
-    <p id="at-stack"><b>${esc(p.stack && p.stack.summary || "")}</b></p><ul>`
+  const cmdLine = (label, v, none) => `<li><b>${label}</b> ${v ? `<code>${esc(v)}</code>` : esc(none)}</li>`;
+  const missing = Object.keys((j.survey && j.survey.docs && j.survey.docs.missing) || {});
+  const docCmd = w => `<div class="fr-fix"><code class="fr-cmd">qtdeck docs ${esc(j.proposal.name)} ${w}</code>${btn("Copy", {size: "small", click: act("copyCommand", `qtdeck docs ${j.proposal.name} ${w}`), attrs: `aria-label="Copy the command that drafts the ${w === "readme" ? "README" : "architecture overview"}"`})}</div>`;
+  out.innerHTML = `<section class="at-step" aria-labelledby="at-h2"><h3 id="at-h2" tabindex="-1">Step 2 of 5 · Scan</h3>
+    <p id="at-stack"><b>${esc(p.stack && p.stack.summary || "")}</b></p>
+    <ul>${cmdLine("Verify", e.verify, "none found; the Shipwright stays off until you give one")}${cmdLine("Build", e.build, "none found")}${cmdLine("Lint", e.lint, "none found")}</ul>
+    <p class="hint">Found in ${esc(p.name)}:</p><ul>`
     + line("Languages", "languages") + line("Frameworks", "frameworks") + line("Commands", "commands") + line("Checks that run on push", "ci")
     + line("Containers", "containers") + line("Infrastructure", "infrastructure") + line("Deploys to", "deploy_targets") + line("Sensitive areas", "sensitive")
     + (p.secret_files.length ? `<li><b>Secret files</b> ${esc(list("secret_files"))} (named only, never opened)</li>` : "")
     + line("Agent set-up already there", "agent_config")
-    + (j.survey ? `<li><b>Documents</b> ${esc(j.ready.docs_line || "")}</li>${j.survey.entry_points.length ? `<li><b>Entry points</b> ${esc(j.survey.entry_points.slice(0, 4).map(e => e.file).join(", "))}</li>` : ""}` : "") + `</ul>`
+    + (j.survey && j.survey.entry_points.length ? `<li><b>Entry points</b> ${esc(j.survey.entry_points.slice(0, 4).map(x => x.file).join(", "))}</li>` : "") + `</ul>`
     + (p.notes.length ? `<p>${p.notes.map(n => esc(cap(n))).join("<br>")}</p>` : "")
-    + `<h3>What the crew would do</h3>
-      <p>This is a proposal. Change anything you like; nothing is added until you click the button at the end.</p>
+    + `</section>
+    <section class="at-step" aria-labelledby="at-h3"><h3 id="at-h3" tabindex="-1">Step 3 of 5 · Missing docs</h3>
+      <p id="at-docs">${esc(j.ready.docs_line.replace(/\s*\(qtdeck docs.*$/, ""))}</p>
+      ${missing.length ? `<p class="hint">After you attach, the scribe can draft what is missing. It costs a few cents, you read the draft first, and nothing is written to your project until you say so. These are the commands:</p>${missing.filter(w => w === "readme" || w === "architecture").map(docCmd).join("")}` : `<p class="hint">Nothing is missing, so there is nothing to draft.</p>`}</section>
+    <section class="at-step" aria-labelledby="at-h4"><h3 id="at-h4" tabindex="-1">Step 4 of 5 · Crew</h3>
+      <p>${esc(cap(j.proposal.reasons.duties))}.</p>
       <ul><li><b>Repository</b> ${esc(e.repo || "no GitHub address found")}</li>
       <li><b>Stack notes</b> ${esc(e.packs.join(", ") || "none")} ${e.packs.map(id => packPill((j.pack_status || {})[id])).join(" ")}. ${esc(cap(j.proposal.reasons.packs))}.</li></ul>
-      <div class="sec-h">Duties</div>
-      <p class="hint">${esc(cap(j.proposal.reasons.duties))}.</p>
-      ${dutyGroup(dOn)}
-      ${dSug.length ? `<div class="sec-h">These also fit this stack, switched off</div>
-      <p class="hint">Nothing here is on unless you tick it.</p>${dutyGroup(dSug)}` : ""}
-      ${dRest.length ? `<div class="sec-h">Other duties, off</div>${dutyGroup(dRest)}` : ""}
-      <div class="sec-h">Commands</div>
+      <div class="sec-h">On, with the reason</div>${dutyGroup(dOn) || `<p class="hint">None is on for this project.</p>`}
+      ${dSug.length ? `<div class="sec-h">These also fit this stack, switched off</div><p class="hint">Nothing here is on unless you switch it on.</p>${dutyGroup(dSug)}` : ""}
+      ${dRest.length ? `<details class="at-more"><summary>Other duties, off</summary>${dutyGroup(dRest)}</details>` : ""}
+      <details class="at-more"><summary>Change commands, rules or the name (optional)</summary>
       ${slInput({id: "at-verify", label: "Command that proves a change works", value: e.verify, help: e.verify ? cap(j.proposal.reasons.verify) + ". One plain command. The Shipwright needs one." : "None was found. The Shipwright stays off until you give one."})}
       ${slInput({id: "at-build", label: "Build command", value: e.build || "", help: cmdHelp("build", "None was found. Leave it empty if there is none.")})}
       ${slInput({id: "at-lint", label: "Lint command", value: e.lint || "", help: cmdHelp("lint", "None was found. Leave it empty if there is none.")})}
       ${e.typecheck ? slInput({id: "at-typecheck", label: "Type check command", value: e.typecheck, help: cmdHelp("typecheck", "")}) : ""}
-      <p class="hint">The build command is the one the Shipwright's checks already run. Lint and type check are recorded for your review and the crew's notes; nothing runs them by itself.</p>
       ${slTextarea({id: "at-forbid", label: "Paths the crew may not touch, one per line", rows: 6, value: e.forbidden_paths.join("\n")})}
       <p class="hint">The build, CI and dependency files the harness already protects cannot be removed.</p>
       <div class="sec-h">Standing rules</div>
       <div class="focus-rows" style="flex-direction:column;align-items:flex-start;gap:0">${j.guardrail_options.map((g, i) => slCheckbox(esc(g), {attrs: `data-ag="${esc(g)}" checked${i < 3 ? " disabled" : ""}`})).join("")}</div>
       <p class="hint">Never merging, never pushing to ${esc(e.default_branch)} and never touching secrets stay on.</p>
-      <div class="sec-h">A note for other coding agents</div>
       ${slCheckbox("Also add an AGENTS.md to the project", {id: "at-agents"})}
-      <p class="hint">Off by default. It would be a small new file in the project that says how the crew works there. An AGENTS.md that is already there is never changed.</p>
-    <div class="sec-h">The checklist, as it would be right after you add it</div>
-      <p class="hint">Nothing here is run. The verify command is proven once, later, only when you click.</p>
+      <p class="hint">Off by default. It would be a small new file in the project. An AGENTS.md that is already there is never changed.</p>
+      ${slInput({id: "at-name", label: "Name in Quarterdeck", value: j.proposal.name})}</details></section>
+    <section class="at-step" id="at-ready" aria-labelledby="at-h5"><h3 id="at-h5" tabindex="-1">Step 5 of 5 · Ready</h3>
+      <p class="hint">Nothing is run. This is the checklist as it would be right after you attach. The verify command is proven once, later, only when you click.</p>
       ${j.ready ? readyItemsHtml(j.ready.items, null) : ""}
-    ${slInput({id: "at-name", label: "Name in Quarterdeck", value: j.proposal.name})}
-    <div class="btns">${btn("Add this project", {variant: "primary", click: act("attachAdd")})}</div>`;
+      <div class="btns">${btn("Attach this project", {variant: "primary", click: act("attachAdd")})}</div></section>`;
+  atSteps(4);
+  announce("Scanned. Steps 2 to 5 are below: what was found, missing docs, the crew and the checklist.");
+  const h = $("#at-h2"); if(h && h.scrollIntoView) h.scrollIntoView({block: "start"}); if(h) h.focus({preventScroll: true});
 }
 function attachEdits(){
   const on = a => [...document.querySelectorAll(`#at-out [${a}]`)].filter(c => c.checked).map(c => c.getAttribute(a));
@@ -3645,14 +3930,18 @@ async function attachAdd(){
   attachDone(j);
   await tick();
 }
-function attachDone(j){        // the drawer's last screen: the real checklist, in the same order, and the one next step
-  const name = j.proposal.name, r = j.ready;
-  $("#dtitle").textContent = `Added ${name}`;
-  $("#dbody").innerHTML = `<p>${esc(name)} is in your registry, and its survey is kept in your data folder. Nothing was changed inside the project.</p>
-    <div class="sec-h">Is it ready?</div>${readyItemsHtml(r.items, null)}
-    <p class="sub">Next: ${esc(r.next.text)}</p>
-    <div class="btns">${btn("Open the Ready card", {variant: "primary", click: act("seq", ["closeDrawer"], ["selectProject", name], ["rdShow"], ["go", "projects"])})}${btn("Close", {click: act("closeDrawer")})}</div>`;
-  focusSoon("#dtitle");
+function attachDone(j){        // the drawer's last step: the real checklist, in the same order, and the one next step
+  const name = j.proposal.name, r = j.ready, n = r.next, cmd = n.command && n.kind !== "ticket" ? n.command : "";
+  $("#dtitle").textContent = `Attached ${name}`;
+  $("#dbody").innerHTML = `<ol class="at-steps" id="at-steps" aria-label="The five steps"></ol>
+    <section class="at-step" aria-labelledby="at-h5"><h3 id="at-h5" tabindex="-1">Step 5 of 5 · Ready</h3>
+    <p>${esc(name)} is in your registry, and its survey is kept in your data folder. Nothing was changed inside the project.</p>
+    ${readyItemsHtml(r.items, null)}
+    <p class="sub" id="at-next">Next: ${esc(n.text)}</p>
+    ${cmd ? `<div class="fr-fix"><code class="fr-cmd">${esc(cmd)}</code>${btn("Copy", {size: "small", click: act("copyCommand", cmd), attrs: 'aria-label="Copy the next command"'})}</div>` : ""}
+    <div class="btns">${btn("Open the Ready card", {variant: "primary", click: act("seq", ["closeDrawer"], ["selectProject", name], ["rdShow"], ["go", "projects"])})}${btn("Close", {click: act("closeDrawer")})}</div></section>`;
+  atSteps(5);
+  focusSoon("#at-h5");
 }
 const drawerOn = () => { const d = $("#drawer"); return !!(d && d.open); };
 const paletteOn = () => { const d = $("#palette"); return !!(d && d.open); };
@@ -5067,6 +5356,7 @@ async function tick(){
     if(r.status === 401){ showUnpaired(); return; }
     if(!r.ok) throw new Error("state " + r.status);
     S = await r.json();
+    HR.hold = false;
     if(!routeReady){ await routeLoad; initRoute(); }
     try{ sgTick(); }catch(e){}
     loadAttention();
@@ -5132,15 +5422,16 @@ const ACTIONS = {
   calmShowAll, crewFilter: crewFilterSet, reloadPage: () => location.reload(),
   seeAttention: () => { go("brain"); setTimeout(openAttention, 900); },
   brainErrClear: () => { brainErr = ""; render(); },
-  ackInbox, addSched, approveMissionPlan, attachAdd, attachLook, attachNew, backToLedger, bargeInToggle, briefAct, briefAsk, briefForIssue, briefRetry, briefSend,
+  copyCommand, firstRunDemo, firstRunSkip, homeTicket, ackInbox, addSched, approveMissionPlan, attachAdd, attachLook, attachNew, backToLedger, bargeInToggle, briefAct, briefAsk, briefForIssue, briefRetry, briefSend,
   capDone, capSubmit, caseStepTo, closeCard, closeDrawer, closeMissionPage, closeMobileMenu, closePalette, connAddOpen, connAddSave, connEnable, connHelp, connRemove, connRemoveAccount, connSave, connStore, connTest, crewRun,
-  crewEnableHelp, crewSchedule, openRun, runGo, runPaint,
+  crewEnable, liveJump, crewSchedule, openRun, runGo, runPaint,
   dockStartOver, dockGo, dockToggle, explainWrites, fileAsIssues, fixItem, fixSelected, fleetAct, focusEdit, go, helmOrb, leaveBrain, linkPanelToMission,
   loadBoard, markSeen, mergePr, noteAdd, noteDone, noteEditSave, noteEditStart, noteEditStop, noteFilter, notePromote, noteTag, nwMakeBrief,
   openScope, openAttach, openAttention, openCard, openCycleDialog, openDoc, openFocusDrawer, openFullLog, openMission, openMissionPage, openPalette, openPanel, openShowcase,
   openWhatChanged, palGo, pickCase, planAct, planMove, projSwitch, proposeMissionPlan, publishShowcase, queueAction, replayStep, restartDemo, rhythmScope,
   rowClick, rowKey, runHarbourmaster, runNext, saveFocus, saveMissionDraft, saveMissionEdit, saveShowcaseDraft, saveShowcaseEdit, schedAction,
   selectAddon, selectPlace, selectProject, setBilling, setBrainMode, setCapSave, setFleetView, setHandsFree, setKeyRemove, setKeySave, setLens, setSizeBy, setTheme, sgSpeakToggle, showGuardrails, showLog, showPrivacy,
+  setHideHandled, dismissedToggle, oldToggle, dismissMission, markMerged, closeIssueFor, retryMission,
   startCycle, startMissionPanel, stopRun, talkSubmit, thinkToggle, tlClick, tlHover, tlSet, toggleCalm, toggleDemo, toggleLedger,
   toggleMissionForm, toggleMobileMenu, toggleOld, toggleReplay, toggleSched, toggleSel, toggleShowcaseForm, unpublishShowcase, unqueue, workOn,
   grEdit, grNew, grAdd, grRemove, grMove, grSave, openProject, openProjects, addonNeeds, homeDay, finToggle, trajToggle, tkRequest, tkDraft, tkFile, tkDiscard, tkRepoName, tkRepoSave, tkRepoCreate, tkMission,

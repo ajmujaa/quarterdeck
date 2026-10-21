@@ -2696,7 +2696,7 @@ check("speech hints: with no file there are none; with one, the words and the co
       and _bad == {"words": [], "sounds_like": {}}, (_before, _after))
 _dsrc = pathlib.Path(d.__file__).read_text()
 _fa = _dsrc[_dsrc.index("def fleet_action"):_dsrc.index("import fleetview") if False else _dsrc.index("CLAUDE_SESSION = ")]
-check("fleet route: starting or stopping needs confirm true, and the fleet view is built only for its own route, never in /api/state or the chat digest",
+check("fleet route: starting or stopping needs confirm true, and the fleet document (git and gh reads) is built only for its own route and a background refresh; /api/state carries just the live-work summary (S.live), and the chat digest nothing of it",
       "confirm is required" in _dsrc and _dsrc.count("fleet_view(") == 2 and "fleet" not in pathlib.Path(d.chatctx.__file__).read_text().lower())
 _fsrc = pathlib.Path(_fv.__file__).read_text()
 check("fleet module: no shell, no eval, and no read of the clipboard, screen, apps or location",
@@ -2828,7 +2828,7 @@ with _tf.TemporaryDirectory() as _ad:
         _none = not d.PROJECTS_FILE.exists()
         _c5, _b5 = d.attach_api({"path": str(_app), "apply": True, "confirm": True, "name": "Tidy-App"})
         _c6, _b6 = d.attach_api({"path": str(_app), "apply": True, "confirm": True, "name": "Tidy-App"})
-        check("attach endpoint: no folder, or a folder that is not there, is a plain 400", _c1 == 400 and _c2 == 400 and "not a folder" in _b2["error"])
+        check("attach endpoint: no folder, or a folder that is not there, is a plain 400", _c1 == 400 and _c2 == 400 and "not a folder" in _b2["error"] and "nothing at that path" in _b2["error"])
         check("attach endpoint: looking returns the profile and the proposal and registers nothing", _c3 == 200 and _b3["proposal"]["entry"]["verify"] == "npm test" and not _b3["applied"])
         check("attach endpoint: applying without confirm is refused and nothing is written", _c4 == 400 and "confirm" in _b4["error"] and _none)
         check("attach endpoint: with confirm the project is registered under the lowercase name; a second time is refused",
@@ -3322,7 +3322,7 @@ with _tf.TemporaryDirectory() as _id_dir:
     _g2, _s2 = _scan.infra_changed(_r, ["host.json", "p/x.bicepparam", "t/arm.json", "run/service.yaml", ".dev.vars"])
     check("infra: Azure Functions host.json, .bicepparam, an ARM template and a Cloud Run service are found; a committed .dev.vars is named and never opened",
           dict(_g2) == {"host.json": "Azure Functions", "p/x.bicepparam": "Azure Bicep", "t/arm.json": "Azure ARM template", "run/service.yaml": "Google Cloud Run"} and _s2 == [".dev.vars"], (_g2, _s2))
-check("attach: the proposal names the stack packs that fit", _attach.propose(_scan.scan(ROOT))["entry"]["packs"] == ["python"])
+check("attach: the proposal names the stack packs that fit", _attach.propose(_scan.scan(ROOT))["entry"]["packs"] == ["python", "typescript-node"])   # the repo carries packaging/npm/package.json, which the scan reads as a Node package
 
 # ---- theme: light tokens exist, every token used is defined, no raw colours outside the token blocks ----
 # One scheme: the semantic tokens in assets/ui.css (dark by default, a light block as an explicit choice and as the OS default).
@@ -3450,8 +3450,8 @@ _r = _m("fix:pp#1")
 check("steps: a running fix still shows its pending steps as Not started, and has no line", _r["state"] == "running" and _nostart(_r) == ["verify", "review"] and _r["line"] == "")
 _fxd = lambda st, **kw: _m("fix:pp#1", {"pp#1": {**_fx["pp#1"], "status": st, "step": None, "plan": None, "issue": None, "pr": None, "verdict": None, **kw}})
 _r = _fxd("nothing", detail="the code already does it")
-check("steps: a fix with nothing to build is done, every step Skipped with the reason, and the line says nothing more happens",
-      _r["state"] == "done" and not _nostart(_r) and set(_states(_r)) == {"skipped"} and _r["pipeline"][0]["note"] == "Not needed: nothing to build" and "nothing to build" in _r["line"])
+check("steps: a fix with nothing to build is in the calm 'nothing' state (not Done, not Blocked), every step Skipped with the reason, and the line says nothing more happens",
+      _r["state"] == "nothing" and not _nostart(_r) and set(_states(_r)) == {"skipped"} and _r["pipeline"][0]["note"] == "Not needed: nothing to build" and "nothing to build" in _r["line"])
 _r = _fxd("taken")
 check("steps: a fix someone else took is done with no Not started step, and says who", _r["state"] == "done" and not _nostart(_r) and "Someone else" in _r["line"] and _r["pipeline"][2]["note"] == "Not needed: taken by someone else")
 _r = _m("fix:pp#1", {"pp#1": {**_pr, "status": "merged"}})
@@ -3459,8 +3459,8 @@ check("steps: a merged fix is done at every step and says the pull request was m
 _r = _m("fix:pp#1", {"pp#1": {**_pr, "status": "closed"}})
 check("steps: a fix closed without merging keeps Review as Skipped and says so", _r["state"] == "done" and not _nostart(_r) and _states(_r)[4] == "skipped" and "closed without merging" in _r["line"])
 _r = _mcy({**_cy, "status": "nothing", "pr": None, "final": "nothing to build", "stages": _cy["stages"][:2]})
-check("steps: a cycle with nothing to build is done, its later groups Skipped with the reason, and the line says nothing is waiting",
-      _r["state"] == "done" and not _nostart(_r) and _states(_r)[2:] == ["skipped"] * 3 and _r["pipeline"][2]["note"] == "Not needed: nothing to build" and "nothing is waiting" in _r["line"])
+check("steps: a cycle with nothing to build is in the calm 'nothing' state, its later groups Skipped with the reason, and the line says nothing is waiting",
+      _r["state"] == "nothing" and not _nostart(_r) and _states(_r)[2:] == ["skipped"] * 3 and _r["pipeline"][2]["note"] == "Not needed: nothing to build" and "nothing is waiting" in _r["line"])
 _r = _mcy(_cy)
 check("steps: a cycle waiting for review keeps its not-yet-reached group as Not started (it is still to come), and its line is the existing review sentence",
       _r["state"] == "awaiting" and _nostart(_r) == ["seal"] and "Review the branch" not in _r["line"] and _r["line"].startswith("u is open"), _r["line"])
@@ -3837,8 +3837,9 @@ else:
 check("the Run dialog is one sl-dialog with Cancel and Run in its footer; Advanced is an sl-details holding the raw flags, extra arguments and Schedule; it posts {project, duty, args, apply} to /api/run; focus returns to the Run button",
       'id="run-dlg"' in _ix4 and 'id="run-yes"' in _ix4 and 'id="run-no"' in _ix4 and '<sl-details summary="Advanced"' in _ix4 and 'post("/api/run", {project, duty: d.duty, args, apply})' in _ix4
       and "focusRun(key)" in _ix4 and 'btn("Schedule"' in _ix4 and "Schedule…" not in _ix4 and "crewMod.missing(d.duty" in _ix4)
-check("Crew rows show the sentence, running with elapsed, last result and when, needs attention, Not enabled for this project with how to enable it; running first; a top strip counts running and attention and filters",
-      all(t in _ix4 for t in ("Running now", "Last result:", "Needs attention.", "Not enabled for this project.", "How to enable it", "crewRank = {running: 0", 'act("crewFilter"', "Need attention")))
+check("Crew rows show the sentence, running with elapsed, last result and when, needs attention; running first; a top strip counts running sessions and duties apart and filters. The owner's design replaced the 'Not enabled for this project, how to enable it' rows by one folded Available (N) list with an Enable button",
+      all(t in _ix4 for t in ("Running now", "Last result:", "Needs attention.", "crewRank = {running: 0", 'act("crewFilter"', "Need attention", 'summary="Available (', 'act("crewEnable"', "/api/project/duties", "report-only until you run it with Write for real"))
+      and "Not enabled for this project." not in _ix4 and "How to enable it" not in _ix4 and "crewEnableHelp" not in _ix4)
 _cm = _css4.split("/* ---- Calm:")[1].split("/* ---- 9 page layouts")[0]
 _basefs = float(_r4.search(r"\nbody\{[^}]*font:400 (\d+)px", _css4).group(1)); _calmfs = float(_r4.search(r"\.calm body\{font-size:([\d.]+)px", _css4).group(1))
 _calmpad = float(_r4.search(r"\.calm \.card-b\{padding:\d+px (\d+)px", _css4).group(1)); _basepad = float(_r4.search(r"\n\.card-b\{padding:\d+px (\d+)px", _css4).group(1))
@@ -4255,9 +4256,10 @@ _pa._cache.clear(); d.PROJECTS_FILE = _pj0
 _crew_ids = _repa.findall(r'\{id: "(\w+)", title:', (ROOT / "dashboard" / "assets" / "crew.js").read_text())[:6]
 check("project agents: the keyword table covers exactly the jobs crew.js groups", list(_pa.JOB_WORDS) == _crew_ids, _crew_ids)
 _ixp = (ROOT / "dashboard" / "index.html").read_text()
-check("project agents UI: the section has the pill, the empty state, the coverage wording and the not-yet-runnable note",
-      all(t in _ixp.lower() for t in ("this project's own agents", "from the project", "this project has no agents of its own.", "quarterdeck's crew covers every job.", "suggested match, not confirmed",
-                              "no agent of its own", "quarterdeck cannot run a project's own agents yet")) and "function ownAgents" in _ixp)
+check("project agents UI: the section has the pill, the coverage wording and the not-yet-runnable note, and shows only when the project has agents of its own (otherwise the one sentence)",
+      all(t in _ixp.lower() for t in ("this project's own agents", "from the project", "this project keeps no agents of its own.", "which jobs are covered", "suggested match, not confirmed",
+                              "no agent of its own", "quarterdeck cannot run a project's own agents yet")) and "function ownAgents" in _ixp
+      and "quarterdeck's crew covers every job." not in _ixp.lower())
 shutil.rmtree(_pt, ignore_errors=True)
 
 # website (docs/site): static, self-contained, no external loads, no em dash, no banned words, every internal link resolves

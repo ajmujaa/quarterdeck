@@ -160,9 +160,9 @@ try {
     await page.evaluate(() => openMissionPage("fix:20261004-2130-spec-wayfarer-web#1")); await here("#view .pipe"); await sleep(500);
     ok("a merged fix is Done at every step, and says the pull request was merged", (await page.evaluate(() => [...document.querySelectorAll(".pipe .node .ns")].map(n => n.textContent.trim()).join(","))) === "Done,Done,Done,Done,Done" && (await text("#psub")).startsWith("The pull request was merged"));
   } else {
-    await page.evaluate(id => openMissionPage(id), await page.evaluate(() => recentMissions(40).find(x => x.id.startsWith("cycle:") && x.state === "done").id)); await here("#view .pipe"); await sleep(500);
+    await page.evaluate(id => openMissionPage(id), await page.evaluate(() => recentMissions(40).find(x => x.id.startsWith("cycle:") && x.state === "nothing").id)); await here("#view .pipe"); await sleep(500);
     const cyc = await page.evaluate(() => [...document.querySelectorAll(".pipe .node .ns")].map(n => n.textContent.trim()));
-    ok("a Done cycle that had nothing to build shows no Not started step, and its line says nothing is waiting", !cyc.includes("Not started") && cyc.includes("Skipped") && (await text("#psub")).includes("nothing is waiting"), cyc.join(",") + " | " + (await text("#psub")));
+    ok("a cycle that had nothing to build (state Nothing to build, no longer Done) shows no Not started step, and its line says nothing is waiting", !cyc.includes("Not started") && cyc.includes("Skipped") && (await text("#psub")).includes("nothing is waiting"), cyc.join(",") + " | " + (await text("#psub")));
     await page.evaluate(id => openMissionPage(id), await page.evaluate(() => recentMissions(40).find(x => x.id.startsWith("cycle:") && x.state === "awaiting").id)); await here("#view .pipe"); await sleep(500);
     const aw = await page.evaluate(() => [...document.querySelectorAll(".pipe .node .ns")].map(n => n.textContent.trim()));
     ok("a cycle waiting for review keeps the group it has not reached as Not started (it is still to come)", aw.includes("Not started") && aw.includes("Awaiting you"), aw.join(","));

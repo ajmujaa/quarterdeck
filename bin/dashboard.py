@@ -3943,19 +3943,20 @@ def connection_test(sid, label, timeout=180):
         return {"ok": False, "message": "could not start the refresh"}
     line = (r.stdout.strip().splitlines() or [""])[-1]
     why = line.split("failed:", 1)[1].strip() if "failed:" in line else ""
-    if "google_oauth.py" in why:                                 # the page has its own sign-in button: do not send anyone to a terminal
-        why = "Not signed in with Google yet. Press Sign in with Google on this card."
+    if "_oauth.py" in why:                                       # the page has its own sign-in button: do not send anyone to a terminal
+        why = "Not signed in with Google yet. Press Sign in with Google on this card." if sid in SIGNIN_TOOLS and sid != "meta" else "Not connected to Facebook yet. Press Connect with Facebook on this card."
     return {"ok": r.returncode == 0, "message": "Refreshed." if r.returncode == 0 else (why[:200] or "the refresh failed")}
 
 
 # ---- Google sign-in from the Connections page -------------------------------------------------------------------------------
-# The sign-in runs in its own process (bin/integrations/google_oauth.py --no-browser), like a Test does, so the client secret and the token never enter
+# The sign-in runs in its own process (bin/integrations/google_oauth.py or meta_oauth.py, --no-browser), like a Test does, so the client secret and the token never enter
 # this one. It prints the Google address on its first line; the page shows it as a button. The process listens once on a random loopback port, checks
 # `state`, saves the refresh token (0600) and exits. Nothing about the address, code or token is kept or logged here.
 SIGNIN_WAIT = 240                      # seconds google_oauth.authorize waits for you; the process is killed a little after
 _SIGNIN = {}                           # (service, label) -> {"proc", "state", "url", "message", "at"}
 _SIGNIN_LOCK = threading.Lock()
-SIGNIN_URL = "https://accounts.google.com/o/oauth2/v2/auth?"
+SIGNIN_TOOLS = {"gmail": "google_oauth.py", "meta": "meta_oauth.py"}        # service -> the script that signs in
+SIGNIN_URLS = ("https://accounts.google.com/o/oauth2/v2/auth?", "https://www.facebook.com/v21.0/dialog/oauth?")
 
 
 def _signin_reader(key, proc):
@@ -3964,7 +3965,7 @@ def _signin_reader(key, proc):
     try:
         for line in proc.stdout:
             line = line.strip()
-            if line.startswith(SIGNIN_URL) and st["state"] == "starting":
+            if line.startswith(SIGNIN_URLS) and st["state"] == "starting":
                 with _SIGNIN_LOCK:
                     st["url"], st["state"] = line, "waiting"
         proc.wait(timeout=SIGNIN_WAIT + 30)
@@ -3994,15 +3995,14 @@ def _signin_reader(key, proc):
 
 def signin_start(sid, label, argv=None):
     """Start (or report) the Google sign-in of one account. `argv` is for tests only."""
-    import integrations.google_oauth as _go
-    if sid not in _go.SCOPES:
+    if sid not in SIGNIN_TOOLS:
         return 400, {"error": "this service has no sign-in step"}
     key = (sid, label)
     with _SIGNIN_LOCK:
         cur = _SIGNIN.get(key)
         if cur and cur["state"] in ("starting", "waiting"):
             return 200, signin_view(key)
-        cmd = argv or [sys.executable, "-u", str(ROOT / "bin" / "integrations" / "google_oauth.py"), sid, "--account", label, "--no-browser"]
+        cmd = argv or [sys.executable, "-u", str(ROOT / "bin" / "integrations" / SIGNIN_TOOLS[sid]), "meta" if sid == "meta" else sid, "--account", label, "--no-browser"]
         env = {k: v for k, v in os.environ.items() if k in ("PATH", "HOME", "LANG", "QUARTERDECK_HOME", "QUARTERDECK_DIR", "QUARTERDECK_SECRETS_DIR")}
         try:
             proc = subprocess.Popen(cmd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)

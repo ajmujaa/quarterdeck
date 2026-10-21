@@ -274,6 +274,40 @@ assert common.read_snapshot("facebook", "meta", "work")["items"][0]["title"] == 
 common.record_status("facebook", True, "", 1.0, "work")
 assert "facebook@work" in common.read_status() and "facebook" not in common.read_status()
 PY
+pyk "meta sign-in: the address has the app id, the fixed redirect and the state but no secret; secrets travel in request bodies; the Page token, id and Instagram id are saved and the user token is not" <<'PY'
+from integrations import meta, meta_oauth, manifest
+u = meta_oauth.build_auth_url("123", "st")
+assert u.startswith("https://www.facebook.com/v21.0/dialog/oauth?") and "client_id=123" in u and "state=st" in u and "localhost%3A53172" in u and "response_type=code" in u, u
+manifest.set_credential("META_APP_ID", "123"); manifest.set_credential("META_APP_SECRET", "s3cret-value")
+calls, pages = [], [{"id": "111", "name": "Shop", "access_token": "PAGETOK", "instagram_business_account": {"id": "999"}}, {"id": "222", "name": "Other", "access_token": "T2"}]
+def fake(method, url, headers=None, params=None, form=None, **k):
+    calls.append((method, url, headers, params, form))
+    if url.endswith("oauth/access_token"):
+        return {"access_token": "SHORT" if form.get("code") else "LONG"}
+    return {"data": pages}
+common.request = fake
+env = common.load_env()
+tok = meta_oauth.long_lived_user_token(env, "CODE")
+assert tok == "LONG" and calls[0][4]["client_secret"] == "s3cret-value" and calls[1][4]["fb_exchange_token"] == "SHORT" and calls[1][4]["grant_type"] == "fb_exchange_token"
+assert all("s3cret-value" not in str(c[1]) and "SHORT" not in str(c[1]) for c in calls), "a secret reached an address"
+page = meta_oauth.pick_page(tok, "")
+assert page["id"] == "111" and meta_oauth.pick_page(tok, "222")["id"] == "222" and meta_oauth.pick_page(tok, "nope")["id"] == "111"
+assert calls[2][2] == {"Authorization": "Bearer LONG"} and "LONG" not in str(calls[2][3])
+meta_oauth.save_page(page, "default")
+e2 = common.load_env()
+assert (e2["META_PAGE_TOKEN"], e2["META_PAGE_ID"], e2["META_IG_USER_ID"]) == ("PAGETOK", "111", "999") and "LONG" not in list(e2.values()) and "SHORT" not in list(e2.values())
+meta_oauth.save_page(pages[1], "default")
+assert not common.load_env().get("META_IG_USER_ID"), "an old Instagram id stayed"
+pages[:] = []
+try:
+    meta_oauth.pick_page(tok, ""); raise AssertionError("no Page was not an error")
+except common.IntegrationError as e:
+    assert "tick your Page" in str(e)
+try:
+    meta.fetch({}, {}); raise AssertionError("no token was not an error")
+except common.IntegrationError as e:
+    assert "meta_oauth.py" in str(e) and "not signed in" in str(e)
+PY
 pyk "the loop yields gmail and gmail@work by their own flags, one interval per service, and runs a labelled one with --account" <<'PY'
 cfg = {"sources": {"gmail": {"enabled": True, "minutes": 10, "accounts": {"work": {"enabled": True}, "off": {"enabled": False}}},
                    "slack": {"enabled": False, "minutes": 5, "accounts": {"team": {"enabled": True}}}}}
@@ -416,7 +450,8 @@ assert "gmail@work" not in common.read_status() and "work" not in common.load_co
 rows = {r["id"]: r for r in json.loads(json.dumps(manifest.status()))}
 assert rows["gmail"]["multi"] is True and rows["calendar"]["multi"] is False and rows["calendar"]["accounts"][0]["label"] == "default"
 assert set(rows["gmail"]["accounts"][0]) == {"label", "enabled", "state", "missing", "last_at", "error", "credentials", "signin"}
-assert rows["gmail"]["accounts"][0]["signin"] == {"kind": "google", "signed_in": False} and "signin" not in rows["calendar"]["accounts"][0]
+assert rows["gmail"]["accounts"][0]["signin"] == {"kind": "google", "signed_in": False} and "signin" not in rows["calendar"]["accounts"]
+assert rows["meta"]["accounts"][0]["signin"] == {"kind": "facebook", "signed_in": False}, rows["meta"]["accounts"][0].get("signin")[0]
 assert set(rows["gmail"]["accounts"][0]["credentials"][0]) == {"key", "label", "secret", "help", "looks", "optional", "present", "stored"}
 assert rows["gmail"]["accounts"][1]["credentials"][0]["key"] == "GOOGLE_OAUTH_CLIENT_ID", "the base key name, the page sends the label separately"
 # test: refused in demo mode, and never calls a real service
@@ -499,6 +534,7 @@ assert v["url"] == "" and "evil" not in json.dumps(v), v
 # the API: confirm is needed, an unknown service and a bad label are 400, demo refuses, status is not logged, no address or code in the log
 assert d.connections_api({"action": "signin", "id": "gmail"})[0] == 400
 assert api(action="signin", id="ga4")[0] == 400
+assert d.SIGNIN_TOOLS == {"gmail": "google_oauth.py", "meta": "meta_oauth.py"} and "https://www.facebook.com/v21.0/dialog/oauth?client_id=1".startswith(d.SIGNIN_URLS), "the Facebook address is not recognised"
 assert api(action="signin", id="gmail", label="Bad Label")[0] == 400
 d.demo_set(True); assert api(action="signin", id="gmail")[0] == 400 and "Demo" in api(action="signin", id="gmail")[1]["error"]; d.demo_set(False)
 code, body = api(action="signin_status", id="gmail", label="t1"); assert code == 200 and body["state"] in ("done", "idle"), body

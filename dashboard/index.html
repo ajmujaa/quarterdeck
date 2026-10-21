@@ -2431,7 +2431,7 @@ function connCreds(c, a){
 function connFacts(c, a){
   const last = a.last_at ? `Last refreshed ${esc(ago(a.last_at))}.` : c.local ? "" : "Not refreshed yet.";
   return `<p class="sub">${last}${c.minutes && !c.local ? ` Checks every ${c.minutes} minutes.` : ""}</p>
-      ${a.error ? `<sl-alert variant="danger" open style="margin-top:12px"><sl-icon slot="icon" name="exclamation-octagon"></sl-icon>${esc(a.signin && /google_oauth\.py/.test(a.error) ? "Not signed in with Google yet." : a.error)}</sl-alert>` : ""}
+      ${a.error ? `<sl-alert variant="danger" open style="margin-top:12px"><sl-icon slot="icon" name="exclamation-octagon"></sl-icon>${esc(a.signin && /_oauth\.py/.test(a.error) ? `Not ${a.signin.kind === "facebook" ? "connected to Facebook" : "signed in with Google"} yet.` : a.error)}</sl-alert>` : ""}
       ${a.state === "needs set-up" ? `<p class="sub">Still needs: ${esc(a.missing.join(", "))}.</p>` : ""}`;
 }
 const connCls = a => a.state === "ok" ? "good" : a.state === "failing" ? "bad" : a.state === "needs set-up" ? "warn" : "";
@@ -2442,14 +2442,15 @@ const connSignPoll = {};
 function connSigninBlock(c, a){
   if(!a.signin) return "";
   const lab = connLab(a), k = `${c.id}|${lab}`, s = connSign[k] || {state: "idle"}, who = esc(connWho(c, a));
-  if(s.state === "starting") return `<div class="conn-signin"><p class="sub">Starting the Google sign-in...</p></div>`;
-  if(s.state === "waiting") return `<div class="conn-signin"><p class="sub" role="status">Waiting for you in the browser. ${esc(s.seconds_left)} seconds left. Google asks for read-only access to your mail, nothing else. If Google says redirect_uri_mismatch, the client you made in Google Cloud is not of type Desktop app: create a new one of that type and save its two values here.</p>
-    <div class="btns">${btn("Continue with Google", {variant: "primary", href: s.url, attrs: `aria-label="Continue with Google for ${who}"`})}${btn("Cancel", {size: "small", click: act("connSignCancel", c.id, lab)})}</div></div>`;
+  const fb = a.signin.kind === "facebook", brand = fb ? "Facebook" : "Google", verb = fb ? "Connect with Facebook" : "Sign in with Google";
+  if(s.state === "starting") return `<div class="conn-signin"><p class="sub">Starting the ${brand} sign-in...</p></div>`;
+  if(s.state === "waiting") return `<div class="conn-signin"><p class="sub" role="status">Waiting for you in the browser. ${esc(s.seconds_left)} seconds left. ${fb ? "Facebook asks which Page to share and for read-only access to it. If it says the redirect address is not allowed, add http://localhost:53172/ under Valid OAuth Redirect URIs in your Meta app." : "Google asks for read-only access to your mail, nothing else. If Google says redirect_uri_mismatch, the client you made in Google Cloud is not of type Desktop app: create a new one of that type and save its two values here."}</p>
+    <div class="btns">${btn(`Continue with ${brand}`, {variant: "primary", href: s.url, attrs: `aria-label="Continue with ${brand} for ${who}"`})}${btn("Cancel", {size: "small", click: act("connSignCancel", c.id, lab)})}</div></div>`;
   if(s.state === "failed" || s.state === "cancelled") return `<div class="conn-signin"><sl-alert variant="${s.state === "failed" ? "danger" : "neutral"}" open><sl-icon slot="icon" name="exclamation-octagon"></sl-icon>${esc(s.message)}</sl-alert>
-    <div class="btns">${btn("Try again", {variant: "primary", click: act("connSignin", c.id, lab), attrs: `aria-label="Try the Google sign-in again for ${who}"`})}</div></div>`;
-  if(a.signin.signed_in) return `<div class="conn-signin"><p class="sub">Signed in with Google.</p><div class="btns">${btn("Sign in again", {size: "small", click: act("connSignin", c.id, lab), attrs: `aria-label="Sign in again for ${who}"`})}</div></div>`;
-  if(a.missing.length) return `<div class="conn-signin"><p class="sub">Save the Google values above. Quarterdeck then opens the Google sign-in for you.</p></div>`;
-  return `<div class="conn-signin"><p class="sub">The values are saved. One step left: sign in with Google.</p><div class="btns">${btn("Sign in with Google", {variant: "primary", click: act("connSignin", c.id, lab), attrs: `aria-label="Sign in with Google for ${who}"`})}</div></div>`;
+    <div class="btns">${btn("Try again", {variant: "primary", click: act("connSignin", c.id, lab), attrs: `aria-label="Try the ${brand} sign-in again for ${who}"`})}</div></div>`;
+  if(a.signin.signed_in) return `<div class="conn-signin"><p class="sub">${fb ? "Connected to Facebook." : "Signed in with Google."}</p><div class="btns">${btn("Sign in again", {size: "small", click: act("connSignin", c.id, lab), attrs: `aria-label="Sign in again for ${who}"`})}</div></div>`;
+  if(a.missing.length) return `<div class="conn-signin"><p class="sub">Save the ${fb ? "App ID and App secret" : "Google values"} above. Quarterdeck then opens the ${brand} sign-in for you.</p></div>`;
+  return `<div class="conn-signin"><p class="sub">The values are saved. One step left: ${fb ? "connect with Facebook" : "sign in with Google"}.</p><div class="btns">${btn(verb, {variant: "primary", click: act("connSignin", c.id, lab), attrs: `aria-label="${verb} for ${who}"`})}</div></div>`;
 }
 async function connSignin(id, lab){
   const k = `${id}|${lab || ""}`;

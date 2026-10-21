@@ -175,7 +175,7 @@ html = open(os.path.join(REAL, "dashboard", "index.html")).read()
 ck("the attach page shows the stack sentence, the commands together, and a separate group of switched-off suggestions", all(s in html for s in ("id=\"at-stack\"", "at-build", "at-lint", "These also fit this stack, switched off")))
 ck("the page's suggested duties are never ticked by the page itself", "dSug = known.filter(n => !e.duties.includes(n) && sugg.includes(n))" in html and "dutyGroup(dSug)" in html and "dutyBox(n, e.duties.includes(n))" in html)
 for doc in ("README.md", "GUIDE.md"):
-    txt = open(os.path.join(REAL, doc)).read()
+    txt = open(next(q for q in (os.path.join(REAL, "docs", "public", doc), os.path.join(REAL, doc)) if os.path.exists(q))).read()
     ck(f"{doc} describes the stack line, build and lint, and the switched-off suggestions", "also fit this stack" in txt)
 dashes = (chr(0x2014), chr(0x2013))
 mine = [os.path.join(REAL, "bin", "selftest-stack.sh")] + [os.path.join(dp, f) for dp, _, fs in os.walk(os.path.join(REAL, "fixtures", "stacks")) for f in fs]

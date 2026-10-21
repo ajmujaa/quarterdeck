@@ -10,25 +10,41 @@
   "minutes": 60,
   "credentials": [
     {
+      "key": "META_APP_ID",
+      "label": "App ID",
+      "secret": false,
+      "help": "From your app at developers.facebook.com: Settings, then Basic.",
+      "looks": "Digits only, about 15 of them"
+    },
+    {
+      "key": "META_APP_SECRET",
+      "label": "App secret",
+      "secret": true,
+      "help": "Same page: press Show next to App secret. It stays in your Keychain and is used only to sign in.",
+      "looks": "32 letters and numbers"
+    },
+    {
       "key": "META_PAGE_TOKEN",
       "label": "Page access token",
       "secret": true,
-      "help": "A long-lived token for the Page, with read access.",
-      "looks": "A very long string of letters and numbers, often starting with EAA"
+      "help": "Filled in for you by Connect with Facebook. Paste one only if you made it by hand.",
+      "looks": "A very long string of letters and numbers, often starting with EAA",
+      "optional": true
     },
     {
       "key": "META_PAGE_ID",
       "label": "Facebook Page id",
       "secret": false,
-      "help": "The numeric id of the Page.",
-      "looks": "Digits only, about 15 of them"
+      "help": "Filled in for you by Connect with Facebook.",
+      "looks": "Digits only, about 15 of them",
+      "optional": true
     },
     {
       "key": "META_IG_USER_ID",
       "label": "Instagram account id",
       "secret": false,
       "optional": true,
-      "help": "Optional. Leave it empty to skip Instagram.",
+      "help": "Filled in for you by Connect with Facebook when the Page has an Instagram account. Leave it empty to skip Instagram.",
       "looks": "Digits only, about 17 of them"
     }
   ],
@@ -48,16 +64,20 @@
     "instagram_manage_insights"
   ],
   "steps": [
-    "You need a Facebook Page, and an Instagram Business or Creator account linked to that Page if you want Instagram.",
-    "At developers.facebook.com create an app. Leave it in development mode, with you as the admin.",
-    "In the Graph API Explorer pick your app and generate a user token with the five read permissions listed here.",
-    "Exchange it for a long-lived user token, then ask /me/accounts for the Page token. A Page token made this way does not expire.",
-    "Copy the Page id from the same answer. For Instagram, ask the Page for its instagram_business_account to get the Instagram id.",
-    "Enter the token and the ids here and save each one. Then switch it on."
+    "You need a Facebook Page you manage. For Instagram you also need an Instagram Business or Creator account linked to that Page.",
+    "At developers.facebook.com press My Apps, then Create App. Keep it in development mode with you as the admin. You do not need to publish it.",
+    "In the app add the product Facebook Login. Under its Settings, Valid OAuth Redirect URIs, add http://localhost:53172/ and save.",
+    "In the app press Settings, then Basic. Copy the App ID and the App secret (press Show) into the two fields on this card.",
+    "Press Save all. Quarterdeck then opens Facebook. Choose your Page when it asks and approve the read-only access.",
+    "Quarterdeck gets the Page token, the Page id and the Instagram id by itself and keeps them in your Keychain. Nothing to copy."
   ],
   "revoke": "On Facebook, open Settings, then Business Integrations, find your app and remove it. Then remove the fields here. You can also delete the app at developers.facebook.com.",
   "tested": "Parsing tested against sample data only; not tested against the real service.",
   "links": [
+    {
+      "label": "Create an app (Meta)",
+      "url": "https://developers.facebook.com/apps/creation/"
+    },
     {
       "label": "Pages API (Meta)",
       "url": "https://developers.facebook.com/docs/pages-api/"

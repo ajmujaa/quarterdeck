@@ -22,6 +22,7 @@ import atexit
 import hashlib
 import importlib.util
 import json
+import shlex
 import os
 import re
 import secrets
@@ -3718,6 +3719,7 @@ def understand(text, views, projects=None, duties_of=None):
 import chatctx
 import claudeproc
 import fleetview
+import livework
 import projagents
 from integrations import accounts as integrations_accounts
 from integrations import manifest as integrations_manifest
@@ -3747,6 +3749,22 @@ def fleet_view(force=False):
     if start:
         threading.Thread(target=refresh, daemon=True).start()
     return have if have is not None else {"sources": [], "errors": ["still reading the fleets"], "at": 0}
+
+
+LIVE_KICK = {"at": 0.0}
+
+
+def live_view(agents, projects, now=None):
+    """S.live: the sessions the hook reports and the duties running now, across every project (bin/livework.py). Sessions are read from the event files on
+    every call (cheap); worktrees and pull requests come from the cached fleet document, which is refreshed in the background so a state read never waits on git."""
+    cfg = fleetview.load_config()
+    with FLEET_LOCK:
+        have, age, busy = FLEET["data"], time.time() - FLEET["at"], FLEET.get("busy")
+    if (have is None or age > 20) and not busy and time.time() - LIVE_KICK["at"] > 10 and any(x["kind"] == "repo-agents" for x in cfg["sources"]):
+        LIVE_KICK["at"] = time.time()
+        threading.Thread(target=fleet_view, kwargs={"force": True}, daemon=True).start()
+    src = livework.collect(cfg, have, now=now)
+    return livework.live_work(src, agents, projects, now=now, install_command="bash " + shlex.quote(str(ROOT / "bin" / "fleet-hook.sh")) + " install")
 
 
 def fleet_action(b):
@@ -4401,6 +4419,15 @@ def docs_apply_api(b):
         return 500, {"error": "could not start it: " + type(e).__name__}
     _ticket_log("docs-apply", project)
     return 200, {"started": True, "pull_request": bool(ent.get("repo"))}
+
+
+def project_suggested(name, entry):
+    """[{duty, why}]: the duties the stack scan found to fit this project and that are still off, with the scan's reason. Read from the attach record."""
+    import ready as _ready
+    rec = _ready.attach_record(name) or {}
+    on = set(entry.get("duties") or [])
+    return [{"duty": d, "why": " ".join(str(v.get("why") or "").split())[:200]} for d, v in sorted((rec.get("duty_reasons") or {}).items())
+            if isinstance(v, dict) and v.get("suggested") and d not in on]
 
 
 def project_duties_api(b):
@@ -5416,12 +5443,13 @@ def _build_state():
         "docs": _safe(lambda: [{**d, "superseded_by": stale_docs.get(d["name"]),
                                 **classify(d["name"], doc_kind)}
                                for d in doc_list(list(projects), filed)], []),
+        "live": _safe(lambda: live_view(agents, projects), {"items": [], "worktrees": [], "updated_at": None, "hook_installed": False, "install_command": "", "sources": []}),
         "overview": _safe(lambda: project_overview(projects, agents, runs, inbox, fixes, cycles, panels, briefs, plans, spend_rows(),
                                                    local_midnight_utc(), local_midnight_utc(6), _stack_sentence, _safe(load_dismissed, {})), []),
         "projects": [
             {"name": k, "repo": v.get("repo", ""), "summary": v.get("summary", ""),
              "duties": v.get("duties", []), "guardrails": v.get("guardrails", []),
-             "verify": v.get("verify", ""), "cycle": v.get("cycle") is True,
+             "verify": v.get("verify", ""), "cycle": v.get("cycle") is True, "suggested": _safe(lambda k=k, v=v: project_suggested(k, v), []),
              "board": (f'https://github.com/users/{v["board"]["owner"]}'
                        f'/projects/{v["board"]["number"]}' if v.get("board") else None)}
             for k, v in sorted(projects.items())
@@ -5678,6 +5706,8 @@ class Handler(BaseHTTPRequestHandler):
                 w = DEMO["world"]; st = w.state(); t = w.elapsed(); today, week = w.midnights(t)
                 st["overview"] = project_overview(st["projects"], st["agents"], st["runs"], st["inbox"], st["fixes"], st["cycles"], st["panels"], st["briefs"],
                                                   st["plans"], w.spend_ledger(t), today, week, lambda n: demo.PROJECTS.get(n, {}).get("stack", ""), st.get("dismissed_missions"))
+                src, pj, at = w.live_inputs(st)
+                st["live"] = livework.live_work(src, st["agents"], pj, now=at, installed=True, install_command="bash bin/fleet-hook.sh install")
                 return self._demo_reply((200, st))
             return self._demo_reply(DEMO["world"].get(u.path, q))
 

@@ -34,6 +34,71 @@ Add-on views (`assets/ext-*.js`) use the same helpers; they run in the page's gl
 `bin/ui-dead-css.py` lists classes `ui.css` defines that no markup uses (selftest runs it). Delete a rule when its markup goes.
 `bin/a11y-check.mjs` starts its own throwaway dashboard, opens every view (both themes, Calm on and off) in Playwright's Chromium and checks names (from the browser's accessibility tree), ids, headings, landmarks, `img` alt, aria validity, `tabindex`, text contrast (4.5:1, 3:1 large) and, with `--focus`, a visible focus indicator on every Tab stop; with `--flows`, the skip link, the dialog trap, Esc and focus return, the poll keeping focus, and the Brain's Esc. `--quick` is three views and the flows (what selftest runs). It needs Playwright and a Chromium; without them it exits 3 and selftest prints a skip. Selftest also checks without a browser: every icon-only button has a name, every field has a label, no positive `tabindex`, no click action on a bare div or span, every dialog has a label, no text under 12px, the focus ring token, the landmarks, and the contrast of every colour token in both themes.
 
+## Navigation
+The address holds the page, the project scope and the open mission (`assets/route.js`, a pure module with its own node test: `bin/selftest-route.mjs`). The page code is `routeKnown`, `routeState`, `pushRoute`, `routeTouch`, `applyRoute`, `initRoute`, `routeNav` and `routeBack` in `index.html`.
+
+| Address | Page |
+|---|---|
+| `#/home/overview` | Home |
+| `#/brain/map`, `#/brain/rhythm` | the Brain, either mode (My rhythm only in Demo) |
+| `#/projects/projects` | the Projects overview (every project), or with `?project=<name>` that project's own page |
+| `#/projects/<view>` | inbox, missions, prs, board, ledger, timeline, operations, spend, log (the tabs of the Projects place, in that order after the overview) |
+| `#/projects/mission[/<id>]` | one mission; the id is `encodeURIComponent` encoded (`cycle%3Aabc`) |
+| `#/projects/log[/<project>~<duty>]` | the open log (a system log: `/~<name>`) |
+| `#/work/...` | the old name of the Projects place: every address made before the rename opens the same page and is rewritten to `#/projects/...` (`GROUP_ALIAS` in `route.js`, `replaceState`) |
+| `#/agents/crew`, `#/agents/fleet`, `#/connections/connections`, `#/library/<view>`, `#/settings/settings` | the other places |
+| `#/addon/<place>[/<view>]` | an add-on's place and its pages (no project scope) |
+| `...?project=<name>` | the project scope; absent means All projects. Only pages that have a scope carry it (see the scope table) |
+| `#/projects/inbox?addon=<name>` | the add-on scope: Needs you shows only that add-on's items |
+
+Rules:
+1. Only what the owner does pushes a history entry: `go`, `dockGo`, `selectPlace`, `selectProject`, `selectAddon`, opening or closing a mission, the Brain's Map | Rhythm switch and its project choice. Each calls `routeTouch()`, which waits for the end of the task, so one click that sets three variables is one entry, and the same address is no entry.
+2. The 3 second poll, `render()` and every other redraw never touch the address. `popstate` and `hashchange` (Back, Forward, a typed or pasted address) call `applyRoute()` then `render()` and push nothing.
+3. On load the address wins; `localStorage` is only the fallback for a bare address (its keys are still written). An address that is not ours is replaced by Home.
+4. The pairing link `#pair=<nonce>` is not a route: it is read, removed with `replaceState`, and the first route then replaces that entry.
+5. Esc and Leave in the Brain go one step back in history when the page the owner came from is earlier in this tab's history, otherwise they go to it as a new entry.
+6. The scope is shown, as a chip in the page header and in the project select, on every page where a scope applies (the table below); on the pages of the person nothing pretends to be a scope. The chip opens the project select, which stays the one place a scope is chosen. An add-on is a group in that select. A mission page names its project, or its add-on, in a line of its own above the title.
+7. `keptSel` is the project the owner chose; `sel` is the project the current page shows (`syncSel()`: `keptSel` on a page that has a scope, empty elsewhere). Going Home and coming back keeps the choice, and Home, Spend and Settings never filter by it. The address, not `keptSel`, wins on load and on Back.
+
+### The places
+Seven places in the rail, then any add-on's. Home is the person; Projects is where the work is.
+
+| Place | Pages (tabs, in order) | What it is |
+|---|---|---|
+| Home | Home | You, across everything: one calm next action, Your day, Brain dump, the fleet timeline, Recently finished and Budget today, and one line that counts what needs you and links to Projects |
+| Brain | the map, My rhythm (Demo) | The whole operation as one map |
+| Projects | Overview, Needs you, Missions, Pull requests, Board, Ledger, Timeline, Operations, Spend, Log | Every project together, then one project at a time. The rail badge counts what needs you |
+| Agents | Crew, Fleet | Every agent, and agent folders outside Quarterdeck |
+| Connections | Connections | The services Quarterdeck reads from |
+| Library | Documents, Panels, Notes, Showcase | What the agents wrote and the owner's notes |
+| Settings | Settings | Where data lives, billing, Calm and the theme |
+
+Timeline, Operations, Spend and Log stay tabs of Projects, after the Ledger: they read the same runs and spend ledgers per project, and moving them would change more addresses and habits than the redesign asks for. The fleet timeline on Home links to the full one.
+
+### Where a scope applies
+| Page | Scope box and chip | Why |
+|---|---|---|
+| Home | no | It is the person across everything; nothing on it filters |
+| Brain | no (its own toolbar keeps the project choice for My rhythm) | The map is the whole operation |
+| Projects overview | yes (All projects, or one: the overview then shows that project's page) | This is where a scope is chosen |
+| Needs you, Missions, Pull requests, Board, Ledger, Timeline, Operations, Log, Mission | yes | Each lists per project |
+| Spend | no | The figures are for every project together (the project cards show each project's own spend) |
+| Crew, Fleet | yes | The crew is filtered by project |
+| Connections, Settings | no | They are about the computer, not a project |
+| Documents, Panels, Notes | yes | They list per project |
+| Showcase | no | A private design preview |
+| An add-on's own place | the add-on is the scope (chip and select say `Add-on: <name>`) | It has no project scope |
+
+`SCOPED_VIEWS` in `index.html` is this table; `bin/a11y-check.mjs` has the same list and measures it (present and in the same box on those pages, absent from the rest).
+
+### Home
+`viewCommandCenterNew()` returns exactly: (a) one next action when something is pressing (`homeNext()`: an overdue reminder or a meeting in the next three hours, else the one most urgent thing across projects, labelled with its project or `Add-on: <name>`; one primary button; nothing when nothing is pressing), (b) Your day, (c) Brain dump, (d) the fleet timeline (`homeTimeline()`: a lane per project for the last 24 hours, the data of the Timeline page, with "Open the full timeline"), (e) Recently finished (`finishedCard()`: collapsed; finished missions and runs of every project, each naming its project), (f) Budget today (`budgetCard()`: spend against the daily cap, with the cap named). Plus one count line (`homeCount()`, a plain button, "3 things need you in 2 projects and from 1 add-on") that opens the Projects overview. An add-on's alert is counted there and listed on Projects, never shown on Home. In Calm, Home keeps the next action, Your day, Brain dump and the count line; the timeline, Recently finished and Budget are `calmHide`.
+
+### Projects
+`viewProjects()` is the overview when no project is chosen: a `projectCard()` per project (name, a state word, what needs the owner with the top item, the last run, spend today and over seven days, open and finished missions, the stack sentence, an Open button and a Ready? link), the Add-ons strip (`addonsStrip()`, only when an add-on has an alert or a place), the Needs you list across projects and the Mission trajectory. The data is `S.overview`, one entry per project, counted by `project_overview()` in `bin/dashboard.py` (the same function builds it for Demo): never a number the harness did not measure. With a project chosen the same place shows `projectPage()`: the project's name large, its repo and stack sentence, its facts, its Needs you, the Ready card, the repo options, the Tickets card and `guardrailsCard(project)` (the slot `#guardrails-slot`, described next), and every tab is filtered to the project.
+
+`guardrailsCard(project)` is the Guardrails card, a function of the project that lives in `#guardrails-slot` and keeps its state in `GR` (read from `GET /api/guardrails`, saved with `POST /api/project/guardrails`; both are `bin/guardrails.py`). It shows one line of purpose, then the three locked rules (a lock icon, the text, the reason as small text, no field and no control), then the owner's own rules, each a labelled `slInput` ("Guardrail N for <project>") with small move up, move down and remove icon buttons (40px targets, named), an "Add a guardrail" field with an Add button, one primary "Save guardrails" button (disabled until something changed; the Add button is not primary) and a collapsed `sl-details` "What the crew receives" with the exact text the server sends, refreshed after every save. A refusal is the server's plain sentence under the field it names (`fieldError`) and a toast; success is a toast and an `announce`. Add, move and remove only change the list on the page until Save. Every string from the server goes through `esc()`. Calm keeps the locked rules and the editor and hides the purpose line and the reasons (`data-calm="hide"`).
+
 ## The Brain workspace
 The Brain and My rhythm are two modes of one immersive workspace with one toolbar (`brainBar()`), so neither is a window you have to come back from.
 Left to right: Leave, a Map | Rhythm switch (`sl-button-group`, same place and size in both modes), then the mode's own controls.
@@ -63,7 +128,7 @@ These are rules, not a diary. A new page or drawer follows them; `bin/selftest.p
 
 | Area | Rule | Where it stands |
 |---|---|---|
-| Project selector | One, `#proj-switch`, first control of the top bar, right of the rail (`108,15` at 1500px, `16,10` on a phone), 32px high, no visible label. Nothing else is a project scope. | Measured on every view: same box everywhere. The Brain hides the top bar, so My rhythm shows the same choice (the same `sel`) in its toolbar. |
+| Project selector | One, `#proj-switch`, first control of the top bar, right of the rail (`108,15` at 1500px, `16,10` on a phone), 32px high, no visible label. Nothing else is a project scope. It exists only on the pages where a scope applies (the table under Navigation) and is hidden on the others. | Measured: the same box on every page that has a scope; absent from Home, the Brain, Spend, Connections, Settings and Showcase. The Brain hides the top bar, so My rhythm shows its own choice in its toolbar. |
 | Local project fields | A project inside a form (a mission, a schedule, a cycle, the project of one note) is a labelled field in that form, not a filter. | Fixed: Timeline and Notes had their own project filter next to the top bar's. They now use the top bar's. |
 | Page header | Kicker, `h1`, one description, in that order, at the same position on every view; tabs below it. Page level actions go in `#pacts` or in the first card. | Measured: kicker `y=91`, title `y=111` on every view at 1500px. |
 | Primary action | One primary `btn` per view. A row of repeated forms uses the plain button. | Fixed: Connections had ten primary Save buttons. Overview, Notes and Needs you still show two. |
@@ -82,11 +147,25 @@ Calm is fewer things, quieter, steadier. One switch in the top bar (labelled Cal
 1. Type and space: body text 14px to 16.5px, spacing tokens `--s2..--s6` up by about half, card padding 20px to 28px, controls 44px.
 2. One column: split, home, mission and settings layouts collapse; the page is at most 800px wide.
 3. Helm folds to its rail. The choice saved in this browser is not touched; the Expand button opens it for this visit.
-4. Secondary things are out of sight: any element with `data-calm="hide"` (or built with `calmHide(html)`). Home keeps the headline, the next step and Needs you; stats rows, side columns (Operations, Spend, Fleet), the Notes search, the Needs you intro and Crew detail lines are hidden. A line under the page header says how many, with one Show everything button.
+4. Secondary things are out of sight: any element with `data-calm="hide"` (or built with `calmHide(html)`). Home keeps the next action, Your day, Brain dump and the count line; the fleet timeline, Recently finished and Budget are hidden, and so are the harbor map and the Mission trajectory on the Projects overview, the Notes search, the Needs you intro and Crew detail lines. A line under the page header says how many, with one Show everything button.
 5. Muted colour: running, done and idle pills and tinted cards lose their fill (`.calm` rules in `ui.css`, tokens only). Blocked, bad and needs-you states keep strong colour.
 6. Steady: nothing animates or transitions, and nothing ticks. A running clock reads "since 14:32" (`elapsedSpan`), a schedule "at 14:35", the freshness text "up to date". The 3 second poll rewrites only what changed (`setHtml`).
 7. The Brain keeps the map and the stats strip; Size by and the tools sit in More.
 To make something secondary, add `data-calm="hide"` to it.
+
+## The Ready card
+`readyCard(project)` and `readyItemsHtml(items)` each return a string (so a later Projects page can move them whole). Their data is `GET /api/ready?project=` (kept in `RD`): six items in order (scan, verify, repo, docs, agents, cycles), each `{key, label, state, detail, action}`, plus the one `next` action, the waiting docs draft and what is running. The card sits on the project's own page (Projects, with a project chosen) while the project is not ready (the verify command is not proven), and a "Ready? Show the checklist" link brings it back afterwards. It is also the last screen of the Add a project drawer, which shows the same items before and after adding.
+- Each item is a `<details>`: a label, a state pill (done, to do, blocked; the repo, docs, agents and cycles are offers and show "optional"), and the first sentence of its detail; opening it shows the rest. A blocked item opens itself.
+- Exactly one primary button at the bottom, labelled with the next action: "Run it once to prove it" (a confirmation first; it runs the verify command once in the sandbox through `POST /api/ready/prove`), "File your first ticket" (scrolls to the tickets box), "Start a mission from ticket N", "Allow cycles", or "Set a verify command" (shows the command to run). Nothing else on the card is a primary button.
+- Docs: "Draft a README" and "Draft an architecture overview" (`/api/docs/draft`, a few cents), then the draft is shown in the page and one button, "Put it on a new branch" or "Open a pull request" (`/api/docs/apply`), each behind `confirmDlg`; the branch is never the default branch. Agents: the duties that are on with their reasons, and a small "Turn on" for each suggested one (`/api/project/duties`).
+- Demo mode shows invented data and every write answers "Demo mode: nothing is run, drafted or changed."
+
+## Tickets and the repo options
+Two cards on a project's own page (Projects, with a project chosen), each a function of a project name that returns a string (`ticketsCard(project)`, `repoOptionsCard(project)`), so a later page can move them whole. Their data is `GET /api/tickets?project=` (kept in `TK`); every write is a POST with `confirm: true` (`/api/ticket/draft`, `/file`, `/discard`, `/api/repo`, `/api/cycle/start` with a `ticket`).
+- `ticketsCard`: a labelled textarea ("What do you want built?", the limit shown, 2000), one primary button (Draft tickets, or, once a draft exists, the button that files it, whose label says where: "File 3 issues on owner/name" with a confirmation, or "Save 3 tickets on this computer"), "Save on this computer only" (Calm hides it) and "Discard draft", then the ticket list (id, title, status pill, issue link or branch, "Start a mission" per open ticket when the project opted in to cycles). The running status is a polite `role="status"` line and an `announce()`; focus goes to the file button when a draft arrives and to the list after filing. The typed request lives in `TK.request`, not in the markup, so a redraw never loses it. With All projects it only asks to choose a project.
+- `repoOptionsCard`: only for a project with no repo. The server's one sentence, then four short rows in order (a to d): a labelled owner/name field and Save; Create a private GitHub repo (two `confirmDlg` questions, the second for the push; "GitHub CLI is not signed in" is said in the row); the sign-up steps as an ordered list with the one line that a person must do it; Not now. It disappears when a repo is set.
+- A mission from a local ticket (`ticketMission`): the crew's steps from the record, a skipped stage as "Skipped" with its reason (never a bad pill), the branch and the review command as plain selectable text (`.tk-sel`, not links), one line of what is next.
+- Demo mode (bin/demo.py) invents the tickets, a draft and a ticket cycle; every action answers "Demo mode: nothing is drafted, filed or created." and changes nothing.
 
 ## The Crew page
 Agents are grouped by job (`GROUPS` in `assets/crew.js`: Review, Build, Plan, Check and keep, Infrastructure, Design and make; a duty not listed goes to Other, so a new duty always shows). The duty files name a duty but not its job, so that one table is the source. Each row: name, one plain sentence (`INFO[duty].does`), its state (running with elapsed, idle with last result, needs attention, never run, not enabled) and Run. Run opens one `sl-dialog` (`#run-dlg`): what it does, the one to three inputs that matter, the Write for real switch (off by default, with its consequence under it), and Advanced (raw flags, extra arguments, Schedule). `buildRun()` builds the same `/api/run` body the page always sent. The header sentence is built from the data: how many agents, on one project or across N, how many are running and how many need attention. With one project chosen every agent the machine has is listed (those not switched on say so); in All projects there is one row per agent, with a pill saying how many projects it is on, its state the worst of them, and the Run dialog asking which project in a labelled field. Run is the plain `sl-button` in a row (the kit rule for repeated rows); the dialog Run is the one primary.

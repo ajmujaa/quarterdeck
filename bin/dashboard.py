@@ -358,6 +358,25 @@ def load_extensions():
     return loaded
 
 
+ADDON_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
+
+
+def addons_list(mods=None):
+    """The installed add-ons, for the page's scope box: [{id, label, place}]. One per bin/ext_<id>.py that loaded. The label is the module's ADDON_NAME
+    (a short string) or the id made readable; `place` is the page place the add-on registers, when its module says (ADDON_PLACE). Nothing in here reads
+    the add-on's data, so an add-on that has nothing to show still appears, and with none installed the list is empty and the page changes nothing."""
+    out = []
+    for m in (globals().get("EXTENSIONS", []) if mods is None else mods):
+        stem = str(getattr(m, "__name__", ""))
+        aid = stem[4:] if stem.startswith("ext_") else stem
+        if not ADDON_ID.match(aid):
+            continue
+        name, place = getattr(m, "ADDON_NAME", None), getattr(m, "ADDON_PLACE", None)
+        out.append({"id": aid, "label": name.strip()[:40] if isinstance(name, str) and name.strip() else aid.replace("_", " ").replace("-", " ").title(),
+                    "place": place if isinstance(place, str) and ADDON_ID.match(place) else ""})
+    return out
+
+
 def valid_id(x):
     """Every id that becomes a path under state/ passes here, and nowhere else."""
     return isinstance(x, str) and bool(SAFE_ID.match(x)) and ".." not in x
@@ -797,13 +816,19 @@ def fix_index(locks):
 # The records are read only. The one thing the dashboard can do is start a cycle, and only through POST /api/cycle/start
 # (start_cycle below), on a project that opted in with "cycle": true. It cannot resume or stop one. A record that still says
 # "running" with no live lock behind it was killed, and is shown as failed, like a fix record in the same position.
+def cycle_lock_name(r):
+    """The lock `qtdeck cycle` holds while a cycle runs: cycle-<project>-<issue>, or cycle-<project>-t<ticket> for a local ticket (record field "ticket")."""
+    key = f"t{r['ticket']}" if isinstance(r.get("ticket"), int) and not isinstance(r.get("ticket"), bool) else r.get("issue")
+    return f"cycle-{r.get('project')}-{key}"
+
+
 def cycle_record(cid, locks):
     if not valid_id(cid):
         return None
     r = read_json(CYCLES / f"{cid}.json", None)
     if not isinstance(r, dict) or r.get("kind") != "cycle":
         return None
-    if r.get("status") == "running" and f"cycle-{r.get('project')}-{r.get('issue')}" not in locks:
+    if r.get("status") == "running" and cycle_lock_name(r) not in locks:
         r = {**r, "status": "failed",
              "final": r.get("final") or f"stopped before it finished; resume with: qtdeck cycle --resume {cid}"}
     return r
@@ -816,7 +841,7 @@ def cycles_summary(locks, limit=12):
         for f in sorted(CYCLES.glob("cyc-*.json"), key=lambda x: x.stat().st_mtime, reverse=True)[:limit]:
             r = cycle_record(f.stem, locks)
             if r:
-                out.append({"id": r.get("id"), "project": r.get("project"), "issue": r.get("issue"), "title": r.get("title") or "",
+                out.append({"id": r.get("id"), "project": r.get("project"), "issue": r.get("issue"), "ticket": r.get("ticket"), "branch": r.get("branch"), "title": r.get("title") or "",
                             "status": r.get("status"), "apply": bool(r.get("apply")), "started": r.get("started"),
                             "finished": r.get("finished"), "cost": round(float(r.get("cost") or 0), 4), "pr": r.get("pr")})
     return out
@@ -861,25 +886,46 @@ def cycle_estimate(project, records=None):
     return cycle_estimate_calc(mine, cycle_ceiling(), daily_budget(), spent_today())
 
 
-def start_cycle(project, issue, confirm):
-    """Start `qtdeck cycle <project> --issue <n> --apply`, detached, the way a duty is started. The record (and so the id) is made by
-    the script a moment after it starts; wait briefly for it. Nothing here merges or pushes: that is the script's own rule."""
+def start_cycle(project, issue, confirm, ticket=None):
+    """Start `qtdeck cycle <project> --issue <n> --apply`, or `--ticket <n> --apply` for a LOCAL ticket (exactly one of the two), detached, the way a
+    duty is started. The record (and so the id) is made by the script a moment after it starts; wait briefly for it. Nothing here merges or
+    pushes: that is the script's own rule. A ticket cycle ends at a local branch for the owner to review."""
     no_demo("start a cycle")
     projects = read_json(PROJECTS_FILE, {})
     if not isinstance(project, str) or project not in projects:
         raise ValueError("unknown project")
     if projects[project].get("cycle") is not True:
         raise ValueError(f"'{project}' has not opted in to full cycles: add \"cycle\": true to its registry entry")
-    if type(issue) is not int or not 0 < issue < 10**7:
-        raise ValueError("bad issue")
+    if ticket is not None and issue is not None:
+        raise ValueError("start a cycle from an issue or from a ticket, not both")
+    if ticket is not None:
+        if type(ticket) is not int or not 0 < ticket < 10**9:
+            raise ValueError("bad ticket")
+        import tickets as _tk
+        try:
+            t = _tk.get(project, ticket)
+        except _tk.TicketError as e:
+            raise ValueError(str(e))
+        if t.get("source") == "github":
+            raise ValueError(f"ticket {ticket} is GitHub issue #{t.get('issue')}: start the cycle from the issue")
+        if t.get("status") not in ("open", "building"):
+            raise ValueError(f"ticket {ticket} is {t.get('status')}: a cycle starts from an open ticket")
+        key, lock, what = f"t{ticket}", f"cycle-{project}-t{ticket}", f"ticket #{ticket}"
+    else:
+        if type(issue) is not int or not 0 < issue < 10**7:
+            raise ValueError("bad issue")
+        key, lock, what = str(issue), f"cycle-{project}-{issue}", f"#{issue}"
     if confirm is not True:
-        raise ValueError("a cycle spends money and writes a branch and a pull request: confirm it")
-    if f"cycle-{project}-{issue}" in running_locks():
-        raise ValueError(f"a cycle for #{issue} on {project} is already running")
+        raise ValueError("a cycle spends money and writes a branch" + ("" if ticket is not None else " and a pull request") + ": confirm it")
+    if lock in running_locks():
+        raise ValueError(f"a cycle for {what} on {project} is already running")
     b = daily_budget()
     if b is not None and spent_today() >= b:
         raise ValueError(f"today's budget is spent (${spent_today():.2f} of ${b:.2f}); a cycle would stop at once")
-    argv = [str(ROOT / "bin" / "qtdeck"), "cycle", project, "--issue", str(issue), "--apply"]
+    if ticket is not None:
+        argv = _tk.argv_cycle(project, ticket, apply=True)
+    else:
+        argv = [str(ROOT / "bin" / "qtdeck"), "cycle", project, "--issue", str(issue), "--apply"]
     LOGS.mkdir(exist_ok=True)
     out = open(LOGS / f"cycle-{project}.log", "a")
     out.write(f"\n[{iso(now_utc())}] started by dashboard: {' '.join(argv[2:])}\n")
@@ -889,13 +935,15 @@ def start_cycle(project, issue, confirm):
     cid = None
     for _ in range(40):                       # up to 4 s for the script to write its record
         time.sleep(0.1)
-        for f in CYCLES.glob(f"cyc-*-{issue}-*.json") if CYCLES.is_dir() else []:
+        for f in CYCLES.glob(f"cyc-*-{key}-*.json") if CYCLES.is_dir() else []:
             r = read_json(f, None)
-            if isinstance(r, dict) and r.get("project") == project and r.get("issue") == issue and f.stat().st_mtime >= t0 - 1:
+            if not isinstance(r, dict) or r.get("project") != project or f.stat().st_mtime < t0 - 1:
+                continue
+            if (r.get("ticket") == ticket) if ticket is not None else (r.get("issue") == issue and not isinstance(r.get("ticket"), int)):
                 cid = r.get("id"); break
         if cid:
             break
-    return {"started": f"cycle {project} --issue {issue}", "id": cid}
+    return {"started": f"cycle {project} " + (f"--ticket {ticket}" if ticket is not None else f"--issue {issue}"), "id": cid}
 
 
 # ---- status from GitHub ---------------------------------------------------------
@@ -1278,6 +1326,65 @@ def over_budget():
     spend reaches the daily budget. A run started by hand is never stopped."""
     b = daily_budget()
     return b is not None and spent_today() >= b
+
+
+def _stack_sentence(project):
+    """The one-sentence stack the survey found for a project (state/profiles), or nothing when it was never scanned."""
+    import tickets as _tk
+    return _tk.stack_context(project)["stack"]
+
+
+def _mission_state(kind, r):
+    """The state word the page gives a mission (dashboard/index.html recentMissions + MSTATE), so a count here equals the rows there."""
+    st = r.get("status")
+    if kind == "fix":
+        return "running" if st == "running" else "awaiting" if st == "pr" else "blocked" if st in ("failed", "blocked", "abandoned") else "done"
+    if kind == "panel":
+        return "running" if st == "running" else "done" if st == "done" else "blocked"
+    if kind == "cycle":
+        return ("running" if st == "running" else "awaiting" if st == "awaiting-review"
+                else "blocked" if st in ("needs-human", "failed", "stopped-cap", "stopped-ceiling") else "done")
+    if kind == "brief":
+        mk = r.get("mockups")
+        return ("running" if st == "drafting" or mk == "working" else "blocked" if st == "failed" or mk == "failed"
+                else "awaiting" if st in ("proposed", "changes_requested") or mk == "ready" else "done")
+    return "awaiting" if st in ("proposed", "approved") else "done"          # plan
+
+
+def project_overview(projects, agents, runs, inbox, fixes, cycles, panels, briefs, plans, spend_rows, since_today, since_week, stack_of=None):
+    """One small summary per registered project, for the Projects page. Pure: every figure is counted from the lists the state already holds,
+    never estimated. needs/top come from the unacknowledged inbox items of that project (the list Needs you shows, add-on items have no project
+    and are counted on the page); last run from the runs ledger; spend from the spend ledger rows that name the project; the mission counts
+    use the page's own state words. state: blocked (a failed run or blocker waits), needs you, running, or idle."""
+    out = []
+    names = sorted(projects) if isinstance(projects, dict) else sorted(p.get("name") for p in projects)      # the registry (a dict) or the state's list
+    for name in names:
+        mine = [x for x in inbox if x.get("project") == name and not x.get("acknowledged") and not x.get("addon")]
+        mine.sort(key=lambda x: x.get("at") or "", reverse=True)
+        top = mine[0] if mine else None
+        ran = [r for r in runs if r.get("project") == name and r.get("at")]
+        last = max(ran, key=lambda r: r["at"]) if ran else None
+        sp = [r for r in spend_rows if r.get("project") == name]
+        states = ([_mission_state("fix", r) for r in (fixes or {}).values() if r.get("project") == name]
+                  + [_mission_state("cycle", r) for r in cycles if r.get("project") == name]
+                  + [_mission_state("panel", r) for r in panels if r.get("project") == name and not r.get("superseded_by")]
+                  + [_mission_state("brief", r) for r in briefs if r.get("project") == name]
+                  + [_mission_state("plan", r) for r in plans if r.get("project") == name])
+        running = (sum(1 for a in agents if a.get("project") == name and a.get("status") == "running")
+                   + sum(1 for s in states if s == "running"))
+        bad = bool(top) and any((x.get("severity") in ("BLOCKED", "ERROR", "FAILED", "bad") or x.get("blocker") == "config") for x in mine)
+        out.append({
+            "name": name,
+            "state": "blocked" if bad else "needs you" if mine else "running" if running else "idle",
+            "running": running, "needs": len(mine),
+            "top": {"id": top.get("id"), "text": str(top.get("text") or "")[:200], "at": top.get("at")} if top else None,
+            "last_run": {"at": last["at"], "duty": last.get("duty") or "", "verdict": last.get("verdict") or ""} if last else None,
+            "spend_today": round(sum(float(r.get("cost") or 0) for r in sp if (r.get("at") or "") >= since_today), 4),
+            "spend_week": round(sum(float(r.get("cost") or 0) for r in sp if (r.get("at") or "") >= since_week), 4),
+            "missions_open": sum(1 for s in states if s != "done"), "missions_done": sum(1 for s in states if s == "done"),
+            "stack": (stack_of(name) if stack_of else "") or "",
+        })
+    return out
 
 
 def spend_summary():
@@ -1700,8 +1807,10 @@ def cycle_nodes(r):
         if real:
             verdicts = sorted({str(x.get("verdict")) for x in done if x.get("verdict") and x.get("verdict") != "SKIPPED"})
             note = " · ".join(([", ".join(verdicts)] if verdicts else []) + ([_money(cost)] if cost else []))
-        elif key == "human" and st == "awaiting":
-            note = "Read the pull request"
+        if key == "human" and st == "awaiting" and not note:
+            note = "Read the local branch" if isinstance(r.get("ticket"), int) else "Read the pull request"
+        if st == "skipped":
+            note = str(next((x.get("detail") for x in real if x.get("detail")), "") or "").split(":")[0][:60]       # the short reason; the whole one is on the stage's own row
         state_of[key] = st
         out.append({"id": key, "label": label, "state": st, "note": note})
     if status in ("stopped-cap", "stopped-ceiling"):
@@ -1721,12 +1830,14 @@ def cycle_mission(r, out):
     status = r.get("status") or "running"
     stages = [x for x in r.get("stages") or [] if isinstance(x, dict)]
     cost = float(r.get("cost") or 0)
-    out.update(project=r.get("project"), title=f"Cycle · #{r.get('issue')} {r.get('title') or ''}".strip(),
+    what = f"ticket #{r.get('ticket')}" if isinstance(r.get("ticket"), int) else f"#{r.get('issue')}"
+    out.update(project=r.get("project"), title=f"Cycle · {what} {r.get('title') or ''}".strip(),
                mission_ref=f"cycle {r.get('id')}", pipeline=cycle_nodes(r), issue=r.get("issue") if isinstance(r.get("issue"), int) else None,
                state={"running": "running", "awaiting-review": "awaiting"}.get(status, "blocked" if status in CYCLE_BAD else "done"))
     running = next((x for x in stages if x.get("state") == "running"), None)
+    local_done = isinstance(r.get("ticket"), int) and not isinstance(r.get("ticket"), bool) and isinstance(r.get("branch"), str) and r.get("branch")
     body = {"running": f"The cycle is working on {running.get('title') if running else 'its next stage'}.",
-            "awaiting-review": (r.get("final") or "") + f" It cost {_money(cost)} in all.",
+            "awaiting-review": (f"The crew built it on the local branch {r['branch']}, as one commit. Nothing was pushed and no pull request exists." if local_done else (r.get("final") or "")) + f" It cost {_money(cost)} in all.",
             "nothing": r.get("final") or "There was nothing to build.",
             "report-only": r.get("final") or "A report-only cycle: nothing was written."}.get(status, r.get("final") or "No reason was recorded.")
     title = {"running": "Working", "awaiting-review": "Waiting for you", "needs-human": "Needs a person", "failed": "Failed",
@@ -1736,6 +1847,15 @@ def cycle_mission(r, out):
         out["blocker"] = {"cause": body, "cls": None, "rerun": False}
         body = "The cycle stopped here. The stages that finished are on the record and are not repeated when it resumes."
     out["detail"] = {"title": title, "body": body}
+    if isinstance(r.get("ticket"), int) and not isinstance(r.get("ticket"), bool):
+        # a ticket cycle ends at a local branch: what the owner needs to review it, and one line of what is next (plain text; the page selects, never links, the command)
+        branch = r.get("branch") if isinstance(r.get("branch"), str) else None
+        review = str(r.get("review") or "")[:500]
+        nxt = {"running": "The crew is working. Nothing is pushed and no pull request is made for a local ticket.",
+               "awaiting-review": f"Review the branch {branch or ''}, merge it yourself if you agree, or connect a GitHub repo to run the reviewers on a pull request.".replace("  ", " "),
+               "needs-human": "A person has to look at this. The reason is above; the ticket stays on the list.",
+               "failed": "The cycle stopped. The ticket stays on the list; resume the cycle from a terminal."}.get(status, "")
+        out["ticket"] = {"n": r["ticket"], "branch": branch, "review": review, "next": nxt}
     # the history lens is the stage table: one row per stage, its cost in the detail
     out["history"] = [{"at": x.get("finished") or x.get("started"), "duty": x.get("title") or x.get("id"), "verdict": x.get("verdict") or x.get("state"),
                        "detail": " · ".join(t for t in (_money(x.get("cost")) if x.get("cost") else "", str(x.get("detail") or "")[:300]) if t)}
@@ -1816,6 +1936,7 @@ def compose_mission(mid, get_panel, fixes, runs, inbox, queue, get_cycle=None, g
     if not isinstance(mid, str) or len(mid) > 300 or ":" not in mid:
         return None
     kind, ref = mid.split(":", 1)
+    hint = None          # the record's own status where it explains a finished mission (nothing to build, taken, report-only)
     out = {"id": mid, "kind": kind, "project": None, "title": "", "state": "idle", "pipeline": None,
            "detail": {"title": "", "body": ""}, "blocker": None, "decision": None, "evidence": None,
            "items": [], "disputes": [], "history": [], "mission_ref": ""}
@@ -1845,17 +1966,24 @@ def compose_mission(mid, get_panel, fixes, runs, inbox, queue, get_cycle=None, g
                 for s in ("blocked", "awaiting", "active"):
                     if s in col:
                         return s
-                return "done" if col and all(s == "done" for s in col) else "notstarted"
+                if col and all(s == "done" for s in col):
+                    return "done"
+                return "active" if "done" in col else "notstarted"          # some items further along than others: the step is under way
             seats = len(tx.get("seats") or [])
+            ref = out.get("mission_ref") or "panel"
+            # Build, Verify and Review belong to a fix, not to a panel: a panel mission needs only Brief and Panel. They are shown from the fixes started
+            # from its items; with none started they are not needed, and nothing here is "Not started" under a Done badge.
+            tail = ([{"id": NODES[k][0], "label": NODES[k][1], "state": agg(k), "note": "per item"} for k in (2, 3, 4)] if per
+                    else [{"id": NODES[k][0], "label": NODES[k][1], "state": "skipped", "note": f"Not needed for a {ref} mission"} for k in (2, 3, 4)])
+            out["fixes_started"] = len(per)
             out["pipeline"] = ([{"id": "brief", "label": "Brief", "state": "done", "note": ""},
-                                {"id": "panel", "label": "Panel", "state": panel, "note": f"{seats} seats" if seats else ""}]
-                               + [{"id": NODES[k][0], "label": NODES[k][1], "state": agg(k), "note": "per item" if per else ""} for k in (2, 3, 4)])
+                                {"id": "panel", "label": "Panel", "state": panel, "note": f"{seats} seats" if seats else ""}] + tail)
             decision = _open_decision(items) if st == "done" else None
             out["decision"] = decision
             out["state"] = "running" if st == "running" else "blocked" if st == "abandoned" else "awaiting" if decision else "done"
             body = {"running": "The seats are still arguing. The ruling appears here when the chair has made it.",
                     "abandoned": "The panel stopped before it reached a ruling."}.get(st) \
-                or f"The chair ruled on {len(items)} {'item' if len(items) == 1 else 'items'}. Each one can be fixed from the Work tab."
+                or f"The chair ruled on {len(items)} {'item' if len(items) == 1 else 'items'}. Each one is listed in the Work tab."
             out["detail"] = {"title": {"running": "Panel in progress", "abandoned": "Panel stopped"}.get(st, "Ruled"), "body": body}
             if st == "abandoned":
                 out["blocker"] = {"cause": body, "cls": None, "rerun": False}
@@ -1866,6 +1994,7 @@ def compose_mission(mid, get_panel, fixes, runs, inbox, queue, get_cycle=None, g
                        mission_ref=f"issue #{rec['issue']}" if (rec or {}).get("issue") else f"item {n}",
                        items=[item] if item else [], decision=_open_decision([item]) if item else None)
             if rec:
+                hint = rec.get("status")
                 if isinstance(rec.get("issue"), int):
                     out["issue"] = rec["issue"]                 # the page offers "Make a brief for this issue"
                 out["pipeline"] = fix_nodes(rec)
@@ -1914,6 +2043,7 @@ def compose_mission(mid, get_panel, fixes, runs, inbox, queue, get_cycle=None, g
         if not r:
             return None
         cycle_mission(r, out)
+        hint = r.get("status")
     elif kind == "brief":
         r = get_brief(ref) if get_brief and isinstance(ref, str) and len(ref) <= 40 else None
         if not r:
@@ -1928,13 +2058,60 @@ def compose_mission(mid, get_panel, fixes, runs, inbox, queue, get_cycle=None, g
         a = next((x for x in inbox if x.get("id") == ref), None)
         if a is None:
             return None
+        src = str(a.get("addon") or a.get("place") or (a.get("source") if a.get("source") not in (None, "", "local") else "") or "")
+        if src:
+            out["addon"] = src[:60]          # an alert from an add-on: the page names the add-on where it would otherwise say "No project"
         out.update(project=a.get("project"), title=a.get("label") or f"{a.get('project') or 'Local'} {a.get('duty') or ''}".strip(),
                    mission_ref=a.get("source") or "attention", state="blocked",
                    detail={"title": "Needs a look", "body": a.get("text") or ""},
                    blocker={"cause": a.get("text") or "", "cls": a.get("blocker"), "rerun": False, "place": a.get("place")})
     else:
         return None
+    out["line"] = mission_line(out, hint)
+    _settle_steps(out, hint)
     return out
+
+
+# The steps a finished mission does not show as "Not started": a step the kind never needed (or that did not apply) is "Skipped", with the reason in its note.
+# A mission still under way keeps its pending steps as "Not started": those are still to come.
+def _settle_steps(out, hint=None):
+    nodes = out.get("pipeline")
+    if not nodes or out.get("state") != "done":
+        return
+    kind, ref = out.get("kind"), out.get("mission_ref") or ""
+    why = {"brief": "Optional, not made", "cycle": "Not needed for a cycle mission"}.get(kind) or f"Not needed for a {kind if kind != 'panel' else (ref or 'panel')} mission"
+    if hint in ("nothing", "report-only", "taken"):
+        why = {"nothing": "Not needed: nothing to build", "report-only": "Not needed: a report-only cycle", "taken": "Not needed: taken by someone else"}[hint]
+    for n in nodes:
+        if n.get("state") == "notstarted":
+            n["state"], n["note"] = "skipped", why
+
+
+def mission_line(out, hint=None):
+    """One plain sentence under a mission's title: what its state means and what comes next, built from the mission's own data. Empty
+    when the state speaks for itself (a mission still running, blocked or waiting says so in its own card)."""
+    kind, state, project = out.get("kind"), out.get("state"), out.get("project")
+    body = (out.get("detail") or {}).get("body") or ""
+    if kind == "cycle" and state == "awaiting":
+        return (out.get("ticket") or {}).get("next") or body
+    if state != "done":
+        return ""
+    if kind == "panel":
+        n, k = len(out.get("items") or []), out.get("fixes_started") or 0
+        if not n:
+            return "The panel ruled nothing worth doing, so there is nothing to fix."
+        if k:
+            return f"The panel ruled on {n} {'item' if n == 1 else 'items'}; fixing them is optional and {k} {'fix has' if k == 1 else 'fixes have'} been started. Each fix is a mission of its own."
+        return (f"The panel ruled on {n} {'item' if n == 1 else 'items'}; fixing them is optional, start it from the Work tab."
+                + (f" They would be fixed in {project}." if project else ""))
+    if kind == "fix":
+        return {"merged": "The pull request was merged. Nothing more is needed.", "closed": "The pull request was closed without merging.",
+                "nothing": "There was nothing to build, so nothing more happens.", "taken": "Someone else already took this one."}.get(hint or "", body)
+    if kind == "cycle":
+        return {"nothing": "The cycle found nothing to build, so nothing is waiting.", "report-only": "A report-only cycle: nothing was written and nothing is waiting."}.get(hint or "", body)
+    if kind == "run":
+        return "The run finished and its result is on this page. Nothing is waiting for you."
+    return body
 
 
 def mission_view(mid):
@@ -2097,6 +2274,7 @@ DUTY_PLAN = {
     "harbourmaster": {"about": "Reconciles the project board against GitHub reality.", "perm": "github-write"},
     "purser": {"about": "Turns a backlog issue into something a stranger could start from.", "perm": "local-write"},
     "trials": {"about": "Runs the project's own verify command.", "perm": "read-only"},
+    "scribe": {"about": "Drafts the README and architecture overview a project is missing; writes only a new branch, and only on your yes.", "perm": "local-write"},
 }
 PERM_LABEL = {"read-only": "Read-only analysis", "local-write": "Local file changes",
               "github-write": "GitHub writes", "unclassified": "Not yet mapped — read its duty file before approving"}
@@ -3485,7 +3663,7 @@ def project_agents_api(name):
 
 def attach_api(b):
     """Look at a folder and propose how the crew should work on it; with apply and confirm, register it. Read-only until the owner confirms."""
-    import attach as _attach, scan as _scan
+    import attach as _attach, scan as _scan, survey as _survey, ready as _ready
     raw = str(b.get("path") or "").strip()
     if not raw:
         return 400, {"error": "say which folder"}
@@ -3501,10 +3679,13 @@ def attach_api(b):
         agents = None
         if b.get("edits") is not None:
             prop = _attach.edit(prop, b["edits"])
+        sv = _survey.survey(path, prop["name"])           # the survey (bin/survey.py): files only; it is kept only by the confirmed apply below
+        applied = False
         if b.get("apply"):
             if b.get("confirm") is not True:
                 return 400, {"error": "confirm is required: this adds the project to your registry"}
-            _attach.apply(prop, prof, PROJECTS_FILE, proposed, "owner, reviewed in the dashboard" if b.get("edits") is not None else "owner, with --apply")
+            _attach.apply(prop, prof, PROJECTS_FILE, proposed, "owner, reviewed in the dashboard" if b.get("edits") is not None else "owner, with --apply", sv=sv)
+            applied = True
             if b.get("agents_md") is True:                  # opt-in, and only inside the confirmed apply
                 try:
                     agents = _attach.write_agents_md(prop, path)
@@ -3516,11 +3697,479 @@ def attach_api(b):
                     f.write(f"{iso(now_utc())} registered {log_field(prop['name'])}\n")
             except OSError:
                 pass                                   # a note that could not be written never undoes the registration
+        # the checklist, built from the entry that was (or would be) registered: as it is right after adding, or as it would be
+        items = _ready.build(prop["name"], prop["entry"], sv, {"duty_reasons": prop.get("duty_reasons", {})}, None, None, path=str(path), preview=not applied)
+        ready = {"project": prop["name"], "items": items, "ready": False, "preview": not applied,
+                 "next": _ready.next_action(prop["name"], prop["entry"], items, {"tickets": []}, str(path)) if applied else {"kind": "attach", "text": "Add this project, then run the verify command once to prove it.", "command": ""}}
+        ready["docs_line"] = _attach.docs_line(sv).replace("<name>", prop["name"])
     except ValueError as e:
         return 400, {"error": str(e)}
     except OSError as e:
         return 500, {"error": str(e)[:200]}
-    return 200, {"profile": prof, "proposal": prop, "applied": bool(b.get("apply")), "agents_md": agents, "duty_options": [{"name": x["name"], "role": x["role"]} for x in duty_list() if x["name"] in _attach.known_duties()], "guardrail_options": _attach.GUARDRAILS, "pack_status": {x["id"]: x["status"] for x in _packs_mod.load()}}
+    return 200, {"profile": prof, "survey": sv, "ready": ready, "proposal": prop, "applied": bool(b.get("apply")), "agents_md": agents, "duty_options": [{"name": x["name"], "role": x["role"]} for x in duty_list() if x["name"] in _attach.known_duties()], "guardrail_options": _attach.GUARDRAILS, "pack_status": {x["id"]: x["status"] for x in _packs_mod.load()}}
+
+
+# ---- tickets and the GitHub repo, on the page --------------------------------------------------------------------------------------------
+# The page's "New ticket" box and the options for a project with no repo. The model is reached only through `qtdeck ticket new`, started detached
+# with the owner's words on STANDARD INPUT (never in an argument list, so no process listing shows them); filing to GitHub is `qtdeck ticket file
+# --apply`, so the planner's credential scan and the foreman's filing are the ones the command line uses. The dashboard itself holds no token and
+# never reads one. Each write needs confirm:true, and logs the action and the project (never the request or any value) to logs/tickets.log.
+TICKET_JOBS = {}                 # (project, "draft" | "file") -> {"popen", "at"}: the run this dashboard started last, so a page can ask why nothing came
+TICKET_LOCK = threading.Lock()
+DEMO_TICKET_MSG = "Demo mode: nothing is drafted, filed or created."
+NOT_SIGNED_IN = "GitHub CLI is not signed in: run gh auth login in a terminal, then try again."
+
+
+def _ticket_log(action, project):
+    try:
+        LOGS.mkdir(parents=True, exist_ok=True)
+        with open(LOGS / "tickets.log", "a") as f:
+            f.write(f"{iso(now_utc())} {log_field(action)} {log_field(project)}\n")
+    except OSError:
+        pass                                        # a note that could not be written never undoes the action
+
+
+def _ticket_entry(project):
+    ent = read_json(PROJECTS_FILE, {}).get(project) if isinstance(project, str) else None
+    if not isinstance(ent, dict):
+        raise ValueError("unknown project")
+    return ent
+
+
+def _ticket_job_alive(project, kind):
+    with TICKET_LOCK:
+        job = TICKET_JOBS.get((project, kind))
+    return bool(job and job["popen"].poll() is None)
+
+
+def _ticket_running(project, kind="draft", locks=None):
+    return f"planner-{project}-tickets" in (running_locks() if locks is None else locks) or _ticket_job_alive(project, kind) or _ticket_job_alive(project, "file" if kind == "draft" else "draft")
+
+
+def _ticket_error(project, kind):
+    """Why the last run this dashboard started for the project made nothing: one plain sentence, or "". Read from the ledger row the planner wrote,
+    else from the end of the run's own log. Nothing here quotes the owner's request."""
+    with TICKET_LOCK:
+        job = TICKET_JOBS.get((project, kind))
+    if not job or job["popen"].poll() is None:
+        return ""
+    rows = [r for r in read_json(STATE / "runs.json", []) if isinstance(r, dict) and r.get("project") == project and r.get("duty") == "planner"
+            and isinstance(r.get("at"), str) and r["at"] >= job["at"]]
+    row = rows[-1] if rows else None
+    if row and row.get("verdict") in ("DRAFTED", "FILED"):
+        return ""
+    detail = " ".join(str(row.get("detail") or "").split()) if row else ""
+    if row and row.get("verdict") == "NOTHING_TO_DRAFT":
+        return "Everything in the draft is already on GitHub." if "tracker" in detail else "The planner found nothing to turn into a ticket from that request. Say more about what you want built."
+    if row and row.get("verdict") == "REFUSED" and detail.startswith("ticket request"):
+        return "Your request looks like it holds a password or a key, so nothing was sent. Take it out of the request and draft again."
+    if row and row.get("verdict") == "REFUSED":
+        return "A ticket looks like it holds a password or a key, so nothing was sent. Take it out of the request and draft again."
+    if row:
+        if detail.startswith("ticket draft refused"):
+            return "The planner's answer did not pass Quarterdeck's checks, so nothing was kept. Try again; a new draft usually does."
+        return plain_failure(re.sub(r"^ticket draft: ", "", detail))[:300]
+    rc = job["popen"].returncode
+    if rc not in (0, None):
+        try:
+            tail = [ln.strip() for ln in (LOGS / f"ticket-{project}.log").read_text(errors="replace").split("started by dashboard")[-1].splitlines() if ln.strip()]
+        except OSError:
+            tail = []
+        return (tail[-1][:200] if tail else "The planner stopped before it finished.")
+    return "The planner stopped without a result, perhaps at a usage limit. Try again later." if kind == "draft" else ""
+
+
+def _ticket_review(t):
+    """The command that shows a local ticket's branch, from its cycle record; "" when there is none."""
+    cid = t.get("cycle")
+    if t.get("status") not in ("review", "building") or not (isinstance(cid, str) and valid_id(cid)):
+        return ""
+    r = read_json(CYCLES / f"{cid}.json", None)
+    return str(r.get("review") or "")[:500] if isinstance(r, dict) and r.get("kind") == "cycle" else ""
+
+
+def _ticket_shown(x):
+    """A ticket or a draft as the page may show it: every string passes the credential scan, so a model that copied a key into a ticket cannot put it
+    on a screen (the draft stays on disk; the filing scan refuses it)."""
+    try:
+        import outscan as _os
+    except Exception:
+        return {"id": x.get("id"), "title": "(hidden: the credential scan could not run)", "body": "", "acceptance": [], "tickets": []}
+    if isinstance(x, str):
+        return _os.redact(x)
+    if isinstance(x, list):
+        return [_ticket_shown(v) for v in x]
+    if isinstance(x, dict):
+        return {k: _ticket_shown(v) for k, v in x.items()}
+    return x
+
+
+def tickets_view(project):
+    """GET /api/tickets?project=: what the Tickets card and the repo options need. Read-only; no secret in it."""
+    import tickets as _tk, repo as _repo
+    no_demo("read tickets")
+    ent = _ticket_entry(project)
+    store = _tk.load(project)
+    repo = ent.get("repo") or ""
+    locks = running_locks()
+    return {"project": project, "repo": repo, "has_repo": bool(repo), "sentence": "" if repo else _repo.sentence(project), "options": _repo.options(project),
+            "stack": _tk.stack_context(project)["stack"], "cycle": ent.get("cycle") is True,
+            "tickets": [{**_ticket_shown(t), "review": _ticket_review(t)} for t in store["tickets"]], "drafts": [_ticket_shown(d) for d in store["drafts"]],
+            "running": _ticket_running(project, "draft", locks), "last_draft_error": _ticket_error(project, "draft"), "last_file_error": _ticket_error(project, "file"),
+            "request_limit": _tk.REQUEST_MAX}
+
+
+def _ticket_start(argv, log_name, request=None):
+    """Run `argv` detached like a cycle; `request` (text) is written to its standard input, so it is in no argument list. Returns the Popen."""
+    LOGS.mkdir(exist_ok=True)
+    out = open(LOGS / log_name, "a")
+    out.write(f"\n[{iso(now_utc())}] started by dashboard: {' '.join(a[:60] for a in argv[2:])}\n")
+    out.flush()
+    p = subprocess.Popen(argv, stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.PIPE if request is not None else subprocess.DEVNULL,
+                         cwd=str(ROOT), start_new_session=True)
+    out.close()
+    if request is not None:
+        try:
+            p.stdin.write(request.encode())          # at most a few thousand bytes: well inside a pipe's buffer, so this never waits
+        finally:
+            p.stdin.close()
+    threading.Thread(target=p.wait, daemon=True).start()          # reaped when it ends
+    return p
+
+
+def ticket_draft_api(b):
+    import tickets as _tk
+    no_demo("draft tickets")
+    if b.get("confirm") is not True:
+        return 400, {"error": "confirm is required: drafting asks the model, which costs a few cents"}
+    project = b.get("project")
+    try:
+        ent = _ticket_entry(project)
+        request = _tk.check_request(b.get("request"))
+        if not (Path(os.path.expanduser(str(ent.get("path") or ""))) / ".git").exists():
+            return 400, {"error": "that project's folder is not a git checkout"}
+        if _ticket_running(project):
+            return 409, {"error": f"the planner is already working on {project}: wait for it to finish"}
+        bud = daily_budget()
+        if bud is not None and spent_today() >= bud:
+            return 409, {"error": f"today's budget is spent (${spent_today():.2f} of ${bud:.2f}); drafting would stop at once"}
+        argv = _tk.argv_new(project)
+    except ValueError as e:
+        return 400, {"error": str(e)}
+    at = iso(now_utc())
+    try:
+        p = _ticket_start(argv, f"ticket-{project}.log", request)
+    except OSError as e:
+        return 500, {"error": "could not start the planner: " + type(e).__name__}
+    with TICKET_LOCK:
+        TICKET_JOBS[(project, "draft")] = {"popen": p, "at": at}
+    _ticket_log("draft", project)
+    return 200, {"started": True}
+
+
+def ticket_file_api(b):
+    import tickets as _tk
+    no_demo("file tickets")
+    if b.get("confirm") is not True:
+        return 400, {"error": "confirm is required: this saves tickets, or files issues on GitHub"}
+    project, did, local = b.get("project"), b.get("draft"), b.get("local", False)
+    if not isinstance(local, bool):
+        return 400, {"error": "local is true or false"}
+    try:
+        ent = _ticket_entry(project)
+        dr = _tk.draft_get(project, did)
+        repo = ent.get("repo") or ""
+        if repo and not local:
+            if _ticket_running(project, "file"):
+                return 409, {"error": f"the planner is already working on {project}: wait for it to finish"}
+            argv = _tk.argv_file(project, did, apply=True)
+        else:
+            made = _tk.local_add(project, dr["tickets"])
+            _tk.draft_remove(project, did)
+            _ticket_log("file-local", project)
+            return 200, {"tickets": made, "local": True}
+    except ValueError as e:
+        return 400, {"error": str(e)}
+    at = iso(now_utc())
+    try:
+        p = _ticket_start(argv, f"ticket-{project}.log")
+    except OSError as e:
+        return 500, {"error": "could not start the filing: " + type(e).__name__}
+    with TICKET_LOCK:
+        TICKET_JOBS[(project, "file")] = {"popen": p, "at": at}
+    _ticket_log("file-github", project)
+    return 200, {"started": True, "count": len(dr["tickets"]), "repo": repo}
+
+
+def ticket_discard_api(b):
+    import tickets as _tk
+    no_demo("discard a draft")
+    if b.get("confirm") is not True:
+        return 400, {"error": "confirm is required: a discarded draft is gone"}
+    try:
+        _ticket_entry(b.get("project"))
+        _tk.draft_remove(b.get("project"), b.get("draft"))
+    except ValueError as e:
+        return 400, {"error": str(e)}
+    _ticket_log("discard", b.get("project"))
+    return 200, {"discarded": True}
+
+
+def repo_api(b):
+    """Connect a repo the owner already has (set), or make a private one after two explicit yeses (create, push). The program that does it is bin/repo.py;
+    this never creates a GitHub account, and reads and returns no token."""
+    import attach as _attach
+    no_demo("change the repo")
+    if b.get("confirm") is not True:
+        return 400, {"error": "confirm is required: this changes which GitHub repo the project uses"}
+    project, action = b.get("project"), b.get("action")
+    try:
+        ent = _ticket_entry(project)
+        if action == "set":
+            repo = b.get("repo")
+            if not isinstance(repo, str):
+                return 400, {"error": "say the repo as owner/name, like octocat/hello-world"}
+            _attach.set_repo(project, repo.strip())
+            _ticket_log("repo-set", project)
+            return 200, {"ok": True, "repo": repo.strip()}
+        if action != "create":
+            return 400, {"error": "action is set or create"}
+        push = b.get("push", False)
+        if not isinstance(push, bool):
+            return 400, {"error": "push is true or false"}
+        if ent.get("repo"):
+            return 400, {"error": f"{project} already uses the GitHub repo {ent['repo']}"}
+    except ValueError as e:
+        return 400, {"error": str(e)}
+    except OSError as e:
+        return 500, {"error": "could not write: " + type(e).__name__}
+    argv = [sys.executable, str(ROOT / "bin" / "repo.py"), "create", project, "--private", "--yes"] + (["--push"] if push else [])
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL, cwd=str(ROOT))
+    except subprocess.TimeoutExpired:
+        return 200, {"ok": False, "code": 1, "message": "GitHub did not answer in time. Nothing was recorded; check GitHub and try again."}
+    except OSError as e:
+        return 500, {"error": "could not run it: " + type(e).__name__}
+    _ticket_log("repo-create" + ("-push" if push else ""), project)
+    text = (r.stdout or "") + (r.stderr or "")
+    try:
+        import outscan as _os
+        text = _os.redact(text)
+    except Exception:
+        text = ""
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if r.returncode == 3:
+        return 200, {"ok": False, "code": 3, "message": NOT_SIGNED_IN}
+    if r.returncode == 2:
+        return 400, {"error": (lines[0] if lines else "That cannot be created.")[:300]}
+    if r.returncode != 0:
+        return 200, {"ok": False, "code": r.returncode, "message": "The repository was not created. " + " ".join(lines[-2:])[:300]}
+    now = _ticket_entry(project).get("repo") or ""
+    pushed = any(ln.startswith("pushed ") for ln in lines)
+    return 200, {"ok": True, "code": 0, "repo": now, "private": True, "pushed": pushed,
+                 "message": f"Created the private repository {now} and connected it." + (" The default branch was pushed once." if pushed else " Nothing was pushed.")}
+
+
+# ---- the ready checklist, the scribe's docs and the crew's switches, on the page ---------------------------------------------------------------
+# The Ready card (bin/ready.py is the checklist; this is its page). Reading it reads files only. Three things can start work, each one click with
+# confirm:true, each the command line's own command run detached (the way a cycle is started): `qtdeck ready <p> --prove` (the verify command, once,
+# in the sandbox, on a throwaway copy of the default branch), `qtdeck docs <p> [which]` (the scribe drafts; nothing is written to the project) and
+# `qtdeck docs <p> --apply` (the kept draft onto a NEW branch, or a pull request; never the default branch). Duties are switched by the same function
+# `qtdeck enable` uses. Each action logs the action and the project (never a value) to logs/tickets.log.
+READY_JOBS = {}                  # (project, "prove" | "draft" | "apply") -> {"popen", "at"}
+DEMO_READY_MSG = "Demo mode: nothing is run, drafted or changed."
+DOCS_WHICH = ("readme", "architecture")
+
+
+def _ready_job_alive(project, kind):
+    with TICKET_LOCK:
+        job = READY_JOBS.get((project, kind))
+    return bool(job and job["popen"].poll() is None)
+
+
+def _ready_running(project, locks=None):
+    locks = running_locks() if locks is None else locks
+    return {"prove": f"prove-{project}" in locks or _ready_job_alive(project, "prove"),
+            "docs": f"scribe-{project}" in locks or _ready_job_alive(project, "draft") or _ready_job_alive(project, "apply")}
+
+
+def _ready_error(project, kind):
+    """Why the last run this dashboard started for the project made nothing, as one sentence, or "". Nothing here quotes the project's text."""
+    with TICKET_LOCK:
+        job = READY_JOBS.get((project, kind))
+    if not job or job["popen"].poll() is None:
+        return ""
+    if kind == "prove":
+        rec = read_json(STATE / "projects" / project / "verify.json", None)
+        if isinstance(rec, dict) and str(rec.get("at", "")) >= job["at"]:
+            return ""
+        try:
+            tail = [ln.strip() for ln in (LOGS / f"ready-{project}.log").read_text(errors="replace").split("started by dashboard")[-1].splitlines() if ln.strip()]
+        except OSError:
+            tail = []
+        return plain_failure(tail[-1][:200]) if tail else "The verify command could not be run. Nothing was kept."
+    rows = [r for r in read_json(STATE / "runs.json", []) if isinstance(r, dict) and r.get("project") == project and r.get("duty") == "scribe"
+            and isinstance(r.get("at"), str) and r["at"] >= job["at"]]
+    row = rows[-1] if rows else None
+    if row and row.get("verdict") in ("DRAFTED", "BRANCH", "PR"):
+        return ""
+    detail = " ".join(str(row.get("detail") or "").split()) if row else ""
+    if row and row.get("verdict") == "NOTHING_TO_DRAFT":
+        return "The scribe found nothing it could write without guessing, or the documents are there already."
+    if row and row.get("verdict") == "REFUSED" and "already exists" in detail:
+        return "A file of that name appeared in the project since the draft was made, so nothing was written. Read it, then draft again if it is still missing."
+    if row and row.get("verdict") == "REFUSED":
+        return "The draft did not pass Quarterdeck's checks (it looks like it holds a password or a key), so nothing was kept. Try again."
+    if row:
+        return plain_failure(detail)[:300]
+    return "The scribe stopped without a result, perhaps at a usage limit. Try again later."
+
+
+def ready_view(project):
+    """GET /api/ready?project=: the checklist, the one next action, the waiting docs draft and what is running. Read-only; no secret in it."""
+    import ready as _ready, docs as _docs
+    no_demo("read the ready checklist")
+    ent = _ticket_entry(project)
+    v = _ready.view(project)
+    dr = _docs.load_draft(project)
+    v["draft"] = _ticket_shown({"at": dr.get("at"), "files": [{"path": f.get("path"), "content": f.get("content")} for f in dr["files"] if isinstance(f, dict)],
+                                "notes": dr.get("notes") or []}) if dr else None
+    v["running"] = _ready_running(project)
+    v["last_error"] = {"prove": _ready_error(project, "prove"), "docs": _ready_error(project, "draft") or _ready_error(project, "apply")}
+    v["has_repo"] = bool(ent.get("repo"))
+    v["default_branch"] = ent.get("default_branch") or "main"
+    return v
+
+
+def _ready_start(project, kind, argv):
+    LOGS.mkdir(exist_ok=True)
+    at = iso(now_utc())
+    p = _ticket_start(argv, f"ready-{project}.log")
+    with TICKET_LOCK:
+        READY_JOBS[(project, kind)] = {"popen": p, "at": at}
+    return p
+
+
+def ready_prove_api(b):
+    no_demo("run the verify command")
+    if b.get("confirm") is not True:
+        return 400, {"error": "confirm is required: this runs the project's verify command once, in the sandbox"}
+    project = b.get("project")
+    try:
+        ent = _ticket_entry(project)
+        if not ent.get("verify"):
+            return 400, {"error": "this project has no verify command to prove: set one first"}
+        if _ready_running(project)["prove"]:
+            return 409, {"error": f"the verify command is already running for {project}: wait for it to finish"}
+        if not (Path(os.path.expanduser(str(ent.get("path") or ""))) / ".git").exists():
+            return 400, {"error": "that project's folder is not a git checkout"}
+    except ValueError as e:
+        return 400, {"error": str(e)}
+    try:
+        _ready_start(project, "prove", [str(ROOT / "bin" / "qtdeck"), "ready", project, "--prove"])
+    except OSError as e:
+        return 500, {"error": "could not start it: " + type(e).__name__}
+    _ticket_log("ready-prove", project)
+    return 200, {"started": True}
+
+
+def docs_draft_api(b):
+    no_demo("draft the docs")
+    if b.get("confirm") is not True:
+        return 400, {"error": "confirm is required: drafting asks the model, which costs a few cents"}
+    project, which = b.get("project"), b.get("which")
+    try:
+        ent = _ticket_entry(project)
+        if which not in (None, "", "both") + DOCS_WHICH:
+            return 400, {"error": "which is readme, architecture or both"}
+        if _ready_running(project)["docs"]:
+            return 409, {"error": f"the scribe is already working on {project}: wait for it to finish"}
+        if not (Path(os.path.expanduser(str(ent.get("path") or ""))) / ".git").exists():
+            return 400, {"error": "that project's folder is not a git checkout"}
+        bud = daily_budget()
+        if bud is not None and spent_today() >= bud:
+            return 409, {"error": f"today's budget is spent (${spent_today():.2f} of ${bud:.2f}); drafting would stop at once"}
+    except ValueError as e:
+        return 400, {"error": str(e)}
+    argv = [str(ROOT / "bin" / "qtdeck"), "docs", project] + ([which] if which in DOCS_WHICH else [])
+    try:
+        _ready_start(project, "draft", argv)
+    except OSError as e:
+        return 500, {"error": "could not start the scribe: " + type(e).__name__}
+    _ticket_log("docs-draft", project)
+    return 200, {"started": True}
+
+
+def docs_apply_api(b):
+    import docs as _docs
+    no_demo("put the docs on a branch")
+    if b.get("confirm") is not True:
+        return 400, {"error": "confirm is required: this makes a NEW branch (and, with a GitHub repo, opens a pull request); it never touches the default branch"}
+    project = b.get("project")
+    try:
+        ent = _ticket_entry(project)
+        if _docs.load_draft(project) is None:
+            return 400, {"error": "there is no draft to put on a branch: draft it first and read it"}
+        if _ready_running(project)["docs"]:
+            return 409, {"error": f"the scribe is already working on {project}: wait for it to finish"}
+    except ValueError as e:
+        return 400, {"error": str(e)}
+    try:
+        _ready_start(project, "apply", [str(ROOT / "bin" / "qtdeck"), "docs", project, "--apply"])
+    except OSError as e:
+        return 500, {"error": "could not start it: " + type(e).__name__}
+    _ticket_log("docs-apply", project)
+    return 200, {"started": True, "pull_request": bool(ent.get("repo"))}
+
+
+def project_duties_api(b):
+    """Turn duties on or off, and allow or forbid full cycles: attach.set_duties, the function `qtdeck enable` and `qtdeck disable` use."""
+    import attach as _attach
+    no_demo("change the crew")
+    if b.get("confirm") is not True:
+        return 400, {"error": "confirm is required: this changes which duties may run for the project"}
+    project, add, remove, cycle = b.get("project"), b.get("add", []), b.get("remove", []), b.get("cycle")
+    for name, v in (("add", add), ("remove", remove)):
+        if not isinstance(v, list) or not all(isinstance(x, str) for x in v) or len(v) > 40:
+            return 400, {"error": f"{name} is a list of duty names"}
+    if cycle is not None and not isinstance(cycle, bool):
+        return 400, {"error": "cycle is true or false"}
+    try:
+        _ticket_entry(project)
+        r = _attach.set_duties(project, add=add, remove=remove, cycle=cycle)
+    except ValueError as e:
+        return 400, {"error": str(e)}
+    except OSError as e:
+        return 500, {"error": "could not write: " + type(e).__name__}
+    _ticket_log("duties", project)
+    return 200, r
+
+
+def guardrails_view(project):
+    """GET /api/guardrails?project=: the locked rules with their reasons, the project's own, and the exact text the crew receives."""
+    import guardrails as _gr
+    _ticket_entry(project)
+    return _gr.listing(project)
+
+
+def project_guardrails_api(b):
+    """Save a project's guardrails: the full ordered list the page shows, through guardrails.replace (attach.edit and the atomic 0600 registry write)."""
+    import guardrails as _gr
+    if DEMO["world"] is not None:
+        return 400, {"error": "Demo mode: nothing is changed."}
+    if b.get("confirm") is not True:
+        return 400, {"error": "confirm is required: this changes the rules every agent is given for the project"}
+    project, items = b.get("project"), b.get("guardrails")
+    if not isinstance(items, list) or not all(isinstance(x, str) for x in items):
+        return 400, {"error": "guardrails is the full list of rules, as text"}
+    try:
+        _ticket_entry(project)
+        r = _gr.replace(project, items)
+    except ValueError as e:
+        return 400, {"error": str(e)}
+    except OSError as e:
+        return 500, {"error": "could not write: " + type(e).__name__}
+    return 200, r
 
 
 # ---- design briefs, mock-ups and sprint plans: the owner's approval screens ------------------------------------------
@@ -4462,24 +5111,31 @@ def _build_state():
                                 "pid": info["pid"], "what": info["what"], "lock": lock_name,
                                 "fixrun": info.get("fixrun")})
 
+    inbox = _safe(lambda: inbox_items(last_by_pair), [])
+    fixes = _safe(lambda: fix_index(locks), {})
+    cycles = _safe(lambda: cycles_summary(locks), [])
+    briefs = _safe(briefs_summary, [])
+    plans = _safe(plans_summary, [])
     return {
         "now": iso(now_utc()),
         "agents": agents,
         "crew": crew_list(),
         "missions": _safe(load_missions, []),
         "showcase": _safe(load_showcase, []),
-        "inbox": _safe(lambda: inbox_items(last_by_pair), []),
+        "inbox": inbox,
         "panels": panels,
-        "fixes": _safe(lambda: fix_index(locks), {}),
-        "cycles": _safe(lambda: cycles_summary(locks), []),
-        "briefs": _safe(briefs_summary, []),
-        "plans": _safe(plans_summary, []),
+        "fixes": fixes,
+        "cycles": cycles,
+        "briefs": briefs,
+        "plans": plans,
         "fixqueue": _safe(queue_view, {}),
         "spend": _safe(spend_summary, {}),
         "schedules": _safe(schedules_view, []),
         "docs": _safe(lambda: [{**d, "superseded_by": stale_docs.get(d["name"]),
                                 **classify(d["name"], doc_kind)}
                                for d in doc_list(list(projects), filed)], []),
+        "overview": _safe(lambda: project_overview(projects, agents, runs, inbox, fixes, cycles, panels, briefs, plans, spend_rows(),
+                                                   local_midnight_utc(), local_midnight_utc(6), _stack_sentence), []),
         "projects": [
             {"name": k, "repo": v.get("repo", ""), "summary": v.get("summary", ""),
              "duties": v.get("duties", []), "guardrails": v.get("guardrails", []),
@@ -4508,6 +5164,7 @@ def _build_state():
         "connectors": _safe(brain_connectors, []),
         "integrations": read_json(STATE / "integrations-status.json", {}),
         "memory": _safe(memory_view),
+        "addons": addons_list(),
         **{k: _safe(f) for k, f in EXT["state"].items()},
     }
 
@@ -4714,8 +5371,30 @@ class Handler(BaseHTTPRequestHandler):
                     [r["cost"] for r in w.cycle_records().values() if r["project"] == pr and r["status"] == "awaiting-review"], 15.0, 25.0, w.spend(w.elapsed())["today"])}))
             if u.path == "/api/project-agents":     # the made-up projects have no folders: none, and nothing is read from disk
                 return self._demo_reply((200, {"project": (q.get("project") or [""])[0], "agents": [], "coverage": projagents.coverage([])}))
+            if u.path == "/api/ready":              # invented inputs, the real checklist code
+                import ready as _ready
+                pr = (q.get("project") or [""])[0]
+                got = DEMO["world"].ready_inputs(pr)
+                if got is None:
+                    return self._demo_reply((400, {"error": "unknown project"}))
+                entry, sv, vrec, record, tk = got
+                items = _ready.build(pr, entry, sv, record, vrec, None, path=entry["path"])
+                return self._demo_reply((200, {"project": pr, "items": items, "next": _ready.next_action(pr, entry, items, tk), "ready": _ready.is_ready(items), "preview": False,
+                                               "draft": None, "running": {"prove": False, "docs": False}, "last_error": {"prove": "", "docs": ""}, "has_repo": bool(entry["repo"]),
+                                               "default_branch": "main", "demo": True}))
+            if u.path == "/api/guardrails":         # the made-up project's own rules, listed by the same function
+                import guardrails as _gr
+                pr = (q.get("project") or [""])[0]
+                if pr not in demo.PROJECTS:
+                    return self._demo_reply((400, {"error": "unknown project"}))
+                return self._demo_reply((200, {**_gr.listing_of(_gr.LOCKED_TEXTS + list(demo.GUARDRAILS)), "demo": True}))
             if u.path == "/api/mockup":             # a made-up page, still served the strict way
                 return self._mockup_page((q.get("brief") or [""])[0], (q.get("name") or [""])[0])
+            if u.path == "/api/state":              # the made-up state, with the Projects summary counted by the same function the real one uses
+                w = DEMO["world"]; st = w.state(); t = w.elapsed(); today, week = w.midnights(t)
+                st["overview"] = project_overview(st["projects"], st["agents"], st["runs"], st["inbox"], st["fixes"], st["cycles"], st["panels"], st["briefs"],
+                                                  st["plans"], w.spend_ledger(t), today, week, lambda n: demo.PROJECTS.get(n, {}).get("stack", ""))
+                return self._demo_reply((200, st))
             return self._demo_reply(DEMO["world"].get(u.path, q))
 
         if u.path.startswith("/assets/"):
@@ -4773,6 +5452,24 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/project-agents":
             code, body = project_agents_api((q.get("project") or [""])[0])
             return self._send(code, json.dumps(body))
+
+        if u.path == "/api/tickets":
+            try:
+                return self._send(200, json.dumps(tickets_view((q.get("project") or [""])[0])))
+            except ValueError as e:
+                return self._send(400, json.dumps({"error": str(e)}))
+
+        if u.path == "/api/guardrails":
+            try:
+                return self._send(200, json.dumps(guardrails_view((q.get("project") or [""])[0])))
+            except ValueError as e:
+                return self._send(400, json.dumps({"error": str(e)}))
+
+        if u.path == "/api/ready":
+            try:
+                return self._send(200, json.dumps(ready_view((q.get("project") or [""])[0])))
+            except ValueError as e:
+                return self._send(400, json.dumps({"error": str(e)}))
 
         if u.path == "/api/board":
             name = (q.get("project") or [""])[0]
@@ -5013,6 +5710,13 @@ class Handler(BaseHTTPRequestHandler):
             code, body = attach_api(b)
             return self._send(code, json.dumps(body))
 
+        for path_, fn_ in (("/api/ticket/draft", ticket_draft_api), ("/api/ticket/file", ticket_file_api), ("/api/ticket/discard", ticket_discard_api), ("/api/repo", repo_api),
+                         ("/api/ready/prove", ready_prove_api), ("/api/docs/draft", docs_draft_api), ("/api/docs/apply", docs_apply_api), ("/api/project/duties", project_duties_api),
+                         ("/api/project/guardrails", project_guardrails_api)):
+            if u.path == path_:
+                code, body = fn_(b)
+                return self._send(code, json.dumps(body))
+
         if u.path == "/api/fleet/action":
             code, body = fleet_action(b)
             return self._send(code, json.dumps(body))
@@ -5115,7 +5819,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if u.path == "/api/cycle/start":
             try:
-                got = start_cycle(b.get("project"), b.get("issue"), b.get("confirm"))
+                got = start_cycle(b.get("project"), b.get("issue"), b.get("confirm"), b.get("ticket"))
             except ValueError as e:
                 return self._send(409 if "already running" in str(e) or "budget" in str(e) else 400, json.dumps({"error": str(e)}))
             except Exception as e:

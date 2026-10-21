@@ -83,6 +83,8 @@ This starts the dashboard and opens a one-time pairing link to `http://127.0.0.1
 
 ![Home, in demo mode](images/home.png)
 
+**Home is you; Projects is where the work is.** Home shows your day, your notes (Brain dump), the whole fleet on one timeline, what finished lately and what today has cost against your daily budget, plus one line that says how many things need you and opens Projects. It shows nothing that belongs to one project. **Projects** opens on every project together: one card each with its state, what needs you, its last run and its spend. Press Open on a card and the same place shows only that project: its facts, its Ready card, its tickets and guardrails, and its Needs you, Missions, Pull requests, Board and Ledger. The project you are looking at is the **scope**. It is in the address (`?project=<name>`) and shown at the top of every page where it means something; Home, the Brain, Spend, Connections and Settings are not about one project, so they show no scope box. An add-on's alert (Relay, for example) is listed under Add-ons on the Projects overview, never at the top of Home.
+
 ## Attach a project
 
 Use **Add a project** in the dashboard, or the command line. Quarterdeck reads the folder first: languages, test command, CI, where it deploys, folders that need care. It says what it found and what the crew would do, and registers the project only when you say so. It never opens secret files and never changes the project. What it proposed and what you approved are kept in your data folder.
@@ -92,7 +94,17 @@ bin/qtdeck attach ~/Projects/my-app            # shows what it found and propose
 bin/qtdeck attach ~/Projects/my-app --apply    # registers it
 ```
 
-The summary names the languages, the duties it proposes and the command that proves a change works (pytest, npm test, go test and others are found). When none is found, set it with `--verify "<command>"`. `--verbose` shows the whole scan and every path the crew may not change. A folder with no GitHub remote gets one with `bin/qtdeck repo my-app <owner/name>`.
+The summary names the languages, the duties it proposes and the command that proves a change works (pytest, npm test, go test and others are found). When none is found, set it with `--verify "<command>"`. `--verbose` shows the whole scan and every path the crew may not change. A folder with no GitHub remote gets one with `bin/qtdeck repo my-app <owner/name>`; `bin/qtdeck repo my-app` lists the other ways, and local tickets work meanwhile (see the next section).
+
+**What attach does.** Attaching is onboarding, in five steps, and nothing is written outside your data folder until you say so:
+
+1. **Survey, no model.** The harness gathers facts from files: the layout, the languages and stack, the entry points (`src/main.jsx`, `main.py`, a `package.json` `main`, `dev` and `start` scripts), the scripts, the dependencies worth knowing (frameworks, state, routing, data, auth, payments, queues, UI kits, test tools), the documents that exist and the ones that do not, the size, and the state of git. It is kept as `state/projects/<project>/profile.json`, and `profile.md` is the same to read. Attaching a folder that is already registered surveys it again and tells you what changed.
+2. **Docs that are missing.** With no README or no architecture overview, `bin/qtdeck docs my-app` has the scribe draft them from the survey, shows you the draft and keeps it; nothing is written to your project. `bin/qtdeck docs my-app --apply` then puts exactly those files on a NEW branch `docs/my-app-<date>` made from the default branch (a pull request when the project has a GitHub repo, otherwise a local branch with the commands to review and merge it). It never writes on the default branch and never over a file that exists.
+3. **The crew.** Duties are chosen from the survey with a reason each (`bin/qtdeck enable my-app joiner`, `bin/qtdeck disable my-app joiner`, `bin/qtdeck enable my-app cycle` to allow full cycles), and the survey is handed to every agent as a short block at the start of its prompt, so it does not have to rediscover the project each run.
+4. **The checklist.** `bin/qtdeck ready my-app` shows one list: the scan, the verify command (proven once with `bin/qtdeck ready my-app --prove`, which runs it in the same sandbox as the shipwright's checks on a throwaway copy of the default branch, and only when you ask), the GitHub repo (optional: tickets work on this computer without it), the docs, the agents with their reasons, and cycles. Only the verify command can block anything.
+5. **One next action.** The last line is one thing to do: set a verify command, prove it, fix it, and then "File your first ticket". The dashboard shows the same list on the Ready card at the top of a project's page (Projects, then Open).
+
+Attach also names the stack from the files alone, for example "React 18 with Vite, tests by Vitest, lint by ESLint, package manager npm" (Node, Python, Go and Rust projects are read the same way). It proposes a build and a lint command next to the verify command, using the project's own package manager, and gives a reason for each. Every duty has a one-line reason for being on or off. The duties that fit the stack show as "also fit this stack (off)" on the command line and as a separate group in the dashboard; nothing in that group is on until you tick it (`--verbose` and the dashboard give the reason for each). Change the commands with `--build` and `--lint`, or in the dashboard. The build command is the one the Shipwright's checks already run; lint and type check are kept for your review and the crew's notes, and nothing runs them by itself.
 
 Adding a project accepts folders under your home directory only, never a hidden folder. `QUARTERDECK_PROJECT_ROOTS` in `config/quarterdeck.env` allows others. Attach only folders you trust: the crew reads their files and the harness runs their test and build commands (with a minimal environment, no secrets, and inside the operating-system sandbox: sandbox-exec on macOS, bubblewrap on Linux).
 
@@ -104,6 +116,33 @@ bin/qtdeck run my-app surveyor --pr 12 --apply   # posts the review
 ```
 
 `bin/qtdeck crew` lists the crew, `bin/qtdeck duties` the jobs, and `bin/qtdeck check` runs every test.
+
+**Guardrails are yours to edit.** On a project's page the Guardrails card lists the rules every agent is given for it. Edit, add, remove and reorder your own, then Save guardrails; "What the crew receives" shows the exact text. The same works from a terminal: `qtdeck guardrail <project> list|add|remove|move`. Three rules are locked and cannot be removed or changed by the page, the command or the API: never merge a pull request (only you merge), never push to the default branch (a branch can be reviewed and undone, a push cannot), and never touch .env files or anything that holds a secret. Every change is a line in `logs/guardrails.log`.
+
+## Say what you want built
+
+You do not need an issue to start. Tell the planner in plain words:
+
+```bash
+bin/qtdeck ticket new my-app "a page with a counter and a reset button"          # drafts one to five tickets and keeps the draft; files nothing
+bin/qtdeck ticket list my-app                                                   # the local tickets and the drafts, one line each
+bin/qtdeck ticket file my-app d1 --apply                                        # file the draft you like (or: ticket new ... --apply to draft and file in one go)
+```
+
+Each ticket has a title, a body and acceptance checks a person could try. The planner reads the project with read-only tools and sees the request as data, never as instructions. It never gets `gh` or a credential: Quarterdeck itself files, and only with `--apply`. Every ticket is scanned for credentials before it is posted, a title already on the tracker is skipped, and `@mentions` lose their `@` so a ticket never pings anyone.
+
+**A project with no GitHub repo** can still do this. `bin/qtdeck repo my-app` says so in one sentence and lists four ways forward, in this order:
+
+1. You already have a repo: `bin/qtdeck repo my-app <owner/name>`.
+2. You have a GitHub account: `bin/qtdeck repo create my-app --private` runs `gh repo create` only after you type `yes`, and only if `gh auth status` says you are signed in (if not, it tells you to run `gh auth login` and creates nothing). Pushing your main branch once, so pull requests have a base, is a second `yes` (or `--push`). `--public` also needs `--i-mean-public`.
+3. You have no GitHub account: a person has to sign up at github.com with an email address, choose a username and verify the email. Quarterdeck never creates an account and never touches a password. Then continue with 2.
+4. Not now: tickets stay on your computer, in `state/tickets/<project>.json` in your data folder. A local ticket never becomes a GitHub issue unless you connect a repo and file it yourself.
+
+**A local ticket through the crew.** `bin/qtdeck cycle my-app --ticket 1 --apply` (the project needs `"cycle": true`, like any cycle, and `"purser"` and `"panel"` in its `"duties"` list, which attach does not turn on) runs the purser, the dev panel and the shipwright on it, with the same checks, caps and refusals as for an issue, and then stops. The shipwright commits once on a local branch `ticket/1-<name>` in your checkout. Nothing is pushed, no pull request is opened and `gh` is never called, so the stages that need a pull request (the assayer, the five reviewers, the caulker) are listed as skipped, with the reason. The cycle ends with the command to read the change (`git diff <base>...ticket/1-<name>`) and the one to throw it away (`git branch -D ...`). Without `--apply` it only reports. When you later connect a repo, an issue goes through the whole cycle as before.
+
+**On the dashboard** the same things sit on a project's own page (Projects, then Open). The New ticket box ("What do you want built?", up to 2000 characters, one button, Draft tickets) starts the planner and shows the draft first: each ticket with its body and acceptance checks. Only then does one button file it, and it says where: "File 3 issues on owner/name" (after a confirmation) when the project has a repo, "Save 3 tickets on this computer" when it has none, with "Save on this computer only" and "Discard draft" beside it. The list below shows each ticket with its status; "Start a mission" opens the full-cycle dialog for it (the project needs `"cycle": true`; the page tells you the line to add and never edits the registry itself). A project with no repo also shows the four options above as four short rows: a field for the repo you have, "Create a private GitHub repo" (two confirmations, the second for the push), the sign-up steps, and "Not now". A mission started from a local ticket shows the crew's steps, the stages that need a pull request as Skipped with the reason, the local branch and the command that shows it, and what to do next. In Demo mode all of this is invented and every action only says that nothing is drafted, filed or created.
+
+**Try the whole flow without a model.** `fixtures/sample-react` is a tiny Vite and React todo app, and `bash bin/selftest-flow.sh` walks through everything above on a temporary copy of it: attach, the stack sentence, tickets drafted by a stand-in model, a cycle from a ticket on the command line and the same through the dashboard, then the local branch and the verify result. It uses no network, no real model and no GitHub, and it never touches your own data folder. Its verify command is `node --test` because the project's own `npm test` runs Vitest, which needs an install. Read the script to see each step as a command you could run yourself.
 
 ## The crew and what each does
 
@@ -126,6 +165,7 @@ A run starts cold, reads only what its job needs, and ends with a one-line verdi
 | lookout | Takes screenshots of the running app at three widths and judges them. |
 | pilot | Runs the app and walks through it. |
 | quartermaster | Checks what comes in: dependencies and what they actually are. |
+| scribe | Drafts the README and the architecture overview a project is missing, from the survey. You read the draft; only on your yes does it go onto a new branch. Run it with `qtdeck docs <project>`. |
 | bosun | Reports drift: stale branches, dead settings, docs that name things that are gone. |
 | infra | Reads Terraform, CDK, CloudFormation, SAM, serverless, Vercel and Supabase files and reports risk and how to undo a change. It runs nothing against a cloud and holds no credentials. |
 | brief and mockup | Turn an idea into a one-page design brief you approve, then one static page per screen. |
@@ -141,6 +181,10 @@ Beyond the single duties:
 The crew themselves are files in `crew/`. Each knows no project and holds one point of view, such as a security reviewer, a copy editor, or someone whose only question is what an earlier fix could have broken. Read `crew/_README.md` to add one.
 
 **A project's own agents.** On the Agents page, a project that keeps Claude Code agents in its own `.claude/agents/` folder sees them listed under "This project's own agents", marked "from the project", with a note on which of the crew's jobs they plausibly cover and which Quarterdeck's crew still covers for it. It reads only the name, description, tools and model line at the top of each file in that one folder (at most 50 files, 64 KB each, a link is followed only to a file inside the same project, the prompt itself never read or shown), only for projects you registered, and writes nothing. The matches are a keyword guess, labelled as such. Quarterdeck cannot run a project's own agents; that would be a separate step you opt into.
+
+## Back, Forward and links
+
+The address bar says where you are. The page, the project you are looking at and the mission you have open are all in it (for example `#/projects/missions?project=alpha`; addresses made before the place was renamed from Work, such as `#/work/missions?project=alpha`, still open the same page), so Back and Forward move between the pages you visited, a reload opens the same place, and a mission or a page can be bookmarked or sent to yourself as a link. The Brain's Esc and Leave step back to where you came from. Nothing in the address is a secret, and the one-time pairing link is removed from it as soon as it has been used.
 
 ## Calm mode
 

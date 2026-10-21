@@ -70,7 +70,7 @@ setBasePath("/assets/vendor/shoelace");
   <div class="page">
     <sl-alert id="lost" variant="warning" role="status" aria-live="polite"><sl-icon slot="icon" name="exclamation-triangle"></sl-icon><span id="lost-text"></span></sl-alert>
     <div class="phead">
-      <div><div class="kicker" id="pkicker"></div><h1 id="ptitle">Quarterdeck</h1><p id="psub"></p></div>
+      <div><div class="krow"><div class="kicker" id="pkicker"></div><span id="pscope"></span></div><div class="pproj" id="pproj" hidden></div><h1 id="ptitle">Quarterdeck</h1><p id="psub"></p></div>
       <div class="acts" id="pacts"></div>
     </div>
     <div class="ptabs" id="ptabs"></div>
@@ -180,12 +180,15 @@ const $ = s => document.querySelector(s);
 const plural = (n, one, many = one + "s") => n === 1 ? one : many;
 let S = null, lastOk = 0, returnFocus = null, curLog = null;
 let showQuiet = false, filter = "";
-let sel = localStorage.getItem("quarterdeck.project") || "";
+let keptSel = localStorage.getItem("quarterdeck.project") || "";          // the project the owner chose; it is kept while they are on a page that has no project scope
+let sel = keptSel;                                                         // the project the current page shows: keptSel on a page with a scope (see syncSel), "" on Home, Settings and the rest
 let view = localStorage.getItem("quarterdeck.view") || "overview";
+if(view === "work") view = "projects";                                     // Work was renamed Projects: a remembered view of the old name opens the new place
 // An add-on's place (EXT.places) sits in the rail beside the projects but is not one. Kept apart from `sel` so the forty
 // places that read a project name never see it. "" means a project, or all of them.
 let atPlace = localStorage.getItem("quarterdeck.place") || "";
 if(!EXT.places.some(p => p.id === atPlace)) atPlace = "";
+let scopeAddon = "";     // the add-on scope: "" or an installed add-on's id (Needs you then shows only that add-on's items). Kept apart from `sel`, which is only ever a project.
 
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 // A link or window.open target that came from data (a PR address, a provider page, a board address) is http(s) or mailto, or nothing: never a script, data or other scheme.
@@ -200,6 +203,13 @@ const actOn = (ev, name, ...args) => `data-on-${ev}="${esc(name)}"${args.length 
 const act = (name, ...args) => actOn("click", name, ...args);
 const T = {el: {$: "el"}, ev: {$: "ev"}, value: {$: "value"}, checked: {$: "checked"}, sel: {$: "sel"}};
 const mine = x => !sel || x.project === sel;
+// Which pages have a project scope. A page of the Projects place, the Agents place and the Library pages that list per project do; Home, the Brain's map, Connections, Settings,
+// Spend (fleet wide) and Showcase do not, and show no scope box and no scope chip. The Brain keeps its own project choice (My rhythm) in its toolbar.
+const SCOPED_VIEWS = new Set(["projects", "inbox", "missions", "mission", "prs", "board", "ledger", "timeline", "operations", "log", "crew", "fleet", "panels", "documents", "notes"]);
+const scopeApplies = (v = view) => !atPlace && SCOPED_VIEWS.has(v);
+const usesProject = (v = view) => scopeApplies(v) || (!atPlace && v === "brain");
+function syncSel(){ sel = usesProject() ? keptSel : ""; }
+function setKept(p){ keptSel = p; try{ localStorage.setItem("quarterdeck.project", p); }catch(e){} syncSel(); }
 const hit = (...bits) => !filter || bits.join(" ").toLowerCase().includes(filter);
 // A fix's own card already shows its current step (whichever duty that is);
 // the step's own agent card would say the identical thing again beside it,
@@ -421,8 +431,10 @@ async function restartDemo(){
 
 /* ---- navigation ---- */
 const VIEWS = [
-  {id:"overview",  label:"Command center",  ic:"grid",  title:"Command center",
-   sub:"One place to see what is moving, what needs you, and where the work leads."},
+  {id:"overview",  label:"Home",  ic:"grid",  title:"Home",
+   sub:"You, across everything: your day, your notes, the whole fleet at a glance and what it costs today. The work itself is under Projects."},
+  {id:"projects", label:"Overview", ic:"folder", title:"Projects",
+   sub:"Every project at a glance: what needs you, the last run and what it cost. Open one to see only its pages."},
   {id:"brain", label:"Brain", ic:"eye", title:"Brain",
    sub:"The whole operation as one map: code, agents, the crew, your inbox and calendar. Drag to turn it, click or tap a dot to see what it is and where it leads. The counts and buttons around the map list the same things for the keyboard."},
   {id:"missions", label:"Missions", ic:"target", title:"Missions",
@@ -467,13 +479,14 @@ VIEWS.forEach(v => { if(EXT.sub[v.id]) v.sub = EXT.sub[v.id]; });
 // The Brain is a place of its own, not a page of a project: it takes the whole window, and leaving it returns to where you were.
 let brainReturn = null, brainHelmOpen = false, brainMode = "map";      // brainMode: the Brain workspace has two modes, the map and My rhythm; one toolbar serves both
 const brainImm = () => view === "brain" && !atPlace;
-function rememberBrainReturn(v){ if(v === "brain" && !brainImm() && !brainReturn) brainReturn = {view, place: atPlace}; }
+function rememberBrainReturn(v){ if(v === "brain" && !brainImm() && !brainReturn){ brainReturn = {view, place: atPlace}; brainReturn.hash = routeApplied; } }
 function leaveBrain(){
   const r = brainReturn; brainReturn = null;
+  if(r && routeBack(r.hash)) return;           // the Brain was opened from this tab's own history: leaving it is one step back, not a new entry
   if(r && r.place) selectPlace(r.place, r.view);
   else dockGo(r && r.view && r.view !== "brain" ? r.view : "overview");
 }
-function go(v){ rememberBrainReturn(v); if(v !== "brain") brainReturn = null; if(v !== "log") logFrom = null; view = v; localStorage.setItem("quarterdeck.view", v); { const g = groupOf(v); if(g) localStorage.setItem("quarterdeck.tab." + g.id, v); } filter = ""; $("#q").value = ""; closeMobileMenu(); render(); }
+function go(v){ rememberBrainReturn(v); if(v !== "brain") brainReturn = null; if(v !== "log") logFrom = null; if(v !== "inbox") scopeAddon = ""; view = v; localStorage.setItem("quarterdeck.view", v); { const g = groupOf(v); if(g) localStorage.setItem("quarterdeck.tab." + g.id, v); } filter = ""; $("#q").value = ""; closeMobileMenu(); routeTouch(); render(); }
 function dockGo(v){ rememberBrainReturn(v); atPlace = ""; localStorage.setItem("quarterdeck.place", ""); go(v); }
 function toggleMobileMenu(){ const d = $("#more"); if(d.open) d.hide(); else { renderMore(); d.show(); } }
 function closeMobileMenu(){ const d = $("#more"); if(d && d.open) d.hide(); }
@@ -482,13 +495,137 @@ function selectPlace(id, v){
 }
 function selectProject(p){
   closeMobileMenu();
-  atPlace = ""; localStorage.setItem("quarterdeck.place", "");
-  sel = p; localStorage.setItem("quarterdeck.project", p);
+  atPlace = ""; localStorage.setItem("quarterdeck.place", ""); scopeAddon = "";
+  if(!usesProject()){ view = "projects"; localStorage.setItem("quarterdeck.view", "projects"); }         // choosing a project from a page that has no scope opens that project's page
+  setKept(p);
   curLog = null; board = null; boardFor = null; prs = null; prsFor = null;
   // a project whose agents live in its own repository has no Quarterdeck duties to show: send the page to its Fleet
-  if(fleetProjects.has(p)){ view = "fleet"; localStorage.setItem("quarterdeck.view", "fleet"); fleetAt = 0; loadFleet(); }
-  render();
+  if(fleetProjects.has(p)){ view = "fleet"; localStorage.setItem("quarterdeck.view", "fleet"); fleetAt = 0; loadFleet(); syncSel(); }
+  routeTouch(); render();
 }
+// An add-on is a scope too, chosen in the same select as the projects. One with a place of its own opens that place; one without opens Needs you, filtered to it.
+function selectAddon(id){
+  const a = addonList().find(x => x.id === id);
+  if(!a) return;
+  closeMobileMenu();
+  setKept(""); curLog = null; board = null; boardFor = null; prs = null; prsFor = null;
+  if(a.place && isPlace(a.place)){ scopeAddon = ""; selectPlace(a.place); }
+  else{ atPlace = ""; localStorage.setItem("quarterdeck.place", ""); scopeAddon = id; go("inbox"); }
+}
+/* ---- the address: the page, the project scope and the open mission live in the URL hash (assets/route.js, a pure module) ----
+   Only what the owner does pushes a history entry: go(), dockGo(), selectPlace(), selectProject(), selectAddon(), opening or closing a mission, the Brain's
+   Map | Rhythm switch and its project choice all call routeTouch(), which waits for the end of the current task (so a click that sets three variables is one
+   entry) and pushes only when the address differs. The poll and every re-render never touch the address. popstate and hashchange (Back, Forward, a typed or
+   pasted address) call applyRoute() and render() and push nothing. On load the address wins; localStorage is only the fallback for a bare address.
+   The address is untrusted input: parseHash() checks it against routeKnown() and gives Home for anything else, and nothing from it is written as HTML. */
+let routeMod = null, routeReady = false, routeApplying = false, routeQueued = false, routeApplied = "", routeIdx = 0;
+const routeLog = [];                                       // history index -> the address it holds (this tab only), so Esc in the Brain can step back to where it started
+const routeLoad = import("/assets/route.js").then(m => (routeMod = m)).catch(() => null);
+function addonList(){                                      // the installed add-ons: those the server names (S.addons) and the places an add-on script registered (EXT.places)
+  const out = new Map();
+  for(const a of (S && Array.isArray(S.addons) ? S.addons : [])) if(a && typeof a.id === "string" && a.id) out.set(a.id, {id: a.id, label: String(a.label || a.id), place: typeof a.place === "string" ? a.place : ""});
+  for(const pl of EXT.places){
+    const a = [...out.values()].find(x => x.place === pl.id || x.id === pl.id);
+    if(a){ a.place = pl.id; a.label = a.label || pl.label || pl.id; }
+    else out.set(pl.id, {id: pl.id, label: String(pl.label || pl.id), place: pl.id});
+  }
+  return [...out.values()];
+}
+function routeKnown(){
+  const places = {};
+  for(const pl of EXT.places) places[pl.id] = [...new Set([pl.id, ...VIEWS.filter(v => v.place === pl.id && !v.hidden).map(v => v.id)])];
+  return {groups: NAV_GROUPS.map(g => ({id: g.id, views: g.views})), projects: ((S && S.projects) || []).map(p => p.name), addons: addonList().map(a => a.id), places, brainModes: ["map", "rhythm"]};
+}
+const logRouteId = () => { if(!curLog) return ""; const [duty, proj] = splitLog(curLog); return proj + "~" + duty; };
+function routeState(){
+  const g = groupOf(view), projects = ((S && S.projects) || []).map(p => p.name);
+  return {group: g ? g.id : "", view, place: atPlace, id: view === "mission" ? missionId : view === "log" ? logRouteId() : "",
+          project: !atPlace && projects.includes(sel) ? sel : "", addon: !atPlace && view === "inbox" ? scopeAddon : "", brain: view === "brain" && !atPlace ? brainMode : ""};
+}
+const routeHash = () => routeMod ? routeMod.buildHash(routeState()) : "";
+// Make the address say what the page now shows: a new entry, or (replace, or the same address) the current one rewritten.
+function pushRoute(replace = false){
+  if(!routeMod) return;
+  const h = routeHash(), url = location.pathname + location.search + h;
+  const at = history.state && Number.isInteger(history.state.qd) ? history.state.qd : routeIdx;
+  try{
+    if(replace || location.hash === h){ history.replaceState({qd: at}, "", url); routeLog[at] = h; routeIdx = at; }
+    else{ history.pushState({qd: at + 1}, "", url); routeLog[at + 1] = h; routeIdx = at + 1; }
+  }catch(e){ /* a browser that refuses: the page works, the address just does not follow */ }
+  routeApplied = h;
+}
+function routeTouch(){
+  if(!routeMod || !routeReady || routeApplying || routeQueued) return;
+  routeQueued = true;
+  queueMicrotask(() => { routeQueued = false; if(routeHash() !== routeApplied || location.hash !== routeApplied) pushRoute(false); });
+}
+// Set the page to a parsed route. Pushes nothing. `draw` false leaves the render to the caller (the first load).
+function applyRoute(r, draw = true){
+  routeApplying = true;
+  try{
+    scopeAddon = ""; closeMobileMenu();
+    if(r.group === "addon"){ atPlace = r.addon; view = r.view; }
+    else{
+      atPlace = ""; view = r.view; scopeAddon = r.addon || "";
+      if(usesProject(view)){ if(r.project !== keptSel){ curLog = null; board = null; boardFor = null; prs = null; prsFor = null; } keptSel = r.project; }
+      syncSel();
+      if(view === "mission"){ if(r.id !== missionId){ missionLens = "summary"; delete missionCache[r.id]; } missionId = r.id; }
+      if(view === "log" && r.id){ const [proj, duty] = r.id.split("~"), name = proj ? duty + "-" + proj : duty; if(((S && S.logs) || []).includes(name)) curLog = name; }
+      if(view === "brain") brainMode = r.brain === "rhythm" && S && S.demo && S.demo.on ? "rhythm" : "map";
+    }
+    if(view !== "brain") brainReturn = null;
+    if(view !== "log") logFrom = null;
+    filter = ""; $("#q").value = "";
+    try{
+      localStorage.setItem("quarterdeck.view", view); localStorage.setItem("quarterdeck.place", atPlace); localStorage.setItem("quarterdeck.project", keptSel);
+      const g = groupOf(view); if(g && view !== "mission") localStorage.setItem("quarterdeck.tab." + g.id, view);
+      if(view === "mission" && missionId) localStorage.setItem("quarterdeck.mission", missionId);
+    }catch(e){}
+    routeApplied = routeHash();
+  } finally { routeApplying = false; }
+  if(draw){
+    render();
+    if(view === "brain" && !atPlace){ paintFocus(true); rhythmSync(); if(brainMode === "map") window.dispatchEvent(new Event("resize")); }
+  }
+}
+// The first route of this tab, once the first state is in: the address wins; a bare address falls back to what this browser remembers.
+function initRoute(){
+  if(routeReady || !routeMod) return;
+  const h = location.hash;
+  if(h && h !== "#" && !routeMod.isPairHash(h)) applyRoute(routeMod.parseHash(h, routeKnown()), false);
+  else{
+    if(!(S.projects || []).some(p => p.name === keptSel)) keptSel = "";
+    if(!VIEWS.some(x => x.id === view && (x.place || "") === atPlace)) view = atPlace || "overview";
+    syncSel();
+    routeApplied = routeHash();
+  }
+  routeReady = true;
+  pushRoute(true);                                         // the first route replaces the entry the tab opened with (and the pairing link's, already gone): Back never lands on a bare page
+}
+// Back, Forward, or an address typed or pasted into this tab.
+function routeNav(){
+  if(!routeMod || !routeReady || routeApplying) return;
+  const h = location.hash;
+  if(routeMod.isPairHash(h) || h === routeApplied) return;     // a pairing link reloads the page (below); an address already shown is left alone
+  const r = routeMod.parseHash(h, routeKnown());
+  applyRoute(r);
+  if(!r.ok || routeHash() !== h) pushRoute(true);              // an address that was not ours is rewritten as the page it opened (Home), never kept
+}
+// Esc in the Brain: when the page the owner came from is earlier in this tab's history, go back to it in one step.
+function routeBack(hash){
+  if(!routeMod || !routeReady || !hash || !history.state || !Number.isInteger(history.state.qd)) return false;
+  const at = history.state.qd;
+  for(let i = at - 1; i >= 0 && i >= at - 8; i--){
+    if(routeLog[i] !== hash) continue;
+    applyRoute(routeMod.parseHash(hash, routeKnown()));     // drawn now; the popstate that follows finds the address already shown and does nothing
+    history.go(i - at);
+    return true;
+  }
+  return false;
+}
+window.addEventListener("popstate", routeNav);
+window.addEventListener("hashchange", routeNav);
+
 // The Brain view keeps a focus timer in this browser; the rail just shows it, wherever you are.
 function focusNow(){
   try{
@@ -504,18 +641,20 @@ function focusClock(f){
 setInterval(() => { const f = focusNow(); if(f && !calmOn()) document.querySelectorAll(".fclock").forEach(e => { e.textContent = focusClock(f); }); }, 1000);
 window.addEventListener("quarterdeck-focus", () => { if(S) renderNav(); });
 
-/* ---- navigation: seven plain places; the pages inside each are tabs ---- */
+/* ---- navigation: seven plain places; the pages inside each are tabs. Home is the person; Projects is where the work is (an overview of every
+   project first, then the pages of one project); the Brain, Agents, Connections, Library and Settings are the rest. ---- */
 const NAV_GROUPS = [
   {id:"home",        label:"Home",        ic:"house",       views:["overview"]},
   {id:"brain",       label:"Brain",       ic:"diagram-3",   views:["brain"]},
-  {id:"work",        label:"Work",        ic:"kanban",      views:["inbox","missions","prs","board","timeline","operations","ledger","spend","log"]},
+  {id:"projects",    label:"Projects",    ic:"briefcase",   views:["projects","inbox","missions","prs","board","ledger","timeline","operations","spend","log"]},
   {id:"agents",      label:"Agents",      ic:"robot",       views:["crew","fleet"]},
   {id:"connections", label:"Connections", ic:"plug",        views:["connections"]},
   {id:"library",     label:"Library",     ic:"book",        views:["documents","panels","notes","showcase"]},
   {id:"settings",    label:"Settings",    ic:"gear",        views:["settings"]},
 ];
-const groupOf = v => NAV_GROUPS.find(g => g.views.includes(v)) || (v === "mission" ? NAV_GROUPS.find(g => g.id === "work") : undefined);
-const lastTab = g => { try{ const t = localStorage.getItem("quarterdeck.tab." + g.id); if(t && g.views.includes(t)) return t; }catch(e){} return g.views[0]; };
+const groupOf = v => NAV_GROUPS.find(g => g.views.includes(v)) || (v === "mission" ? NAV_GROUPS.find(g => g.id === "projects") : undefined);
+// The tab last used in a place. The Projects place was called Work: a tab remembered under that name is still honoured.
+const lastTab = g => { try{ for(const k of g.id === "projects" ? ["projects", "work"] : [g.id]){ const t = localStorage.getItem("quarterdeck.tab." + k); if(t && g.views.includes(t)) return t; } }catch(e){} return g.views[0]; };
 function navCount(v){
   if(v.count) return v.count();
   return {notes:(S.captures || {}).open || 0, inbox:obsAttention().length, panels:S.panels.filter(mine).filter(p => !p.superseded_by).length,
@@ -710,17 +849,32 @@ function planPage(m){
     ${(p.later || []).filter(l => !p.sprint.includes(l.issue)).length ? card(null, (p.later || []).filter(l => !p.sprint.includes(l.issue)).map(l => `<p><b>#${l.issue} ${esc((by[l.issue] || {}).title || "")}</b> (size ${esc((by[l.issue] || {}).size || "?")}). ${esc(l.reason)}</p>`).join(""), {kicker: "Planned, but not in this sprint"}) : ""}
     ${(p.left_out || []).length ? card(null, p.left_out.map(l => `<p><b>#${l.issue} ${esc(l.title)}.</b> ${esc(l.reason)}</p>`).join(""), {kicker: "Left out"}) : ""}</div>`;
 }
-document.addEventListener("sl-tab-show", e => { const t = e.target.closest && e.target.closest("#ptabs"); if(t && !t._sync && e.detail.name && e.detail.name !== view) go(e.detail.name); });
+// The tab group also reports a tab it chose by itself when it first draws (a page that is not one of the tabs, like an open mission): only a tab the owner just pressed navigates.
+let lastInputAt = 0;
+for(const ev of ["pointerdown", "keydown"]) document.addEventListener(ev, () => { lastInputAt = Date.now(); }, true);
+document.addEventListener("sl-tab-show", e => { const t = e.target.closest && e.target.closest("#ptabs"); if(t && !t._sync && Date.now() - lastInputAt < 2000 && e.detail.name && e.detail.name !== view) go(e.detail.name); });
+// What the project select shows: a project, an add-on ("__addon:<id>", also while that add-on's own place is open), or All projects ("_").
+const ADDON_VALUE = "__addon:";
+function scopeValue(){
+  const a = atPlace ? addonList().find(x => x.place === atPlace) : scopeAddon ? addonList().find(x => x.id === scopeAddon) : null;
+  return a ? ADDON_VALUE + a.id : S && S.projects.some(p => p.name === sel) && !atPlace ? sel : "_";
+}
 function projSwitch(v){
-  v = v === "_" ? "" : v;
-  if(v === "__add"){ $("#proj-switch").value = sel || "_"; openAttach(); return; }
-  if(v === sel) return;
-  selectProject(v);
+  if(v === "__add"){ $("#proj-switch").value = scopeValue(); openAttach(); return; }
+  if(v === scopeValue()) return;
+  if(v.startsWith(ADDON_VALUE)){ selectAddon(v.slice(ADDON_VALUE.length)); return; }
+  selectProject(v === "_" ? "" : v);
 }
 function renderProjSwitch(){
   const el = $("#proj-switch"); if(!el || !S) return;
-  setHtml(el, `<sl-option value="_">All projects</sl-option>` + S.projects.map(p => `<sl-option value="${esc(p.name)}">${esc(p.name)}</sl-option>`).join("") + `<sl-option value="__add">Add a project…</sl-option>`);
-  const want = S.projects.some(p => p.name === sel) ? sel : "_";
+  const show = !!atPlace || scopeApplies(view);                 // the scope box exists only where it means something (the table is in dashboard/UI.md)
+  if(el.hidden === show) el.hidden = !show;
+  if(!show) return;
+  const addons = addonList();
+  setHtml(el, `<sl-option value="_">All projects</sl-option>` + S.projects.map(p => `<sl-option value="${esc(p.name)}">${esc(p.name)}</sl-option>`).join("")
+    + (addons.length ? `<sl-divider></sl-divider><small class="sw-grp">Add-ons</small>` + addons.map(a => `<sl-option value="${ADDON_VALUE}${esc(a.id)}">${esc(a.label)}</sl-option>`).join("") : "")
+    + `<sl-divider></sl-divider><sl-option value="__add">Add a project…</sl-option>`);
+  const want = scopeValue();
   if(el.value !== want) el.value = want;
   // the options are upgraded after the markup lands: set the value again once the select has rendered them, so it never shows blank
   Promise.all([customElements.whenDefined("sl-select"), customElements.whenDefined("sl-option")]).then(() => (el.updateComplete || Promise.resolve()).then(() => {
@@ -740,8 +894,8 @@ function renderMore(){
 }
 function renderNav(){
   renderProjSwitch();
-  const fo = focusNow(), cur = groupOf(view), need = obsAttention().length;
-  setHtml($("#dock-links"), NAV_GROUPS.map(g => railBtn(g.label, g.ic, !atPlace && cur && cur.id === g.id, act("dockGo", lastTab(g)), "", g.id === "work" ? need : 0)).join("")
+  const fo = focusNow(), cur = groupOf(view), need = obsAttention(false).length;       // the badge counts everything that needs you, whichever project the page shows
+  setHtml($("#dock-links"), NAV_GROUPS.map(g => railBtn(g.label, g.ic, !atPlace && cur && cur.id === g.id, act("dockGo", lastTab(g)), "", g.id === "projects" ? need : 0)).join("")
     + EXT.places.map(pl => railBtn(pl.label, pl.ic, atPlace === pl.id, act("selectPlace", pl.id), "", pl.badge ? pl.badge() : 0)).join("")
     + (fo ? `<button class="rail-btn focus ${fo.endsAt < Date.now() ? "over" : ""}" ${act("dockGo", "brain")} title="Focus: ${esc(fo.names.join(" + "))}" aria-label="Focus timer"><b class="fclock">${focusClock(fo)}</b><span>Focus</span></button>` : ""));
   const sys = S.system;
@@ -751,8 +905,8 @@ function renderNav(){
       : "Every run writes without asking: it posts, pushes and opens pull requests by itself. Click for details.";
   }
   const tabs = atPlace ? (EXT.places.find(pl => pl.id === atPlace) || {tabs: []}).tabs
-    : [["overview","Home","house"],["inbox","Needs you","exclamation-triangle"],["missions","Work","kanban"],["crew","Agents","robot"]];
-  setHtml($("#mobile-bottom"), tabs.map(([id,label,ic]) => (() => { const on = view === id || (id === "missions" && groupOf(view) && groupOf(view).id === "work" && view !== "inbox"); return `<button class="${on ? "on" : ""}" ${on ? 'aria-current="page"' : ""} ${act("go", id)} aria-label="${label}">${slIcon(ic)}${label}</button>`; })()).join("")
+    : [["overview","Home","house"],["inbox","Needs you","exclamation-triangle"],["projects","Projects","briefcase"],["crew","Agents","robot"]];
+  setHtml($("#mobile-bottom"), tabs.map(([id,label,ic]) => (() => { const on = view === id || (id === "projects" && groupOf(view) && groupOf(view).id === "projects" && view !== "inbox"); return `<button class="${on ? "on" : ""}" ${on ? 'aria-current="page"' : ""} ${act("go", id)} aria-label="${label}">${slIcon(ic)}${label}</button>`; })()).join("")
     + `<button ${act("toggleMobileMenu")} aria-label="More navigation">${slIcon("list")}More</button>`);
 }
 
@@ -957,12 +1111,20 @@ function fixCard(r){
 // S.inbox, whatever its history, and an acknowledged item is marked as such
 // rather than silently dropped from the record. This just adapts that shape
 // for callers built against the old client-computed one.
+// An item from an add-on carries its place (or its name) and a source other than "local". Its label is "Add-on: <name>", from the add-on's registered name.
+function addonOfItem(x){
+  const id = String(x.addon || x.place || (x.source && x.source !== "local" ? x.source : "") || "");
+  if(!id) return null;
+  const a = addonList().find(y => y.id === id || (y.place && y.place === id));
+  return {id: a ? a.id : id, label: a ? a.label : id.charAt(0).toUpperCase() + id.slice(1), installed: !!a};
+}
+const addonPill = x => x.addon ? pill("", "Add-on: " + x.addon.label) : "";
 function obsAttention(scoped = true){
-  return (S.inbox || []).filter(x => !x.acknowledged && (x.place || !scoped || mine(x))).map(x => ({
+  return (S.inbox || []).filter(x => !x.acknowledged).map(x => ({
     id:x.id, source: x.label || (x.project || "Local") + " · " + (x.duty || "run"),
     text:x.text, view: x.place || "ledger", kind:x.severity, at:x.at, stale:x.stale,
-    blocker:x.blocker, project:x.project, duty:x.duty,
-  }));
+    blocker:x.blocker, project:x.project, duty:x.duty, addon: addonOfItem(x), mine: !!(x.place || x.addon) || mine(x),
+  })).filter(x => scoped && scopeAddon ? !!x.addon && x.addon.id === scopeAddon : (!scoped || x.mine));
 }
 async function ackInbox(id, text){
   if(!await confirmDlg("Acknowledge this? It leaves the list for good and nothing here brings it back.")) return;
@@ -985,20 +1147,13 @@ function openEvent(e){
   if(S.runs.some(x => ledgerKey(x) === key)) showLedgerRow(key, e.project);
   else{ dockGo("ledger"); toast("That run is older than the Ledger lists on screen", true); }
 }
-const tlEvents = []; // the Home strip's events by index, so a click needs no data in the page text
-function tlChip(e){
-  tlEvents.push(e);
-  return `<button class="tl-chip c-${tl.classOf(e)}" role="listitem" ${act("openEvent", tlEvents.length - 1)}
-    title="${esc((e.project || "fleet") + " · " + (e.duty || "") + " · " + (e.verdict || "") + (e.detail ? " · " + e.detail : ""))}">
-    <time>${esc(new Date(e.at).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"}))}</time><b>${esc(e.project || "fleet")} · ${esc(e.duty || "")}</b><small>${esc(e.verdict || "")}</small></button>`;
-}
-async function loadTimeline(){
-  const w = tlUi.window, c = tlData[w];
+async function loadTimeline(w = tlUi.window){
+  const c = tlData[w];
   if(c && Date.now() - c.at < 15000) return;
   tlData[w] = {...(c || {events: []}), at: Date.now()};
   try{
     const j = await (await fetch("/api/timeline?window=" + encodeURIComponent(w))).json();
-    if(j && Array.isArray(j.events)){ tlData[w] = {at: Date.now(), now: j.now, events: j.events, total: j.total, capped: j.capped}; if(view === "timeline") render(); }
+    if(j && Array.isArray(j.events)){ tlData[w] = {at: Date.now(), now: j.now, events: j.events, total: j.total, capped: j.capped}; if(view === "timeline" || (view === "overview" && !atPlace)) render(); }
   }catch(e){}
 }
 function tlSet(k, v){ tlUi[k] = v; tlSave(); if(k === "window") loadTimeline(); render(); }
@@ -1010,10 +1165,6 @@ function viewTimeline(){
   const track = document.querySelector(".tl-track"), room = track ? track.clientWidth : innerWidth - (innerWidth > 760 ? 76 : 0) - 56 - (innerWidth > 700 ? 160 : 100);
   const L = tlLast = tl.buildLanes(events, {windowKey: tlUi.window, now, project: sel, duty: tlUi.duty, verdict: tlUi.verdict, projects: names, buckets: Math.max(4, Math.min(96, Math.floor(room / 44)))});   // a marker every 44px at the closest, so each is a 40px target
   const seg = k => btn(tl.WINDOW_LABELS[k], {size: "small", variant: tlUi.window === k ? "primary" : "", attrs: `aria-pressed="${tlUi.window === k}"`, click: act("tlSet", "window", k)});
-  const lane = l => `<div class="tl-lane"><div class="tl-name" title="${esc(l.name)}">${esc(l.name)} <small>${l.total}</small></div>
-    <div class="tl-track" role="group" aria-label="${esc(l.name)}: ${l.total} events">${l.bins.map(b => `<button class="tlm c-${b.cls}" style="left:${tl.pct(b, L.from, L.to).toFixed(2)}%"
-      data-t="${esc(tl.binText(b, tlTime))}" data-l="${esc(l.name)}" data-i="${b.i}" ${actOn("hover", "tlHover", T.el)} ${actOn("focus", "tlHover", T.el)} ${act("tlClick", T.el)}
-      aria-label="${esc(tl.binText(b, tlTime))}"><span>${b.n > 1 ? b.n : ""}</span></button>`).join("")}</div></div>`;
   const filtered = tlUi.duty || tlUi.verdict;
   const bar = `<div class="toolbar"><sl-button-group label="Time window">${Object.keys(tl.WINDOWS).map(seg).join("")}</sl-button-group>
       ${slSelect({label: "Duty", cls: "nolabel inline", size: "small", value: tlUi.duty, change: actOn("change", "tlSet", "duty", T.sel), options: [["", "All duties"], ...duties.map(n => [n, n])]})}
@@ -1022,7 +1173,7 @@ function viewTimeline(){
   const body = `${bar}
     <div class="tl-legend">${tl.CLASSES.map(c => `<span><i class="c-${c.id}"></i>${esc(c.label)}</span>`).join("")}<span>A number is how many events share that spot.</span></div>
     ${d ? "" : `<p class="hint">Reading the ledger…</p>`}
-    <div class="tl-lanes">${L.lanes.map(lane).join("") || emptyState({inline: true, title: "Nothing in this window.", body: filtered ? "Clear the filters or choose a longer window." : "Runs and merges show up here as they happen.", label: filtered ? "Clear filters" : "", click: act("tlClear")})}</div>
+    <div class="tl-lanes">${L.lanes.map(l => tlLane(l, L)).join("") || emptyState({inline: true, title: "Nothing in this window.", body: filtered ? "Clear the filters or choose a longer window." : "Runs and merges show up here as they happen.", label: filtered ? "Clear filters" : "", click: act("tlClear")})}</div>
     <div class="tl-axis">${tl.axisTicks(tlUi.window, now, tlTime).map(t => `<span style="left:${t.at}%">${esc(t.label)}</span>`).join("")}</div>
     <div id="tl-detail" class="tl-detail" aria-live="polite">${L.total} event${L.total === 1 ? "" : "s"} in the last ${tl.WINDOW_LABELS[tlUi.window]}${d && d.capped ? " (the newest " + events.length + " are drawn)" : ""}. Hover or focus a marker for detail; click one to open its Ledger row.</div>`;
   return card(null, body, {kicker: "Runs and merges", count: `last ${tl.WINDOW_LABELS[tlUi.window]}`, label: "Timeline"});
@@ -1066,26 +1217,47 @@ function homeHeadline(f, n){
     : [f.running && f.state !== "running" ? f.running + " running" : "", f.state !== "blocked" && f.att.length ? f.att.length + " blocked" : "", f.state !== "awaiting" && f.waiting.length ? f.waiting.length + " waiting for you" : ""].filter(Boolean).join(" · ") || "Nothing is running and nothing is waiting.";
   return {text, sub, state: noProjects ? "idle" : f.state, noProjects};
 }
+// Home's Mission trajectory: one self-contained card (it reads recentMissions(), MSTATE and the kit helpers and nothing else on this page), so a later
+// page can move it whole. Open missions come first and large, each naming its project and what is next; finished ones are one small collapsed line.
+let trajOpen = false;
+function trajToggle(){ trajOpen = !trajOpen; render(); }
 function trajectoryCard(f){
-  const rec = recentMissions().slice(0, 5);
-  const rows = rec.map(x => `<button class="rowcard ${x.state}" data-m="${esc(x.id)}" ${act("openMissionPage", x.id)}>
+  const all = recentMissions(40), open = all.filter(x => x.state !== "done"), fin = all.filter(x => x.state === "done");
+  const rank = {blocked: 0, awaiting: 1, running: 2};
+  open.sort((a, b) => (rank[a.state] ?? 3) - (rank[b.state] ?? 3) || b.when.localeCompare(a.when));
+  const next = x => {                                       // what is next, from the kind and the state; nothing here is counted or guessed
+    const kind = x.id.split(":")[0];
+    if(x.state === "blocked") return "Open it to see why it stopped.";
+    if(x.state === "running") return "Nothing to do yet. It will say when it needs you.";
+    if(x.state === "awaiting") return kind === "brief" ? "Read the brief, then approve it or ask for changes." : kind === "plan" ? "Read the plan and approve it if it looks right."
+      : /ticket #/.test(x.title) ? "Review the local branch and merge it yourself." : kind === "panel" ? "Answer the open decision." : "Review the pull request and merge it yourself.";
+    return "";
+  };
+  const row = x => `<button class="rowcard ${x.state}" data-m="${esc(x.id)}" ${act("openMissionPage", x.id)}>
       <span class="rowcard-top"><b>${esc(x.title)}</b>${pill(x.state, MSTATE[x.state][0])}</span>
-      <span class="meta">${esc(x.project || "")}${x.when ? " · " + esc(ago(x.when)) : ""}</span></button>`);
-  const body = rows.length ? `<div class="list">${rows.join("")}</div>`
-    : emptyState({inline: true, title: "Nothing is running.", body: "A fix, a panel or a run appears here once one has started."});
-  return card(null, body, {kicker: "Mission trajectory", count: f.running ? f.running + " running" : "", actions: `<button class="mlink link" ${act("dockGo", "missions")}>All missions</button>`, cls: "traj", label: "Mission trajectory"});
+      <span class="traj-proj">${x.project ? "in <b>" + esc(x.project) + "</b>" : "no project"}${x.when ? " · " + esc(ago(x.when)) : ""}</span>
+      <span class="traj-next">Next: ${esc(next(x))}</span></button>`;
+  const compact = x => `<li><button class="mlink title" data-m="${esc(x.id)}" ${act("openMissionPage", x.id)}>${esc(x.title)}</button><span class="sub"> ${x.project ? esc(x.project) : "no project"}${x.when ? " · " + esc(ago(x.when)) : ""}</span></li>`;
+  const finished = fin.length ? `<div class="traj-fin"><button class="mlink link" aria-expanded="${trajOpen}" ${act("trajToggle")}>Finished recently (${fin.length})</button>
+      ${trajOpen ? `<ul id="traj-fin-list" class="traj-list">${fin.map(compact).join("")}</ul>` : ""}</div>` : "";
+  const body = open.length ? `<div class="list">${open.map(row).join("")}</div>`
+    : emptyState({inline: true, title: all.length ? "Nothing is open." : "Nothing is running.", body: all.length ? "Everything that started has finished." : "A fix, a panel or a run appears here once one has started."});
+  return card(null, body + finished, {kicker: "Mission trajectory", count: f.running ? f.running + " running" : "", actions: `<button class="mlink link" ${act("dockGo", "missions")}>All missions</button>`, cls: "traj", label: "Mission trajectory"});
 }
-function needsCard(f){
-  const next = S.schedules.filter(x => !x.paused && x.seconds_until != null).sort((a, b) => a.seconds_until - b.seconds_until)[0];
-  const rows = f.att.slice(0, 3).map(x => callout(x.blocker === "config" ? "blocked" : "awaiting", mlink(attnMissionId(x), x.source, "title"), esc(x.text),
+// Needs you, as a short list: what is waiting for the owner (the same unacknowledged items the Needs you page lists, plus pull requests waiting for review), each row
+// naming its project or its add-on. `items` and `waiting` are already scoped by the page (all projects on the overview, one project on a project's page).
+function needsCard(items, waiting, limit = 5){
+  const next = S.schedules.filter(x => !x.paused && x.seconds_until != null && mine(x)).sort((a, b) => a.seconds_until - b.seconds_until)[0];
+  const rows = items.slice(0, limit).map(x => callout(x.blocker === "config" ? "blocked" : "awaiting", mlink(attnMissionId(x), x.source, "title") + (x.addon ? " " + addonPill(x) : ""), esc(x.text),
       {meta: x.at ? (x.stale ? "Snapshot read " : "Run ") + ago(x.at) : "Current status", actions: btn(x.blocker === "config" ? "Inspect blocker" : "Inspect", {size: "small", variant: "primary", click: isPlace(x.view) ? act("selectPlace", x.view) : act("dockGo", "ledger")})}))
-    .concat(f.waiting.slice(0, 3).map(r => callout("awaiting", mlink(fixMissionId(r), r.title, "title"), `${esc(r.project)} · pull request #${esc((r.pr || "").split("/").pop())} is open and waiting for your review.`,
+    .concat(waiting.slice(0, Math.max(0, limit - items.length)).map(r => callout("awaiting", mlink(fixMissionId(r), r.title, "title"), `${esc(r.project)} · pull request #${esc((r.pr || "").split("/").pop())} is open and waiting for your review.`,
       {actions: btn("Open the pull request", {size: "small", variant: "primary", href: r.pr})})));
-  const n = f.att.length + f.waiting.length;
+  const n = items.length + waiting.length;
   return card(null, (rows.join("") || `<p class="hint">Nothing needs you right now.${next ? ` Next scheduled: ${esc(next.project)} ${esc(next.duty)} ${calmOn() ? esc(untilAt(next)) : "in " + esc(countdown(next.seconds_until))}.` : ""}</p>`)
     + `<p class="hint" style="margin-top:12px"><button class="mlink link" ${act("dockGo", "inbox")}>All of Needs you</button></p>`,
     {kicker: "Needs you", kcls: n ? "await" : "", count: n, cls: "needs", label: "Needs you"});
 }
+// The harbor map: an optional Map | List toggle at the top of the Projects overview. The project cards are the list; the map is the same projects as berths, in an order. A berth opens the project.
 function fleetStrip(f){
   if(!S.projects.length) return "";
   const stateOf = p => {
@@ -1096,55 +1268,235 @@ function fleetStrip(f){
   };
   const items = S.projects.map(p => { const [st, label] = stateOf(p); return {name: p.name, st, label}; });
   const open = n => act("selectProject", n);
-  const list = `<section class="fleet-strip" aria-label="Projects">${items.map(i =>
-    `<button class="chip" ${open(i.name)}><span class="dot ${i.st}"></span>${esc(i.name)}<small>${esc(i.label)}</small></button>`).join("")}</section>`;
-  if(!harbor) return list;
+  if(!harbor) return "";
   const map = fleetView === "map";
   const hull = `<svg class="hull" width="34" height="22" viewBox="0 0 40 26" aria-hidden="true" fill="currentColor"><path d="M4 18h32l-5 6H9z"/><rect x="14" y="4" width="12" height="14"/></svg>`;
   const berths = `<section class="berths" aria-label="Projects, map">${harbor.berthOrder(items).map(i =>
     `<button class="berth ${i.st}" ${open(i.name)}>${hull}<span class="berth-name"><span class="dot ${i.st}"></span>${esc(i.name)}</span><small>${esc(i.label)}</small></button>`).join("")}</section>`;
   const seg = (k, t) => btn(t, {size: "small", variant: fleetView === k ? "primary" : "", attrs: `aria-pressed="${fleetView === k}"`, click: act("setFleetView", k)});
-  return `<div class="fleet-wrap ${map ? "is-map" : ""}"><div class="fleet-tools"><sl-button-group label="Fleet view">${seg("map", "Map")}${seg("list", "List")}</sl-button-group></div>${map ? berths : ""}${list}</div>`;
+  return `<div class="fleet-wrap ${map ? "is-map" : ""}"><div class="fleet-tools"><sl-button-group label="Fleet view">${seg("map", "Map")}${seg("list", "List")}</sl-button-group></div>${map ? berths : ""}</div>`;
 }
 let fleetView = "list", harbor = null;
 try{ if(localStorage.getItem("quarterdeck.fleetView") === "map") fleetView = "map"; }catch(e){}
 function setFleetView(v){ fleetView = v === "map" ? "map" : "list"; try{ localStorage.setItem("quarterdeck.fleetView", fleetView); }catch(e){} render(); }
 import("/assets/harbor.js").then(m => { harbor = m; if(S) render(); }).catch(() => {});
+// Recently finished: small and collapsed, across every project; each row names its project. Finished missions and finished runs together, newest first.
+let finOpen = false;
+function finToggle(){ finOpen = !finOpen; render(); }
 function finishedCard(){
-  const rows = S.runs.filter(mine).filter(r => !routine(r)).slice(0, 5);
-  return card(null, (rows.map(r => li({title: mlink(runMissionId(r), r.duty + (r.detail ? ": " + r.detail.replace(/https?:\/\/\S+\/pull\/(\d+)/, "PR #$1") : ""), "title"),
-      sub: `${esc(r.project || "fleet")} · ${ago(r.at)}`, end: pill(verdictClass(r.verdict), r.verdict)})).join("")
-      || `<p class="hint">The first finished run will appear here.</p>`)
-    + `<p class="hint" style="margin-top:12px"><button class="mlink link" ${act("dockGo", "ledger")}>All of the Ledger</button></p>`, {kicker: "Recently finished", label: "Recently finished"});
+  const runs = S.runs.filter(mine).filter(r => !routine(r)).slice(0, 8).map(r => ({id: runMissionId(r), title: r.duty + (r.detail ? ": " + r.detail.replace(/https?:\/\/\S+\/pull\/(\d+)/, "PR #$1") : ""), project: r.project || "fleet", when: r.at, verdict: r.verdict}));
+  const done = recentMissions(40).filter(x => x.state === "done").slice(0, 8).map(x => ({id: x.id, title: x.title, project: x.project || "no project", when: x.when, verdict: "Done"}));
+  const rows = [...done, ...runs].filter(x => x.when).sort((a, b) => b.when.localeCompare(a.when)).slice(0, 6);
+  const list = rows.map(x => li({title: mlink(x.id, x.title, "title"), sub: `${esc(x.project)} · ${ago(x.when)}`, end: pill(x.verdict === "Done" ? "good" : verdictClass(x.verdict), x.verdict)})).join("");
+  const body = rows.length ? `<button class="mlink link" aria-expanded="${finOpen}" ${act("finToggle")}>${finOpen ? "Hide" : "Show"} the last ${rows.length}</button>${finOpen ? `<div id="fin-list">${list}</div>${asst ? `<div class="away">${awayText()}</div>` : ""}` : ""}`
+    : `<p class="hint">The first finished run will appear here.</p>`;
+  return card(null, body, {kicker: "Recently finished", count: rows.length || null, label: "Recently finished", cls: "fin"});
 }
 function budgetCard(){
   const budget = Number(S.spend.daily_budget || 0), spent = Number(S.spend.today || 0);
-  if(!budget) return card(null, `<p class="hint">No daily budget is set. Spent today: ${usd(spent)}.</p><p class="hint" style="margin-top:12px"><button class="mlink link" ${act("dockGo", "spend")}>View usage</button></p>`, {kicker: "Budget"});
+  if(!budget) return card(null, `<p class="hint">No daily budget is set, so nothing stops automatic work for cost. Spent today: ${usd(spent)}.</p><p class="hint" style="margin-top:12px"><button class="mlink link" ${act("dockGo", "spend")}>View usage</button></p>`, {kicker: "Budget today", label: "Budget"});
   const used = Math.min(8, Math.round(spent / budget * 8));
-  return card(null, `<div class="budget"><b>${usd(spent)} of ${usd(budget)}</b><span class="sub">today, fleet-wide</span></div>
+  return card(null, `<div class="budget"><b>${usd(spent)} of ${usd(budget)}</b><span class="sub">today, every project</span></div>
     <div class="stat-row" aria-hidden="true">${Array.from({length: 8}, (_, i) => `<i class="${i < used ? "on" : ""}"></i>`).join("")}</div>
-    <p class="hint" style="margin-top:12px">API-equivalent prices. <button class="mlink link" ${act("dockGo", "spend")}>View usage</button></p>`, {kicker: "Budget today", label: "Budget"});
+    <p class="hint" style="margin-top:12px">The daily cap is ${usd(budget)}${spent >= budget ? ", and it is reached: scheduled and queued work has stopped" : ": scheduled and queued work stops when it is reached"}. API-equivalent prices. <button class="mlink link" ${act("dockGo", "spend")}>View usage</button></p>`, {kicker: "Budget today", label: "Budget"});
+}
+/* ---- Home is the person, across everything: one calm next action, Your day, Brain dump, the fleet timeline, Recently finished and the Budget, and one line
+   that says how much needs you and links to Projects. Nothing about one project lives here (Needs you and the Mission trajectory are on Projects). ---- */
+function homeCount(){
+  const items = obsAttention(false), n = items.length;
+  if(!n) return `<p class="home-count hint" role="status">Nothing needs you right now.</p>`;
+  const projects = new Set(items.filter(x => !x.addon && x.project).map(x => x.project)), addons = new Set(items.filter(x => x.addon).map(x => x.addon.id));
+  const where = [projects.size ? `in ${projects.size} ${plural(projects.size, "project")}` : "", addons.size ? `from ${addons.size} ${plural(addons.size, "add-on")}` : ""].filter(Boolean).join(" and ");
+  return `<p class="home-count"><button class="mlink link" ${act("openProjects")}>${n} ${plural(n, "thing needs", "things need")} you${where ? " " + where : ""}</button></p>`;
+}
+// The next action: the person's day first (an overdue reminder, or a meeting in the next three hours), else the one most urgent thing across projects, always saying whose it is.
+function homeNext(){
+  const now = Date.now(), rem = connOf("reminders"), cal = connOf("calendar");
+  const r = asst && rem && rem.connected ? asst.remindersSummary(connItems("reminders"), now) : null;
+  if(r && r.overdue.length) return {tag: "Your day", title: "Overdue: " + r.overdue[0].title, why: r.overdue.length > 1 ? `${r.overdue.length} reminders are overdue.` : "One reminder is overdue.", label: "See Your day", day: true};
+  const soon = cal && cal.connected ? connItems("calendar").filter(i => i.at && !/all day/i.test(i.sub || "") && Date.parse(i.at) > now && Date.parse(i.at) - now < 3 * 3600e3).sort((a, b) => Date.parse(a.at) - Date.parse(b.at))[0] : null;
+  if(soon) return {tag: "Your day", title: "Next: " + soon.title, why: "At " + new Date(soon.at).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"}) + ".", label: "See Your day", day: true};
+  let n = nextCur = nextNow();
+  const att = obsAttention(false);
+  if(!n) return null;
+  if(n.act === "attach") return {tag: "", title: n.title, why: n.why, label: n.label, n};
+  if(/^Nothing needs you/.test(n.title)){
+    const x = att[0];
+    if(!x) return null;                                    // nothing is pressing: nothing is shown
+    n = nextCur = {title: x.source, why: x.text, label: x.blocker === "config" ? "Inspect blocker" : "Inspect", go: x.view, project: x.project};
+    return {tag: x.addon ? "Add-on: " + x.addon.label : x.project || "", title: n.title, why: n.why, label: n.label, n};
+  }
+  const x = att.find(a => n.title.startsWith(a.source));
+  const m = /^Review PR #\d+ on (\S+)$/.exec(n.title);
+  return {tag: x && x.addon ? "Add-on: " + x.addon.label : n.project || (x && x.project) || (m ? m[1] : (/^\S+ failed on (\S+)$/.exec(n.title) || [])[1] || ""), title: n.title, why: n.why, label: n.label, n};
+}
+function homeDay(){ const el = $("#home-day"); if(el){ el.scrollIntoView({block: "center"}); el.focus({preventScroll: true}); } }
+const tlLane = (l, L) => `<div class="tl-lane"><div class="tl-name" title="${esc(l.name)}">${esc(l.name)} <small>${l.total}</small></div>
+    <div class="tl-track" role="group" aria-label="${esc(l.name)}: ${l.total} events">${l.bins.map(b => `<button class="tlm c-${b.cls}" style="left:${tl.pct(b, L.from, L.to).toFixed(2)}%"
+      data-t="${esc(tl.binText(b, tlTime))}" data-l="${esc(l.name)}" data-i="${b.i}" ${actOn("hover", "tlHover", T.el)} ${actOn("focus", "tlHover", T.el)} ${act("tlClick", T.el)}
+      aria-label="${esc(tl.binText(b, tlTime))}"><span>${b.n > 1 ? b.n : ""}</span></button>`).join("")}</div></div>`;
+function homeTimeline(){
+  if(!S.projects.length || !tl) return "";
+  const d = tlData["24h"], events = d ? d.events : [], now = d && d.now ? Date.parse(d.now) : Date.now();
+  const track = document.querySelector(".tl-track"), room = track ? track.clientWidth : innerWidth - (innerWidth > 760 ? 76 : 0) - 56 - (innerWidth > 700 ? 160 : 100);
+  const L = tlLast = tl.buildLanes(events, {windowKey: "24h", now, projects: S.projects.map(p => p.name), buckets: Math.max(4, Math.min(48, Math.floor(room / 44)))});
+  const body = d && d.now ? (L.total ? `<div class="tl-lanes">${L.lanes.map(l => tlLane(l, L)).join("")}</div>
+      <div id="tl-detail" class="tl-detail" aria-live="polite">${L.total} event${L.total === 1 ? "" : "s"} in the last 24 hours, every project. Hover or focus a marker for detail.</div>`
+    : `<p class="hint">Nothing has run in the last 24 hours.</p>`) : `<p class="hint">Reading the ledger…</p>`;
+  return card(null, body, {kicker: "Fleet timeline", cls: "timeline-card", attrs: 'data-calm="hide"', count: "last 24 hours", actions: `<button class="mlink link" ${act("dockGo", "timeline")}>Open the full timeline</button>`, label: "Fleet timeline"});
 }
 function viewCommandCenterNew(){
   if(filter) return viewHomeSearch();
-  const f = homeFacts();
-  let n = nextCur = nextNow();
-  // The headline counts every blocker and every pull request waiting for you; the next step must not say "nothing needs you" beside it.
-  if(n && /^Nothing needs you/.test(n.title) && (f.att.length || f.waiting.length)){
-    const x = f.att[0], w = f.waiting[0];
-    n = nextCur = x ? {title: x.source, why: x.text, label: x.blocker === "config" ? "Inspect blocker" : "Inspect", go: x.view}
-                    : {title: "A pull request is waiting for your review", why: w.title, label: "Open it", url: w.pr};
+  if(S.projects.length) loadBrainPrs();
+  const nx = homeNext();
+  const nextBlock = nx ? `<section class="card next-card tone-${nx.n && /failed|blocked|BLOCKED/.test(nx.title) ? "blocked" : "awaiting"}" aria-label="Next action"><div><div class="kicker">Next${nx.tag ? " · " + esc(nx.tag) : ""}</div><h2>${esc(nx.title)}</h2><p>${esc(nx.why)}</p></div>
+      ${btn(esc(nx.label), {variant: "primary", click: nx.day ? act("homeDay") : act("runNext")})}</section>` : "";
+  if(!S.projects.length) return nextBlock + `<div style="margin-top:20px">${homeNow()}</div>`;
+  return nextBlock + homeCount() + homeNow() + homeTimeline() + `<div class="home-row">${calmHide(finishedCard())}${calmHide(budgetCard())}</div>`;
+}
+/* ---- Projects: the place where the work is. It opens on every project together (one card each, then the add-ons, what needs you, and the missions);
+   choosing a project (the Open button, a berth or the scope box) makes the same place show that project: its facts, its Ready card, its tickets and
+   its guardrails, and the tabs (Needs you, Missions, Pull requests, Board, Ledger and the rest) show only that project. The scope lives in the address. ---- */
+const PJ_STATE = {blocked: ["Blocked", "bad", "blocked"], "needs you": ["Needs you", "warn", "awaiting"], running: ["Running", "blue", "running"], idle: ["Idle", "", ""]};
+const pjOf = name => ((S && S.overview) || []).find(o => o.name === name) || null;
+function projectCard(o, opts = {}){
+  const st = PJ_STATE[o.state] || PJ_STATE.idle, short = (t, n) => t.length > n ? t.slice(0, n - 1).trimEnd() + "…" : t;
+  const needs = o.needs ? `<b>${o.needs}</b> ${plural(o.needs, "thing")}${o.top ? ": " + esc(short(String(o.top.text || ""), 110)) : ""}` : "Nothing needs you.";
+  const last = o.last_run ? `${esc(o.last_run.duty)}, ${pill(verdictClass(o.last_run.verdict), o.last_run.verdict)} ${esc(ago(o.last_run.at))}` : "No run recorded yet.";
+  const dl = `<dl class="pj-facts"><div><dt>Needs you</dt><dd>${needs}</dd></div><div><dt>Last run</dt><dd>${last}</dd></div>
+      <div><dt>Spend</dt><dd>${usd(o.spend_today)} today, ${usd(o.spend_week)} in 7 days</dd></div>
+      <div><dt>Missions</dt><dd>${o.missions_open} open, ${o.missions_done} finished</dd></div></dl>`;
+  const act1 = opts.open === false ? "" : btn("Open", {variant: "primary", size: "small", click: act("openProject", o.name), attrs: `aria-label="Open ${esc(o.name)}"`});
+  const ready = opts.open === false ? "" : `<button class="mlink link" ${act("openProject", o.name, true)} aria-label="Is ${esc(o.name)} ready?">Ready?</button>`;
+  const own = opts.open === false;                           // on the project's own page the heading above already names it and gives the stack sentence
+  return card(own ? "At a glance" : o.name, `${o.stack && !own ? `<p class="sub pj-stack">${esc(o.stack)}</p>` : ""}${dl}${act1 || ready ? `<div class="btns pj-go">${act1}${ready}</div>` : ""}`,
+    {cls: "pj-card", tone: st[2], label: o.name, actions: pill(st[1], st[0]), attrs: `data-project="${esc(o.name)}" data-state="${esc(o.state)}"`});
+}
+function openProject(name, ready){
+  if(ready){ rdScope(name); RD.show = true; }                 // the Ready? link opens the project with its checklist showing
+  selectProject(name);
+  if(ready) focusSoon("#rd-next");
+}
+function addonNeeds(id){ setKept(""); atPlace = ""; localStorage.setItem("quarterdeck.place", ""); scopeAddon = id; go("inbox"); }
+function openProjects(){ setKept(""); curLog = null; board = null; boardFor = null; prs = null; prsFor = null; scopeAddon = ""; atPlace = ""; localStorage.setItem("quarterdeck.place", ""); go("projects"); }
+// The add-ons, apart from the projects: only an add-on with an alert or a place of its own is listed. An alert never goes to the top of Home.
+function addonsStrip(){
+  const att = obsAttention(false), rows = addonList().map(a => ({a, alerts: att.filter(x => x.addon && x.addon.id === a.id)})).filter(r => r.alerts.length || (r.a.place && isPlace(r.a.place)));
+  if(!rows.length) return "";
+  const row = ({a, alerts}) => li({icon: "plug", title: `${pill("", "Add-on: " + a.label)} ${alerts.length ? esc(alerts[0].text) : "Nothing needs you."}`,
+    sub: alerts.length ? `${alerts.length} ${plural(alerts.length, "alert")}${alerts[0].at ? " · " + esc(ago(alerts[0].at)) : ""}` : "Has its own page.",
+    end: (a.place && isPlace(a.place) ? btn("Open " + esc(a.label), {size: "small", click: act("selectPlace", a.place)}) : "")
+      + (alerts.length ? btn("See in Needs you", {size: "small", variant: "primary", click: act("addonNeeds", a.id)}) : "")});
+  return card(null, rows.map(row).join(""), {kicker: "Add-ons", count: rows.reduce((n, r) => n + r.alerts.length, 0) || null, cls: "addons", label: "Add-ons"});
+}
+function projectsOverview(){
+  const f = homeFacts(), ov = (S.overview || []).filter(o => S.projects.some(p => p.name === o.name));
+  const cards = ov.length ? `<div class="pj-grid">${ov.map(o => projectCard(o)).join("")}</div>`
+    : emptyState({inline: true, title: "The project summaries could not be read just now.", body: "The pages of each project are still under the tabs. This page tries again by itself."});
+  return `<div class="stack">${calmHide(fleetStrip(f))}${cards}${addonsStrip()}${needsCard(f.att, f.waiting)}${calmHide(trajectoryCard(f))}</div>`;
+}
+/* ---- Guardrails: the rules every agent is given for a project. The card is a function of the project and lives in #guardrails-slot; it reads GET /api/guardrails and
+   saves the full ordered list with POST /api/project/guardrails (bin/guardrails.py). The three locked rules are shown, never editable or removable. ---- */
+const GR = {project: "", data: null, items: [], add: "", busy: false, at: 0, loading: false};
+const GR_MAX = 300;
+const grSame = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const grDirty = () => !!GR.data && (!grSame(GR.items, GR.data.custom) || GR.data.missing_locked.length > 0);
+const grFresh = project => GR.data && GR.project === project;
+function grRender(focus){ const s = $("#guardrails-slot"); if(s) s.innerHTML = guardrailsCard(sel); if(focus) focusSoon(focus); }
+function grSync(){ const b = $("#gr-save"); if(b) b.disabled = !grDirty() || GR.busy; }
+async function loadGuardrails(force){
+  const p = sel;
+  if(!p || GR.loading) return;
+  if(GR.project !== p) Object.assign(GR, {project: p, data: null, items: [], add: "", busy: false, at: 0});
+  if(!force && GR.data && Date.now() - GR.at < 15000) return;
+  GR.loading = true; GR.at = Date.now();
+  try{
+    const r = await fetch("/api/guardrails?project=" + encodeURIComponent(p));
+    if(r.status === 401){ showUnpaired(); return; }
+    const j = r.ok ? await r.json() : null;
+    if(j && sel === p){
+      const first = !GR.data, before = JSON.stringify(GR.data), clean = !grDirty();
+      GR.data = j;
+      if(clean) GR.items = j.custom.slice();
+      if((first || before !== JSON.stringify(j)) && view === "projects" && !document.activeElement?.closest("#guardrails-slot")) grRender();
+    }
+  }catch(e){ /* the next poll asks again */ }
+  finally{ GR.loading = false; }
+}
+function grEdit(i, v){ GR.items[i] = String(v); grSync(); }
+function grNew(v){ GR.add = String(v); }
+function grAdd(){
+  const d = GR.data, t = GR.add.trim(), el = $("#gr-new");
+  if(!d || GR.busy) return;
+  if(!t) return fieldError(el, "Write the guardrail first.");
+  if(t.length > GR_MAX) return fieldError(el, `That is ${t.length} characters; the limit is ${GR_MAX}.`);
+  if(GR.items.length >= d.limit) return fieldError(el, `A project may have at most ${d.limit} guardrails of its own.`);
+  const key = x => x.trim().replace(/\s+/g, " ").toLowerCase();
+  if([...d.locked.map(x => x.text), ...GR.items].some(x => key(x) === key(t))) return fieldError(el, "That is already a guardrail.");
+  GR.items.push(t); GR.add = "";
+  announce(`Added as guardrail ${GR.items.length}. Save guardrails to keep it.`);
+  grRender("#gr-new");
+}
+function grRemove(i){
+  GR.items.splice(i, 1);
+  announce("Guardrail removed from the list. Save guardrails to keep the change.");
+  grRender(GR.items.length ? `#gr-${Math.min(i, GR.items.length - 1)}` : "#gr-new");
+}
+function grMove(i, dir){
+  const j = i + dir;
+  if(j < 0 || j >= GR.items.length) return;
+  [GR.items[i], GR.items[j]] = [GR.items[j], GR.items[i]];
+  announce(`Guardrail moved to position ${j + 1} of ${GR.items.length}.`);
+  grRender(`#gr-mv-${j}-${dir < 0 ? "up" : "down"}`);
+}
+async function grSave(){
+  const d = GR.data, p = sel;
+  if(!d || GR.busy || !grDirty()) return;
+  GR.busy = true; grSync();
+  const j = await post("/api/project/guardrails", {project: p, guardrails: [...d.locked.map(x => x.text), ...GR.items], confirm: true});
+  GR.busy = false;
+  if(sel !== p) return;
+  if(!j){
+    grSync();
+    const msg = lastPostError, at = GR.items.findIndex(x => msg.includes(`'${x.trim().slice(0, 40)}'`));
+    if(!msg.startsWith("Demo mode")) fieldError($(at >= 0 ? "#gr-" + at : "#gr-new"), msg);
+    return;
   }
-  if(n) loadBrainPrs();
-  const h = homeHeadline(f, n);
-  const events = tl ? tl.recentStrip(S.runs.filter(mine), sel ? [] : extEvents(), 12) : [];
-  const nextBlock = n ? `<section class="card next-card tone-${h.state === "idle" ? "" : h.state}" aria-label="Next step"><div><div class="kicker">Next step</div><h2>${esc(n.title)}</h2><p>${esc(n.why)}</p>${asst ? `<div class="away">${awayText()}</div>` : ""}</div>
-      ${btn(esc(n.label), {variant: "primary", click: act("runNext")})}</section>` : "";
-  if(h.noProjects) return nextBlock + `<div style="margin-top:20px">${homeNow()}</div>`;
-  return nextBlock + `<div class="home-grid">${calmHide(trajectoryCard(f))}${needsCard(f)}</div>` + calmHide(fleetStrip(f)) + calmHide(homeNow())
-    + (events.length ? card(null, `<div class="tl-strip" role="list" aria-label="The last ${events.length} events, newest first">${(tlEvents.length = 0, events.map(tlChip).join(""))}</div>`,
-        {kicker: "Fleet timeline", cls: "timeline-card", attrs: 'data-calm="hide"', actions: `<button class="mlink link" ${act("dockGo", "timeline")}>Open the Timeline</button>`, label: "Fleet timeline"}) : "")
-    + `<div class="home-row">${calmHide(finishedCard())}${calmHide(budgetCard())}</div>`;
+  GR.data = j; GR.items = j.custom.slice(); GR.at = Date.now();
+  const pr = (S.projects || []).find(x => x.name === p);
+  if(pr) pr.guardrails = [...j.locked.map(x => x.text), ...j.custom];
+  toast("Guardrails saved."); announce(`Guardrails saved. ${j.custom.length} of your own.`);
+  grRender("#gr-save");
+}
+function guardrailsCard(project){
+  const p = (S.projects || []).find(x => x.name === project);
+  if(!p) return "";
+  const d = grFresh(project) ? GR.data : null;
+  if(!d) return card(null, `<p class="hint">Loading the guardrails.</p>`, {kicker: "Guardrails", label: "Guardrails", cls: "guardrails"});
+  const locked = d.locked.map(x => `<li class="gr-locked"><sl-icon name="lock" class="gr-lock"></sl-icon><span class="gr-t">${esc(x.text)}<small class="gr-why" data-calm="hide">${esc(x.reason)}</small></span></li>`).join("");
+  const rows = GR.items.map((t, i) => `<li class="gr-row">
+      ${slInput({id: "gr-" + i, label: `Guardrail ${i + 1} for ${project}`, value: t, cls: "gr-in", attrs: `maxlength="${GR_MAX}" ${actOn("input", "grEdit", i, T.value)}`})}
+      <span class="gr-tools"><sl-icon-button class="x" id="gr-mv-${i}-up" name="chevron-up" label="Move guardrail ${i + 1} up" ${i === 0 ? "disabled" : ""} ${act("grMove", i, -1)}></sl-icon-button>
+      <sl-icon-button class="x" id="gr-mv-${i}-down" name="chevron-down" label="Move guardrail ${i + 1} down" ${i === GR.items.length - 1 ? "disabled" : ""} ${act("grMove", i, 1)}></sl-icon-button>
+      <sl-icon-button class="x" id="gr-rm-${i}" name="x-lg" label="Remove guardrail ${i + 1}" ${act("grRemove", i)}></sl-icon-button></span></li>`).join("");
+  const body = `<p class="hint" data-calm="hide">Rules every agent is given for this project.</p>
+    <ul class="gr-list" aria-label="Locked guardrails">${locked}</ul>
+    ${d.missing_locked.length ? `<p class="hint">This project's list is missing a locked rule. Save guardrails puts it back.</p>` : ""}
+    ${rows ? `<ul class="gr-list" aria-label="Your guardrails for ${esc(project)}">${rows}</ul>` : ""}
+    <div class="gr-add">${slInput({id: "gr-new", label: "Add a guardrail", value: GR.add, placeholder: "For example: keep each change small", attrs: `maxlength="${GR_MAX + 50}" ${actOn("input", "grNew", T.value)} ${actOn("keydown", "onEnter", "grAdd")}`})}
+      ${btn("Add", {size: "small", click: act("grAdd"), attrs: 'id="gr-add" aria-label="Add this guardrail to the list"'})}</div>
+    <div class="btns">${btn("Save guardrails", {variant: "primary", click: act("grSave"), disabled: !grDirty() || GR.busy, attrs: 'id="gr-save"'})}</div>
+    <sl-details summary="What the crew receives" id="gr-eff"><pre class="gr-eff" tabindex="0">${esc(d.effective)}</pre></sl-details>`;
+  return card(null, body, {kicker: "Guardrails", count: d.locked.length + d.custom.length, label: "Guardrails", cls: "guardrails"});
+}
+function projectPage(){
+  const o = pjOf(sel), f = homeFacts();
+  return `<div class="stack pj-page">${o ? projectCard(o, {open: false}) : ""}${needsCard(f.att.filter(x => !x.addon), f.waiting, 3)}${readyCard(sel)}${readyLink(sel)}${repoOptionsCard(sel)}${ticketsCard(sel)}
+    <div id="guardrails-slot">${guardrailsCard(sel)}</div></div>`;
+}
+function viewProjects(){
+  if(!S.projects.length) return emptyState({kicker: "Projects", title: "No projects yet.", body: "Add a project and the crew has something to look after.", label: "Add a project", click: act("openAttach")});
+  return sel ? projectPage() : projectsOverview();
 }
 function viewMissions(){
   const missions = (S.missions || []).filter(mine).filter(m => hit(m.project, m.objective))
@@ -1152,7 +1504,7 @@ function viewMissions(){
   const panels = S.panels.filter(mine).filter(p => p.status === "done" && !p.superseded_by && hit(p.project,p.discipline,p.subject,p.headline)).sort((a,b)=>(b.started||"").localeCompare(a.started||""));
   const intro = card(null, `<h2 class="card-t">Give the fleet an objective.</h2>
       <p class="hint" style="margin-top:6px">A draft here is a real record: it survives a refresh and a restart, and you can attach panels to it as evidence. What is not built yet is the rest: turning a draft into a scoped plan, assigning agents, and running it. Saving or editing a draft never starts an agent or writes to GitHub.</p>
-      <div class="btns" style="margin-top:14px">${btn(missionOpen ? "Cancel" : "New mission draft", {variant: "primary", click: act("toggleMissionForm")})}${btn("Browse panels", {click: act("go", "panels")})}</div>`,
+      <div class="btns" style="margin-top:14px">${btn(missionOpen ? "Cancel" : "New mission draft", {variant: sel ? "" : "primary", click: act("toggleMissionForm")})}${btn("Browse panels", {click: act("go", "panels")})}</div>`,
       {kicker: `${missions.length} ${plural(missions.length, "draft")} saved · no execution yet`});
   const list = missions.length ? missions.map(m => `<button class="mission-li" ${act("openMission", m.id)}><span class="t">${esc(m.objective)}</span>
         ${pill("idle", m.status)}<span class="sub">${esc(m.project)} · updated ${ago(m.updated_at)} · ${m.links.panels.length} ${plural(m.links.panels.length, "panel")} linked as evidence</span></button>`).join("")
@@ -1161,14 +1513,19 @@ function viewMissions(){
         sub: `${esc(p.project)} · ${esc(p.discipline)} · ${esc(p.status)} · ${ago(p.started)}`})).join("")
       : emptyState({inline: true, title: "No current panels in this scope.", body: "Open Panels to inspect historical work or run a new review."}),
       {kicker: "Available evidence", label: "Available evidence"});
-  return `<div class="stack">${intro}<div id="missionform"></div><div class="mission-list">${list}</div>${ev}</div>`;
+  return `<div class="stack">${trajectoryCard(homeFacts())}${intro}<div id="missionform"></div><div class="mission-list">${list}</div>${ev}</div>`;
 }
 function viewInbox(){
   const alerts = obsAttention().filter(x => hit(x.source,x.text,x.kind));
   const info = `<p class="hint" data-calm="hide" style="margin-bottom:var(--s4)">A connected source shows its latest available status, with stale snapshots marked. A local entry is a project and duty's most recent run when that run failed in the last 24 hours; a later success, of any kind, retires it on its own. Acknowledging one is recorded on this machine: the same exact problem stays quiet, a genuinely new one does not.</p>`;
-  if(!alerts.length) return info + emptyState({kicker: "All quiet", title: "Nothing needs you right now.", body: "No live alerts or local blocker verdicts from the last 24 hours. Older events are in the Ledger.", label: "Open the Ledger", click: act("go", "ledger")});
-  return info + card(null, alerts.map(x => `<div class="attn"><span class="ico ${x.blocker === "config" ? "bad" : "await"} li-ico" style="display:grid;place-items:center;width:34px;height:34px;border-radius:8px;flex:none">${slIcon("warn")}</span>
-      <div class="attn-main"><div class="t">${mlink(attnMissionId(x), x.source, "title")} ${x.blocker === "config" ? pill("warn", "needs a config change") : ""}</div>
+  // Add-on items are not tied to a project: say so once, and say how to see only them. One from an add-on that is not installed here cannot be chosen as a scope.
+  const ad = alerts.filter(x => x.addon), gone = ad.find(x => !x.addon.installed), cur = scopeAddon ? addonList().find(a => a.id === scopeAddon) : null;
+  const scopeNote = cur ? `<p class="hint" style="margin-bottom:var(--s4)">Showing only items from the add-on ${esc(cur.label)}. Choose All projects in the scope box to see everything.</p>`
+    : ad.length ? `<p class="hint" style="margin-bottom:var(--s4)">Items marked Add-on come from an add-on, not from one of your projects, so they show under every project.${ad.some(x => x.addon.installed) ? " Choose the add-on in the scope box to see only its items." : ""}${gone ? ` ${esc(gone.addon.label)} is not installed here, so it cannot be chosen as a scope.` : ""}</p>` : "";
+  if(!alerts.length) return info + (cur ? `<p class="hint" style="margin-bottom:var(--s4)">Showing only items from the add-on ${esc(cur.label)}. Choose All projects in the scope box to see everything.</p>` : "")
+    + emptyState({kicker: "All quiet", title: cur ? `Nothing from ${cur.label} needs you right now.` : "Nothing needs you right now.", body: "No live alerts or local blocker verdicts from the last 24 hours. Older events are in the Ledger.", label: "Open the Ledger", click: act("go", "ledger")});
+  return info + scopeNote + card(null, alerts.map(x => `<div class="attn"><span class="ico ${x.blocker === "config" ? "bad" : "await"} li-ico" style="display:grid;place-items:center;width:34px;height:34px;border-radius:8px;flex:none">${slIcon("warn")}</span>
+      <div class="attn-main"><div class="t">${mlink(attnMissionId(x), x.source, "title")} ${addonPill(x)} ${x.blocker === "config" ? pill("warn", "needs a config change") : ""}</div>
         <p>${esc(x.text)}</p><p class="sub">${x.at ? (x.stale ? "snapshot read " : "recorded ") + ago(x.at) : "status"}</p>
         <div class="attn-act">${btn(x.blocker === "config" ? "Inspect blocker" : "Inspect", {size: "small", variant: "primary", click: isPlace(x.view) ? act("selectPlace", x.view) : act("go", "ledger")})}
         ${btn("Acknowledge", {size: "small", click: act("ackInbox", x.id, x.text)})}</div></div></div>`).join(""),
@@ -1183,9 +1540,9 @@ function openMissionPage(id){
   missionId = id; missionLens = "summary";
   try{ localStorage.setItem("quarterdeck.mission", id); }catch(e){}
   delete missionCache[id];
-  if(view === "mission") render(); else go("mission");
+  if(view === "mission"){ routeTouch(); render(); } else go("mission");
 }
-function closeMissionPage(){ missionId = ""; try{ localStorage.removeItem("quarterdeck.mission"); }catch(e){} render(); }
+function closeMissionPage(){ missionId = ""; try{ localStorage.removeItem("quarterdeck.mission"); }catch(e){} routeTouch(); render(); }
 function setLens(l){ missionLens = l; render(); }
 function loadMission(){
   const id = missionId, c = missionCache[id];
@@ -1201,21 +1558,21 @@ const attnMissionId = x => x.project && x.at && !isPlace(x.view) ? `run:${x.at}|
 const MSTATE = {running: ["Running", "blue"], blocked: ["Blocked", "bad"], awaiting: ["Awaiting you", "warn"], done: ["Done", "good"], idle: ["Not started", ""]};
 const NSTATE = {done: "Done", active: "Active", blocked: "Blocked", awaiting: "Awaiting you", notstarted: "Not started", skipped: "Skipped"};
 const fixStateOf = r => r.status === "running" ? "running" : r.status === "pr" ? "awaiting" : ["failed", "blocked", "abandoned"].includes(r.status) ? "blocked" : "done";
-function recentMissions(){
+function recentMissions(limit = 8){
   const fx = Object.values(S.fixes || {}).filter(mine).map(r => ({id: fixMissionId(r), title: r.title, project: r.project, state: fixStateOf(r), when: r.finished || r.started || ""}));
   const pn = S.panels.filter(mine).filter(p => !p.superseded_by).map(p => ({id: "panel:" + p.id, title: p.headline || p.subject || p.discipline + " panel", project: p.project,
     state: p.status === "running" ? "running" : p.status === "done" ? "done" : "blocked", when: p.finished || p.started || ""}));
   // a cycle (qtdeck cycle) is one mission too; the page reads its record. The only thing it can do is start one (Start a full cycle), never resume or stop it
-  const cy = (S.cycles || []).filter(mine).map(c => ({id: "cycle:" + c.id, title: `Cycle · #${c.issue} ${c.title || ""}`.trim(), project: c.project,
+  const cy = (S.cycles || []).filter(mine).map(c => ({id: "cycle:" + c.id, title: `Cycle · ${Number.isInteger(c.ticket) ? "ticket #" + c.ticket : "#" + c.issue} ${c.title || ""}`.trim(), project: c.project,
     state: c.status === "running" ? "running" : c.status === "awaiting-review" ? "awaiting" : ["needs-human", "failed", "stopped-cap", "stopped-ceiling"].includes(c.status) ? "blocked" : "done",
     when: c.finished || c.started || ""}));
-  // a design brief or a sprint plan waiting for you is a mission too; a brief for a new idea has no project and shows whatever is picked
-  const bf = (S.briefs || []).filter(b => mine(b) || !b.project).map(b => ({id: "brief:" + b.id, title: "Brief · " + b.title, project: b.project,
+  // a design brief or a sprint plan waiting for you is a mission too; a brief for a new idea has no project yet, so it shows with every project together and under none in particular
+  const bf = (S.briefs || []).filter(b => sel ? b.project === sel : true).map(b => ({id: "brief:" + b.id, title: "Brief · " + b.title, project: b.project,
     state: b.status === "drafting" || b.mockups === "working" ? "running" : b.status === "failed" || b.mockups === "failed" ? "blocked"
       : ["proposed", "changes_requested"].includes(b.status) || b.mockups === "ready" ? "awaiting" : "done", when: b.at || ""}));
   const pl = (S.plans || []).filter(mine).map(p => ({id: "plan:" + p.id, title: `Sprint plan · ${p.project}`, project: p.project,
     state: p.status === "proposed" ? "awaiting" : p.status === "approved" ? "awaiting" : "done", when: p.at || ""}));
-  return [...fx, ...pn, ...cy, ...bf, ...pl].sort((a, b) => b.when.localeCompare(a.when)).slice(0, 8);
+  return [...fx, ...pn, ...cy, ...bf, ...pl].sort((a, b) => b.when.localeCompare(a.when)).slice(0, limit);
 }
 function missionList(){
   const rec = recentMissions();
@@ -1224,8 +1581,349 @@ function missionList(){
       ${pill(x.state, MSTATE[x.state][0])}</button>`).join("")}</div>`
     : emptyState({kicker: "No mission selected", title: "No missions yet.", body: "A fix, a panel or a run shows up here once one has started.", label: "Open the Ledger", click: act("go", "ledger")});
 }
+/* ---- Tickets: say what you want built, check the draft, file it; and the ways forward for a project with no GitHub repo. ----
+   ticketsCard(project) and repoOptionsCard(project) each take a project name and return a string, and read their data from TK (GET /api/tickets),
+   so a later page can move them whole. Every write is a POST with confirm:true (bin/dashboard.py, "tickets and the GitHub repo, on the page"). */
+const TK = {project: "", data: null, at: 0, loading: false, request: "", drafting: false, filing: null, baseDrafts: [], error: "", repoName: "", repoMsg: "", repoBusy: false};
+const TK_LIMIT = 2000;
+const TK_REPO = /^[A-Za-z0-9_.][A-Za-z0-9_.-]{0,38}\/[A-Za-z0-9_.][A-Za-z0-9_.-]{0,99}$/;
+const TK_STATUS = {open: ["", "open"], building: ["running", "building"], review: ["awaiting", "review"], done: ["done", "done"]};
+const tkData = project => TK.data && TK.data.project === project ? TK.data : null;
+const tkTyping = () => !!document.activeElement?.matches("#view :is(input, select, textarea, sl-input, sl-select, sl-textarea, sl-checkbox, sl-switch)");
+const tkCount = n => `${n} of ${TK_LIMIT} characters`;
+function tkScope(p){        // a different project starts with a clean box: nothing typed for one is shown under another
+  if(TK.project === p) return;
+  Object.assign(TK, {project: p, data: null, at: 0, request: "", drafting: false, filing: null, baseDrafts: [], error: "", repoName: "", repoMsg: "", repoBusy: false});
+}
+async function loadTickets(force){
+  const p = sel;
+  if(!p || TK.loading) return;
+  tkScope(p);
+  const d = tkData(p), quick = TK.drafting || TK.filing || (d && d.running);
+  if(!force && d && Date.now() - TK.at < (quick ? 1800 : 15000)) return;
+  TK.loading = true; TK.at = Date.now();
+  try{
+    const r = await fetch("/api/tickets?project=" + encodeURIComponent(p));
+    if(r.status === 401){ showUnpaired(); return; }
+    const j = r.ok ? await r.json() : null;
+    if(j && sel === p){
+      const before = JSON.stringify(TK.data);
+      TK.data = j;
+      const changed = ticketsSettle(j) || JSON.stringify(j) !== before;
+      if(changed && view === "projects" && !tkTyping()) render();
+    }
+  }catch(e){ /* the next poll asks again */ }
+  finally{ TK.loading = false; }
+}
+function ticketsSettle(j){        // a draft or a filing the page started has ended: say how it went, once
+  let ch = false;
+  if(TK.drafting && !j.running){
+    TK.drafting = false; ch = true;
+    const fresh = j.drafts.filter(x => !TK.baseDrafts.includes(x.id));
+    if(fresh.length){
+      const n = fresh[0].tickets.length;
+      TK.request = ""; TK.error = "";
+      announce(`Draft ready: ${n} ${plural(n, "ticket")}. Nothing is filed yet.`); focusSoon("#tk-file-" + fresh[0].id);
+    }else{
+      TK.error = j.last_draft_error || "The planner finished without a draft. Try again with a little more detail.";
+      announce(TK.error);
+    }
+  }
+  if(TK.filing && !j.running){
+    const f = TK.filing; TK.filing = null; ch = true;
+    if(j.last_file_error){ TK.error = j.last_file_error; announce(TK.error); }
+    else{ TK.error = ""; toast(`Filed ${f.n} ${plural(f.n, "issue")} on ${f.repo}.`); focusSoon("#tk-list"); }
+  }
+  return ch;
+}
+function tkRequest(v){
+  TK.request = String(v);
+  const c = $("#tk-count"), b = $("#tk-draft");
+  if(c) c.textContent = tkCount(TK.request.length);
+  if(b) b.disabled = !TK.request.trim() || TK.drafting;
+}
+async function tkDraft(){
+  const p = sel, d = tkData(p), text = TK.request.trim();
+  if(!d || TK.drafting || d.running) return;
+  if(!text) return fieldError($("#tk-request"), "Say what you want built.");
+  if(text.length > TK_LIMIT) return fieldError($("#tk-request"), `That is ${text.length} characters; the limit is ${TK_LIMIT}.`);
+  TK.baseDrafts = d.drafts.map(x => x.id); TK.error = "";
+  const j = await post("/api/ticket/draft", {project: p, request: text, confirm: true});
+  if(!j) return;                                              // the toast already said why (in Demo mode: that nothing is drafted)
+  TK.drafting = true; TK.at = 0;
+  announce("The planner is drafting. This can take a minute and costs a few cents; nothing is filed yet.");
+  render(); loadTickets(true);
+}
+async function tkFile(did, local){
+  const p = sel, d = tkData(p), dr = d && d.drafts.find(x => x.id === did);
+  if(!dr) return;
+  const n = dr.tickets.length, toGithub = d.has_repo && !local;
+  if(toGithub && !await confirmDlg(`This creates ${n} GitHub ${plural(n, "issue")} in ${d.repo}. Anyone who can see that repository can see ${n === 1 ? "it" : "them"}.`,
+      {title: "File on GitHub", ok: `File ${n} ${plural(n, "issue")}`})) return;
+  const j = await post("/api/ticket/file", {project: p, draft: did, local: !toGithub, confirm: true});
+  if(!j) return;
+  TK.error = "";
+  if(j.started){ TK.filing = {n, repo: d.repo}; TK.at = 0; announce(`Filing ${n} ${plural(n, "issue")} on ${d.repo}.`); render(); loadTickets(true); return; }
+  toast(`Saved ${n} ${plural(n, "ticket")} on this computer.`);
+  await loadTickets(true); focusSoon("#tk-list");
+}
+async function tkDiscard(did){
+  if(!await confirmDlg("Discard this draft? It is gone for good, and asking again costs a few cents.", {title: "Discard draft", ok: "Discard draft", danger: true})) return;
+  if(!await post("/api/ticket/discard", {project: sel, draft: did, confirm: true})) return;
+  toast("Draft discarded.");
+  await loadTickets(true); focusSoon("#tk-request");
+}
+function tkRepoName(v){ TK.repoName = String(v); }
+async function tkRepoSave(){
+  const p = sel, v = TK.repoName.trim();
+  if(TK.repoBusy) return;
+  if(!TK_REPO.test(v) || v.includes("..")) return fieldError($("#tk-repo"), "Write it as owner/name, like octocat/hello-world.");
+  TK.repoBusy = true; TK.repoMsg = ""; render();
+  const j = await post("/api/repo", {project: p, action: "set", repo: v, confirm: true});
+  TK.repoBusy = false;
+  if(!j){ render(); return; }
+  toast(`${p} now uses ${v}.`);
+  await tick(); loadTickets(true); focusSoon("#tk-request");
+}
+async function tkRepoCreate(){
+  const p = sel;
+  if(TK.repoBusy) return;
+  if(!await confirmDlg(`This creates a PRIVATE repository ${p} on your GitHub account and connects it. Nothing is pushed yet.`, {title: "Create a private GitHub repo", ok: "Create the repo"})) return;
+  await new Promise(r => setTimeout(r, 350));                 // the first dialog finishes closing before the second opens
+  const push = await confirmDlg("Push your default branch once so pull requests have a base? Choose Cancel to create the repo without pushing.", {title: "Push once?", ok: "Push once"});
+  TK.repoBusy = true; TK.repoMsg = ""; render(); announce("Creating the private repository.");
+  const j = await post("/api/repo", {project: p, action: "create", push, confirm: true});
+  TK.repoBusy = false;
+  if(j && j.ok){ toast(j.message); await tick(); loadTickets(true); focusSoon("#tk-request"); return; }
+  TK.repoMsg = j ? j.message : lastPostError; announce(TK.repoMsg); render();
+}
+function tkMission(n, issue){ openCycleDialog(sel, n, issue); }
+function tkTicketHtml(t){
+  return `<div class="tk-ticket"><h3 class="tk-t">${esc(t.title)}</h3><p>${esc(t.body)}</p><p class="sub">Acceptance checks</p><ul>${t.acceptance.map(a => `<li>${esc(a)}</li>`).join("")}</ul></div>`;
+}
+function tkDraftHtml(dr, d, first, busy){
+  const n = dr.tickets.length, repo = d.has_repo;
+  const label = repo ? `File ${n} ${plural(n, "issue")} on ${d.repo}` : `Save ${n} ${plural(n, "ticket")} on this computer`;
+  return `<div class="tk-draft" role="group" aria-label="Draft ${esc(dr.id)}"><p class="sub">Draft ${esc(dr.id)}${dr.request ? ` · you asked: “${esc(clip(dr.request, 100))}”` : ""}</p>
+    ${dr.tickets.map(tkTicketHtml).join("")}
+    <div class="btns">${btn(esc(label), {variant: first ? "primary" : "", click: act("tkFile", dr.id, !repo), disabled: busy, attrs: `id="tk-file-${esc(dr.id)}"`})}
+      ${repo ? calmHide(btn("Save on this computer only", {size: "small", click: act("tkFile", dr.id, true), disabled: busy})) : ""}
+      ${btn("Discard draft", {size: "small", variant: "text", click: act("tkDiscard", dr.id), disabled: busy})}</div></div>`;
+}
+function tkRowHtml(t, d){
+  const [tone, word] = TK_STATUS[t.status] || ["", String(t.status)];
+  const where = t.source === "github" ? (t.url ? `<a href="${esc(safeUrl(t.url))}" target="_blank" rel="noopener">issue #${esc(t.issue)} ↗</a>` : `issue #${esc(t.issue)}`)
+    : t.branch ? `branch <code class="tk-sel">${esc(t.branch)}</code>` : "kept on this computer";
+  const review = t.status === "review" && t.source === "local"
+    ? `<span class="tk-review">${t.review ? `Review it with <code class="tk-sel">${esc(t.review)}</code>. ` : ""}What now: review it, merge it yourself, or connect a repo to run the reviewers.</span>` : "";
+  const go = t.status === "open" && d.cycle ? btn("Start a mission", {size: "small", click: t.source === "github" ? act("tkMission", null, t.issue) : act("tkMission", t.id, null)}) : "";
+  return li({title: `<span class="mono">#${esc(t.id)}</span> ${esc(t.title)}`, sub: `${where}${review ? `<br>${review}` : ""}`, end: `${pill(tone, word)}${go}`});
+}
+function ticketsCard(project){
+  tkScope(project || "");
+  if(!project){
+    const ps = S.projects || [];
+    return card("New ticket", ps.length ? `<p class="hint">Choose a project to add tickets.</p><div class="btns">${slSelect({id: "tk-pick", label: "Project", value: "",
+        options: [["", "Choose a project"], ...ps.map(p => [p.name, p.name])], change: actOn("change", "selectProject", T.sel)})}</div>`
+      : `<p class="hint">Add a project first, then you can add tickets to it.</p>`, {kicker: "Tickets", label: "New ticket"});
+  }
+  const d = tkData(project);
+  if(!d) return card("New ticket", `<sl-skeleton effect="sheen" style="height:84px"></sl-skeleton>`, {kicker: "Tickets · " + project, label: "New ticket"});
+  const busy = TK.drafting || !!TK.filing || d.running, drafts = d.drafts.slice().reverse(), tickets = d.tickets.slice().sort((a, b) => b.id - a.id);
+  const status = busy ? callout("running", TK.filing ? "Filing" : "Drafting", TK.filing ? `Filing ${TK.filing.n} ${plural(TK.filing.n, "issue")} on ${esc(TK.filing.repo)}. This takes a few seconds.`
+      : "The planner is reading the project and drafting. This can take a minute and costs a few cents; nothing is filed yet.", {}).replace("<div ", `<div role="status" `) : "";
+  const err = TK.error && !busy ? callout("blocked", "Nothing was kept", esc(TK.error)) : "";
+  const box = `${calmHide(`<p class="hint">Say what you want built, in your own words. The planner reads the project and drafts one to five tickets for you to check. Nothing is filed until you click.${d.stack ? ` It sees this stack: ${esc(d.stack)}` : ""}</p>`)}
+    ${slTextarea({id: "tk-request", label: "What do you want built?", rows: 4, value: TK.request, attrs: `maxlength="${TK_LIMIT}" ${busy ? "disabled" : ""} ${actOn("input", "tkRequest", T.value)}`})}
+    <p class="sub" id="tk-count">${tkCount(TK.request.length)}</p>
+    <div class="btns">${btn("Draft tickets", {variant: drafts.length ? "" : "primary", click: act("tkDraft"), disabled: busy || !TK.request.trim(), attrs: 'id="tk-draft"'})}
+      <span class="sub">Costs a few cents. Nothing is filed.</span></div>`;
+  const draftsHtml = drafts.length ? `<div class="sec-h">${drafts.length === 1 ? "A draft" : drafts.length + " drafts"} to check, nothing filed yet</div>${drafts.map((dr, i) => tkDraftHtml(dr, d, i === 0, busy)).join("")}` : "";
+  const open = tickets.some(t => t.status === "open");
+  const cycleNote = open && !d.cycle ? `<div class="note-line">To start a mission from a ticket, switch on full cycles for ${esc(project)}: add <code>"cycle": true</code> to its entry in <code>config/projects.json</code>. Quarterdeck does not edit that file for you.</div>` : "";
+  const list = `<div class="sec-h">Tickets${tickets.length ? " · " + tickets.length : ""}</div>${cycleNote}<div id="tk-list" tabindex="-1" role="group" aria-label="Tickets">${tickets.length ? tickets.map(t => tkRowHtml(t, d)).join("")
+    : `<p class="hint">No tickets yet. Draft some above.</p>`}</div>`;
+  return card("New ticket", box + status + err + draftsHtml + list, {kicker: "Tickets · " + project, label: "New ticket", cls: "tk-card"});
+}
+function repoOptionsCard(project){
+  const d = project ? tkData(project) : null;
+  if(!d || d.has_repo) return "";
+  const o = Object.fromEntries((d.options || []).map(x => [x.key, x])), busy = TK.repoBusy;
+  const row = (key, title, body) => `<div class="tk-opt"><h3 class="tk-t"><span class="tk-key" aria-hidden="true">${key}</span> ${esc(title)}</h3>${body}</div>`;
+  const a = row("a", (o.a || {}).title || "I already have a GitHub repo", `<div class="tk-form">${slInput({id: "tk-repo", label: "GitHub repo (owner/name)", placeholder: "octocat/hello-world", value: TK.repoName,
+      input: actOn("input", "tkRepoName", T.value), keydown: actOn("keydown", "onEnter", "tkRepoSave")})}${btn("Save", {click: act("tkRepoSave"), disabled: busy})}</div>`);
+  const b = row("b", (o.b || {}).title || "I have a GitHub account", `<p>Quarterdeck can make a private repository named <b>${esc(project)}</b> on your GitHub account and connect it. It asks you first, and it works only when GitHub is signed in on this computer.</p>
+    <div class="btns">${btn("Create a private GitHub repo", {click: act("tkRepoCreate"), disabled: busy})}</div>
+    ${TK.repoMsg ? `<div class="callout blocked" role="alert"><p>${esc(TK.repoMsg)}</p></div>` : ""}`);
+  const c = row("c", (o.c || {}).title || "I have no GitHub account", `<p>${esc((o.c || {}).note || "A person has to do this: Quarterdeck never creates an account and never touches a password.")}</p>
+    <ol class="tk-steps">${((o.c || {}).steps || []).map(s => `<li>${esc(s)}</li>`).join("")}</ol>`);
+  const dd = row("d", (o.d || {}).title || "Not now", `<p>The tickets box below keeps tickets on this computer. The crew can build one on a local branch that you review. Nothing goes to GitHub unless you connect a repo and click.</p>`);
+  return card("No GitHub repo yet", `<p class="hint">${esc(d.sentence)}</p><div class="tk-opts">${a}${b}${c}${dd}</div>`, {kicker: "Tickets · " + project, label: "No GitHub repo yet", cls: "tk-card"});
+}
+/* ---- Ready: the one checklist that says whether a project is ready for the crew, and the one thing to do next ----
+   readyCard(project) and readyItemsHtml(items) each return a string and read their data from RD (GET /api/ready), so a later page can move them whole.
+   The writes are POSTs with confirm:true (bin/dashboard.py, "the ready checklist, the scribe's docs and the crew's switches"): /api/ready/prove (the verify
+   command, once, in the sandbox), /api/docs/draft, /api/docs/apply (a NEW branch or a pull request, never the default branch), /api/project/duties. */
+const RD = {project: "", data: null, at: 0, loading: false, show: false, busy: "", error: "", how: false, open: {}};
+const RD_OFFER = {repo: 1, docs: 1, agents: 1, cycle: 1};            // offers, said calmly: never a blocker
+const rdData = project => RD.data && RD.data.project === project ? RD.data : null;
+function rdScope(p){        // a different project starts with a clean card
+  if(RD.project === p) return;
+  Object.assign(RD, {project: p, data: null, at: 0, show: false, busy: "", error: "", how: false, open: {}});
+}
+async function loadReady(force){
+  const p = sel;
+  if(!p || RD.loading) return;
+  rdScope(p);
+  const d = rdData(p), quick = RD.busy || (d && (d.running.prove || d.running.docs));
+  if(!force && d && Date.now() - RD.at < (quick ? 1800 : 15000)) return;
+  RD.loading = true; RD.at = Date.now();
+  try{
+    const r = await fetch("/api/ready?project=" + encodeURIComponent(p));
+    if(r.status === 401){ showUnpaired(); return; }
+    const j = r.ok ? await r.json() : null;
+    if(j && sel === p){
+      const before = JSON.stringify(RD.data);
+      RD.data = j;
+      const changed = rdSettle(j) || JSON.stringify(j) !== before;
+      if(changed && view === "projects" && !tkTyping()) render();
+    }
+  }catch(e){ /* the next poll asks again */ }
+  finally{ RD.loading = false; }
+}
+function rdSettle(j){        // something this page started has ended: say how it went, once
+  if(!RD.busy || j.running.prove || j.running.docs) return false;
+  const kind = RD.busy; RD.busy = "";
+  const v = j.items.find(i => i.key === "verify"), docsErr = j.last_error.docs;
+  if(kind === "prove"){
+    RD.error = j.last_error.prove;
+    if(RD.error) announce(RD.error);
+    else if(v && v.state === "done") toast("The verify command passed in the sandbox.");
+    else announce("The verify command ran and failed. " + (v ? v.detail : ""));
+  }else if(kind === "draft"){
+    RD.error = docsErr;
+    if(docsErr) announce(docsErr); else if(j.draft){ RD.open.docs = true; announce("The draft is ready to read. Nothing was written to your project."); }
+  }else{
+    RD.error = docsErr;
+    if(docsErr) announce(docsErr); else toast(j.has_repo ? "The docs are on a new branch and a pull request was opened." : "The docs are on a new local branch. Nothing was pushed.");
+  }
+  return true;
+}
+const rdPill = i => i.state === "todo" && RD_OFFER[i.key] ? pill("", "optional") : pill(({done: "done", todo: "awaiting", blocked: "blocked"})[i.state] || "", ({done: "done", todo: "to do", blocked: "blocked", unknown: "unknown"})[i.state]);
+const rdShort = t => clip(String(t).split(/(?<=[a-z0-9)])\. /)[0], 110);
+function rdDraftHtml(d){
+  if(!d.draft) return "";
+  const busy = !!RD.busy || d.running.docs;
+  const label = d.has_repo ? "Open a pull request" : "Put it on a new branch";
+  return `<div class="rd-draft"><p class="sub">A draft is kept (${esc(d.draft.at || "")}). Nothing was written to your project. Read it first.</p>
+    ${d.draft.files.map(f => `<details class="rd-file"><summary>${esc(f.path)} <span class="sub">${esc(String(f.content).length)} characters</span></summary><pre tabindex="0" aria-label="Draft of ${esc(f.path)}">${esc(f.content)}</pre></details>`).join("")}
+    ${(d.draft.notes || []).map(n => `<p class="sub">${esc(n)}</p>`).join("")}
+    <div class="btns">${btn(label, {size: "small", click: act("rdApply"), disabled: busy, attrs: 'id="rd-apply"'})}
+      <span class="sub">${d.has_repo ? "Pushes a new branch only and opens a pull request." : "Makes a new local branch."} Never ${esc(d.default_branch)}.</span></div></div>`;
+}
+function rdItemBody(i, d){
+  let b = `<p>${esc(i.detail)}</p>`;
+  if(i.key === "verify" && i.action && i.state !== "done") b += `<p class="sub">${i.state === "todo" ? "Runs only when you click. " : ""}<code class="tk-sel">${esc(i.action)}</code></p>`;
+  if(i.key === "repo" && i.state === "todo") b += `<p class="sub">The four ways forward are in the card below and with <code class="tk-sel">${esc(i.action)}</code>.</p>`;
+  if(i.key === "docs"){
+    const miss = i.missing || [], busy = !!RD.busy || d.running.docs;
+    b += d.draft ? rdDraftHtml(d) : miss.length ? `<div class="btns">${miss.includes("readme") ? btn("Draft a README", {size: "small", click: act("rdDraft", "readme"), disabled: busy}) : ""}
+      ${miss.includes("architecture") ? btn("Draft an architecture overview", {size: "small", click: act("rdDraft", "architecture"), disabled: busy}) : ""}</div>
+      <p class="sub">Costs a few cents. The scribe reads the survey and the project; it writes nothing until you say so.</p>` : "";
+  }
+  if(i.key === "agents"){
+    b += `<ul class="rd-agents">${(i.on || []).map(a => `<li><b>${esc(a.duty)}</b> <span class="sub">${esc(a.why)}</span></li>`).join("")}</ul>`;
+    if((i.suggested || []).length) b += `<p class="sub">These fit this project and are off:</p><ul class="rd-agents">${i.suggested.map(a =>
+      `<li><b>${esc(a.duty)}</b> <span class="sub">${esc(a.why)}</span> ${btn("Turn on", {size: "small", click: act("rdTurnOn", a.duty), attrs: `aria-label="Turn on the ${esc(a.duty)}"`})}</li>`).join("")}</ul>`;
+  }
+  if(i.key === "cycle" && i.state === "todo") b += `<div class="btns">${btn("Allow cycles", {size: "small", click: act("rdCycle")})}</div>`;
+  return b;
+}
+function readyItemsHtml(items, d){
+  return `<div class="rd-list" role="list">${items.map(i => `<details class="rd-item" role="listitem"${(RD.open[i.key] === undefined ? i.state === "blocked" : RD.open[i.key]) ? " open" : ""}><summary ${act("rdToggle", i.key)}><span class="rd-label">${esc(i.label)}</span>${rdPill(i)}
+    <span class="sub">${esc(rdShort(i.detail))}</span></summary><div class="rd-body">${d ? rdItemBody(i, d) : `<p>${esc(i.detail)}</p>`}</div></details>`).join("")}</div>`;
+}
+function rdNextLabel(n){
+  return ({"set-verify": "Set a verify command", "fix-verify": "Prove it again", "enable-cycle": "Allow cycles"})[n.kind] || String(n.text).split(":")[0];
+}
+function readyCard(project){
+  rdScope(project || "");
+  const d = project ? rdData(project) : null;
+  if(!project || !d) return "";
+  if(d.ready && !RD.show) return "";
+  const n = d.next, busy = !!RD.busy || d.running.prove || d.running.docs;
+  const head = d.ready ? `<p class="hint" role="status">${esc(project)} is ready for a first ticket. The rest below is optional.</p>`
+    : `<p class="hint" role="status">${esc(project)} is not ready yet. One thing is left before a ticket makes sense.</p>`;
+  const run = busy ? callout("running", d.running.prove || RD.busy === "prove" ? "Proving" : "Working", d.running.prove || RD.busy === "prove"
+    ? "The verify command is running once in the sandbox, on a throwaway copy of the default branch. Your files are not used." : "The scribe is working. Nothing is written to your project.", {}).replace("<div ", `<div role="status" `) : "";
+  const err = RD.error && !busy ? callout("blocked", "That did not finish", esc(RD.error)) : "";
+  const how = RD.how && !busy ? `<div class="note-line">Run this in a terminal: <code class="tk-sel">${esc(n.command)}</code></div>` : "";
+  const go = btn(esc(rdNextLabel(n)), {variant: "primary", click: act("rdNext"), disabled: busy, attrs: 'id="rd-next"'});
+  return card("Is it ready?", `${head}${readyItemsHtml(d.items, d)}${run}${err}${how}<div class="btns rd-go">${go}</div><p class="sub" id="rd-next-line">Next: ${esc(n.text)}</p>`,
+    {kicker: "Ready? · " + project, label: "Is it ready?", cls: "rd-card"});
+}
+function readyLink(project){
+  const d = project ? rdData(project) : null;
+  if(!d || !d.ready || RD.show) return "";
+  return `<p class="note-line">${esc(project)} is ready for a first ticket. <button class="mlink link" ${act("rdShow")}>Ready? Show the checklist</button></p>`;
+}
+function rdToggle(key){        // the page redraws when something finishes: which items were open is kept here, not in the markup
+  const el = ACT_EL && ACT_EL.closest ? ACT_EL.closest("details") : null;
+  RD.open[key] = el ? !el.open : !RD.open[key];        // the click has not toggled the element yet when this runs
+}
+function rdShow(){ rdScope(sel); RD.show = true; render(); focusSoon("#rd-next"); }
+async function rdNext(){
+  const d = rdData(sel);
+  if(!d || RD.busy) return;
+  const n = d.next;
+  if(n.kind === "prove" || n.kind === "fix-verify") return rdProve();
+  if(n.kind === "ticket"){ const b = $("#tk-request"); if(b){ b.scrollIntoView({block: "center"}); b.focus(); } else window.scrollTo(0, document.body.scrollHeight); return; }
+  if(n.kind === "mission"){ const m = /ticket (\d+)/.exec(n.text); if(m) return tkMission(Number(m[1]), null); return; }
+  if(n.kind === "enable-cycle") return rdCycle();
+  RD.how = !RD.how; render();              // set-verify: the command is shown to copy; a verify command is typed, not clicked
+}
+async function rdProve(){
+  const p = sel, d = rdData(p);
+  if(!d || RD.busy) return;
+  if(!await confirmDlg(`This runs the verify command once, in the sandbox, on a throwaway copy of ${d.default_branch}. It is the project's own code, run with a minimal environment and no secrets. Your files are not used and nothing is installed.`, {title: "Run the verify command once?", ok: "Run it once"})) return;
+  const j = await post("/api/ready/prove", {project: p, confirm: true});
+  if(!j) return;
+  RD.busy = "prove"; RD.error = ""; RD.at = 0;
+  announce("Running the verify command once in the sandbox."); render(); loadReady(true);
+}
+async function rdDraft(which){
+  const p = sel;
+  if(RD.busy) return;
+  if(!await confirmDlg(`The scribe reads the survey of ${p} and its files, and drafts ${which === "readme" ? "a README" : "an architecture overview"}. It costs a few cents. Nothing is written to your project; you read the draft first.`, {title: "Draft it?", ok: "Draft it"})) return;
+  const j = await post("/api/docs/draft", {project: p, which, confirm: true});
+  if(!j) return;
+  RD.busy = "draft"; RD.error = ""; RD.at = 0;
+  announce("The scribe is drafting. This can take a minute and costs a few cents; nothing is written to your project."); render(); loadReady(true);
+}
+async function rdApply(){
+  const p = sel, d = rdData(p);
+  if(!d || RD.busy) return;
+  const msg = d.has_repo ? `This makes a new branch from ${d.default_branch}, pushes that branch only, and opens a pull request with the drafted files. ${d.default_branch} is never touched, and no file that exists is overwritten.`
+    : `This makes a new local branch from ${d.default_branch} with the drafted files. Nothing is pushed, ${d.default_branch} is never touched, and no file that exists is overwritten.`;
+  if(!await confirmDlg(msg, {title: d.has_repo ? "Open a pull request?" : "Put it on a new branch?", ok: d.has_repo ? "Open a pull request" : "Make the branch"})) return;
+  const j = await post("/api/docs/apply", {project: p, confirm: true});
+  if(!j) return;
+  RD.busy = "apply"; RD.error = ""; RD.at = 0;
+  announce("Putting the drafted files on a new branch."); render(); loadReady(true);
+}
+async function rdTurnOn(duty){
+  const j = await post("/api/project/duties", {project: sel, add: [duty], confirm: true});
+  if(!j) return;
+  toast(`Turned on the ${duty}.`); await tick(); loadReady(true); loadTickets(true);
+}
+async function rdCycle(){
+  if(!await confirmDlg(`Allow full cycles for ${sel}? A cycle takes a ticket through the purser, the dev panel and the shipwright and spends model money. It also turns on the purser and the dev panel. It is only ever started by you.`, {title: "Allow cycles?", ok: "Allow cycles"})) return;
+  const j = await post("/api/project/duties", {project: sel, cycle: true, confirm: true});
+  if(!j) return;
+  toast("Cycles are allowed for " + sel + "."); await tick(); loadReady(true); loadTickets(true);
+}
 /* ---- Start a full cycle: only for a project that opted in (cycle: true). The dialog says what it costs and what it does; only its Start button posts. ---- */
-let cycleDlg = {project: "", issue: "", est: null, busy: false};
+let cycleDlg = {project: "", issue: "", ticket: null, ticketTitle: "", est: null, busy: false};
 const cycleOptedIn = () => (S.projects || []).filter(p => p.cycle);
 function cycleCard(quiet){
   const p = (S.projects || []).find(x => x.name === sel), ok = cycleOptedIn();
@@ -1238,12 +1936,14 @@ function cycleCard(quiet){
     <div class="btns" style="margin-top:var(--s3)">${btn("Start a full cycle", {variant: "primary", click: act("openCycleDialog", who)})}</div>`,
     {kicker: "Full cycle" + (who ? " · " + who : ""), label: "Start a full cycle", cls: "cycle-card"});
 }
-function openCycleDialog(project){
+function openCycleDialog(project, ticket, issue){      // a ticket (a local ticket's number) or an issue number may arrive filled in, from the Tickets card
   const ok = cycleOptedIn();
-  cycleDlg = {project: project || (ok[0] || {}).name || "", issue: "", est: null, busy: false, pick: !project && ok.length > 1};
+  const tk = ticket ? (((tkData(project) || {}).tickets) || []).find(x => x.id === ticket) : null;
+  cycleDlg = {project: project || (ok[0] || {}).name || "", issue: issue ? String(issue) : "", ticket: tk ? tk.id : null, ticketTitle: tk ? tk.title : "", est: null, busy: false, pick: !project && ok.length > 1};
   $("#cycle-body").innerHTML = `${cycleDlg.pick ? slSelect({id: "cycle-proj", label: "Project", value: cycleDlg.project, options: ok.map(p => [p.name, p.name]),
       change: actOn("change", "cycleProject", T.sel)}) : `<p class="sub">Project</p><p><b>${esc(cycleDlg.project)}</b></p>`}
-    ${slInput({id: "cycle-issue", label: "Issue number", type: "number", placeholder: "for example 29", attrs: 'min="1" step="1" inputmode="numeric"', input: actOn("input", "cycleIssue", T.value)})}
+    ${cycleDlg.ticket ? `<p class="sub">Local ticket</p><p><b>#${cycleDlg.ticket}</b> ${esc(cycleDlg.ticketTitle)}</p>`
+      : slInput({id: "cycle-issue", label: "Issue number", type: "number", value: cycleDlg.issue, placeholder: "for example 29", attrs: 'min="1" step="1" inputmode="numeric"', input: actOn("input", "cycleIssue", T.value)})}
     <div id="cycle-facts"></div>`;
   paintCycleFacts();
   $("#cycle-dlg").show();
@@ -1257,7 +1957,7 @@ async function loadCycleEstimate(){
     if(cycleDlg.project === pr){ cycleDlg.est = j; paintCycleFacts(); }
   }catch(e){ if(cycleDlg.project === pr){ cycleDlg.est = {error: true}; paintCycleFacts(); } }
 }
-const cycleOkIssue = () => /^[1-9]\d{0,6}$/.test(String(cycleDlg.issue).trim());
+const cycleOkIssue = () => !!cycleDlg.ticket || /^[1-9]\d{0,6}$/.test(String(cycleDlg.issue).trim());
 function paintCycleFacts(){
   const box = $("#cycle-facts"), e = cycleDlg.est;
   if(!box) return;
@@ -1275,20 +1975,23 @@ function paintCycleFacts(){
   }
   box.innerHTML = `<dl class="cycle-facts"><dt>Expected cost</dt><dd>${cost}</dd>${ceil ? `<dt>Ceiling</dt><dd>${ceil}</dd><dt>Budget left today</dt><dd>${daily}</dd>` : ""}</dl>
     <p class="sub">What it will do</p>
-    <ol class="cycle-list"><li>Rewrites the issue into requirements a stranger could build from.</li><li>A panel of agents plans the change.</li><li>Builds it on a new branch and opens a pull request.</li>
+    ${cycleDlg.ticket ? `<ol class="cycle-list"><li>Rewrites the ticket into requirements a stranger could build from.</li><li>A panel of agents plans the change.</li><li>Builds it on a new local branch in your project folder.</li>
+      <li>Stops for you. There is no pull request, so the test writer and the reviewers do not run.</li></ol>
+    ${callout("awaiting", "It writes a local branch, and it spends money.", "It never pushes, opens a pull request or merges. You review the branch yourself.")}` : `<ol class="cycle-list"><li>Rewrites the issue into requirements a stranger could build from.</li><li>A panel of agents plans the change.</li><li>Builds it on a new branch and opens a pull request.</li>
       <li>A separate agent writes tests from the requirements alone, without seeing the change.</li><li>Five reviewers read the pull request; fixes only what they found, in at most three rounds.</li><li>Stops for you.</li></ol>
-    ${callout("awaiting", "It writes a branch and a pull request, and it spends money.", "It never merges, approves or pushes to the main branch. You read the pull request and merge it yourself.")}`;
+    ${callout("awaiting", "It writes a branch and a pull request, and it spends money.", "It never merges, approves or pushes to the main branch. You read the pull request and merge it yourself.")}`}`;
   const yes = $("#cycle-yes"); if(yes){ yes.disabled = !(e && !e.error) || !cycleOkIssue() || spent || cycleDlg.busy; yes.loading = cycleDlg.busy; }
 }
 async function startCycle(){
   if(!cycleOkIssue() || cycleDlg.busy) return;
   cycleDlg.busy = true; paintCycleFacts();
-  const j = await post("/api/cycle/start", {project: cycleDlg.project, issue: Number(String(cycleDlg.issue).trim()), confirm: true});
+  const body = cycleDlg.ticket ? {project: cycleDlg.project, ticket: cycleDlg.ticket, confirm: true} : {project: cycleDlg.project, issue: Number(String(cycleDlg.issue).trim()), confirm: true};
+  const j = await post("/api/cycle/start", body);
   cycleDlg.busy = false; paintCycleFacts();
   if(!j) return;                                            // the toast already said why
   $("#cycle-dlg").hide();
-  toast(`Cycle started on ${cycleDlg.project} #${cycleDlg.issue}.`);
-  tick();
+  toast(`Cycle started on ${cycleDlg.project} ${cycleDlg.ticket ? "ticket #" + cycleDlg.ticket : "#" + cycleDlg.issue}.`);
+  tick(); loadTickets(true);
   if(j.id) openMissionPage("cycle:" + j.id); else go("missions");
 }
 function missionEmpty(){
@@ -1322,10 +2025,20 @@ function missionActions(m){
   return parts.length ? `<div class="btns mission-actions" style="margin-top:14px">${parts.join("")}</div>` : "";
 }
 const TONE = {running: "running", blocked: "blocked", awaiting: "awaiting", done: "done", idle: ""};
+// A cycle on a local ticket: the crew's steps as the record holds them (a stage that did not apply is "Skipped" with its reason, never a failure), the local
+// branch and the command that shows it as plain selectable text, and one line of what comes next.
+function ticketMission(m){
+  const t = m.ticket, word = v => ({SKIPPED: "Skipped", WAITING: "Waiting for you"})[String(v || "").toUpperCase()] || String(v || "");
+  const steps = (m.history || []).map(h => li({title: esc(h.duty), sub: esc(h.detail || ""), end: pill(String(h.verdict).toUpperCase() === "SKIPPED" ? "" : verdictClass(h.verdict), word(h.verdict))})).join("");
+  return `<div class="sec-h">The crew's steps</div><div role="group" aria-label="The crew's steps">${steps}</div>
+    <dl class="mdl tk-facts"><dt>Ticket</dt><dd>#${esc(t.n)}</dd>${t.branch ? `<dt>Local branch</dt><dd><code class="tk-sel">${esc(t.branch)}</code></dd>` : ""}${t.review ? `<dt>Review it</dt><dd><code class="tk-sel">${esc(t.review)}</code></dd>` : ""}</dl>
+    ${t.next ? `<p class="hint">What is next: ${esc(t.next)}</p>` : ""}`;
+}
 function missionSummary(m){
   const b = m.blocker, d = m.decision, ev = m.evidence;
   const main = (m.pipeline ? pipelineHtml(m.pipeline) : "")
     + callout(TONE[m.state], esc(m.detail.title), esc(m.detail.body), {}).replace(/<\/div>$/, missionActions(m) + "</div>")
+    + (m.ticket ? ticketMission(m) : "")
     + (b ? callout("blocked", b.cls ? "Blocked" : "Why it stopped", esc(b.cause) + (b.cls === "config" ? `<br><span class="sub">Running it again will not fix this. It needs a configuration change first.</span>` : ""), {}).replace("<h3>", `<h3>`) : "")
     + (ev && ev.proof && m.state === "done" ? `<div class="callout done"><h3>Proof</h3><p>${esc(ev.proof)}</p></div>` : "");
   const side = (d ? callout("awaiting", `Open decision: ${esc(d.title)}`, esc(d.body || "") + (d.ask ? `<br><span class="sub">The panel's note: ${esc(d.ask)}</span>` : "") + `<br><span class="sub">The panel did not list options for this one. Decide it, then record the choice where the project keeps its decisions.</span>`)
@@ -2647,7 +3360,7 @@ function showLedgerRow(key, project){
     if(row){ row.scrollIntoView({block: "center"}); row.focus({preventScroll: true}); }
   });
 }
-function showLog(n){ if(logFrom && n !== logFrom.duty + "-" + logFrom.project) logFrom = null; curLog = n; if(view !== "log") go("log"); else { render(); } loadLog(); }
+function showLog(n){ if(logFrom && n !== logFrom.duty + "-" + logFrom.project) logFrom = null; curLog = n; if(view !== "log") go("log"); else { routeTouch(); render(); } loadLog(); }
 async function loadLog(){
   if(!curLog || view !== "log") return;
   try{
@@ -2756,11 +3469,19 @@ async function attachLook(){
   attachLast = j;
   const p = j.profile, e = j.proposal.entry, list = k => p[k].map(i => i.name).join(", ");
   const line = (label, k) => p[k].length ? `<li><b>${label}</b> ${esc(list(k))}</li>` : "";
-  out.innerHTML = `<h3>What was found in ${esc(p.name)}</h3><ul>`
+  const plan = j.proposal.duty_reasons || {}, sugg = j.proposal.suggested || [], role = Object.fromEntries(j.duty_options.map(o => [o.name, o.role]));
+  const dutyBox = (name, checked) => slCheckbox(`${esc(name)}<small> ${esc((plan[name] || {}).why || role[name] || "")}</small>`, {attrs: `data-ad="${esc(name)}"${checked ? " checked" : ""}`});
+  const dutyGroup = names => names.length ? `<div class="focus-rows" style="flex-direction:column;align-items:flex-start;gap:0">${names.map(n => dutyBox(n, e.duties.includes(n))).join("")}</div>` : "";
+  const known = j.duty_options.map(o => o.name);
+  const dOn = known.filter(n => e.duties.includes(n)), dSug = known.filter(n => !e.duties.includes(n) && sugg.includes(n)), dRest = known.filter(n => !e.duties.includes(n) && !sugg.includes(n));
+  const cmdHelp = (k, none) => e[k] ? cap(j.proposal.reasons[k] || "") + ". One plain command." : none;
+  out.innerHTML = `<h3>What was found in ${esc(p.name)}</h3>
+    <p id="at-stack"><b>${esc(p.stack && p.stack.summary || "")}</b></p><ul>`
     + line("Languages", "languages") + line("Frameworks", "frameworks") + line("Commands", "commands") + line("Checks that run on push", "ci")
     + line("Containers", "containers") + line("Infrastructure", "infrastructure") + line("Deploys to", "deploy_targets") + line("Sensitive areas", "sensitive")
     + (p.secret_files.length ? `<li><b>Secret files</b> ${esc(list("secret_files"))} (named only, never opened)</li>` : "")
-    + line("Agent set-up already there", "agent_config") + `</ul>`
+    + line("Agent set-up already there", "agent_config")
+    + (j.survey ? `<li><b>Documents</b> ${esc(j.ready.docs_line || "")}</li>${j.survey.entry_points.length ? `<li><b>Entry points</b> ${esc(j.survey.entry_points.slice(0, 4).map(e => e.file).join(", "))}</li>` : ""}` : "") + `</ul>`
     + (p.notes.length ? `<p>${p.notes.map(n => esc(cap(n))).join("<br>")}</p>` : "")
     + `<h3>What the crew would do</h3>
       <p>This is a proposal. Change anything you like; nothing is added until you click the button at the end.</p>
@@ -2768,22 +3489,35 @@ async function attachLook(){
       <li><b>Stack notes</b> ${esc(e.packs.join(", ") || "none")} ${e.packs.map(id => packPill((j.pack_status || {})[id])).join(" ")}. ${esc(cap(j.proposal.reasons.packs))}.</li></ul>
       <div class="sec-h">Duties</div>
       <p class="hint">${esc(cap(j.proposal.reasons.duties))}.</p>
-      <div class="focus-rows" style="flex-direction:column;align-items:flex-start;gap:0">${j.duty_options.map(o => slCheckbox(`${esc(o.name)}<small> ${esc(o.role)}</small>`, {attrs: `data-ad="${esc(o.name)}"${e.duties.includes(o.name) ? " checked" : ""}`})).join("")}</div>
-      ${slInput({id: "at-verify", label: "Command that proves a change works", value: e.verify, help: e.verify ? "One plain command. The Shipwright needs one." : "None was found. The Shipwright stays off until you give one."})}
+      ${dutyGroup(dOn)}
+      ${dSug.length ? `<div class="sec-h">These also fit this stack, switched off</div>
+      <p class="hint">Nothing here is on unless you tick it.</p>${dutyGroup(dSug)}` : ""}
+      ${dRest.length ? `<div class="sec-h">Other duties, off</div>${dutyGroup(dRest)}` : ""}
+      <div class="sec-h">Commands</div>
+      ${slInput({id: "at-verify", label: "Command that proves a change works", value: e.verify, help: e.verify ? cap(j.proposal.reasons.verify) + ". One plain command. The Shipwright needs one." : "None was found. The Shipwright stays off until you give one."})}
+      ${slInput({id: "at-build", label: "Build command", value: e.build || "", help: cmdHelp("build", "None was found. Leave it empty if there is none.")})}
+      ${slInput({id: "at-lint", label: "Lint command", value: e.lint || "", help: cmdHelp("lint", "None was found. Leave it empty if there is none.")})}
+      ${e.typecheck ? slInput({id: "at-typecheck", label: "Type check command", value: e.typecheck, help: cmdHelp("typecheck", "")}) : ""}
+      <p class="hint">The build command is the one the Shipwright's checks already run. Lint and type check are recorded for your review and the crew's notes; nothing runs them by itself.</p>
       ${slTextarea({id: "at-forbid", label: "Paths the crew may not touch, one per line", rows: 6, value: e.forbidden_paths.join("\n")})}
       <p class="hint">The build, CI and dependency files the harness already protects cannot be removed.</p>
       <div class="sec-h">Standing rules</div>
-      <div class="focus-rows" style="flex-direction:column;align-items:flex-start;gap:0">${j.guardrail_options.map((g, i) => slCheckbox(esc(g), {attrs: `data-ag="${esc(g)}" checked${i < 2 ? " disabled" : ""}`})).join("")}</div>
-      <p class="hint">Never merging and never pushing to ${esc(e.default_branch)} stay on.</p>
+      <div class="focus-rows" style="flex-direction:column;align-items:flex-start;gap:0">${j.guardrail_options.map((g, i) => slCheckbox(esc(g), {attrs: `data-ag="${esc(g)}" checked${i < 3 ? " disabled" : ""}`})).join("")}</div>
+      <p class="hint">Never merging, never pushing to ${esc(e.default_branch)} and never touching secrets stay on.</p>
       <div class="sec-h">A note for other coding agents</div>
       ${slCheckbox("Also add an AGENTS.md to the project", {id: "at-agents"})}
       <p class="hint">Off by default. It would be a small new file in the project that says how the crew works there. An AGENTS.md that is already there is never changed.</p>
+    <div class="sec-h">The checklist, as it would be right after you add it</div>
+      <p class="hint">Nothing here is run. The verify command is proven once, later, only when you click.</p>
+      ${j.ready ? readyItemsHtml(j.ready.items, null) : ""}
     ${slInput({id: "at-name", label: "Name in Quarterdeck", value: j.proposal.name})}
     <div class="btns">${btn("Add this project", {variant: "primary", click: act("attachAdd")})}</div>`;
 }
 function attachEdits(){
   const on = a => [...document.querySelectorAll(`#at-out [${a}]`)].filter(c => c.checked).map(c => c.getAttribute(a));
-  return {duties: on("data-ad"), verify: $("#at-verify").value.trim(), guardrails: on("data-ag"),
+  const cmd = id => { const el = $(id); return el ? el.value.trim() : undefined; };
+  const more = {}; for(const [k, id] of [["build", "#at-build"], ["lint", "#at-lint"], ["typecheck", "#at-typecheck"]]){ const v = cmd(id); if(v !== undefined) more[k] = v; }
+  return {...more, duties: on("data-ad"), verify: $("#at-verify").value.trim(), guardrails: on("data-ag"),
     forbidden_paths: $("#at-forbid").value.split("\n").map(x => x.trim()).filter(Boolean)};
 }
 function yourDay(){
@@ -2800,7 +3534,7 @@ function yourDay(){
     ${rem && rem.connected ? `<div class="sec-h">Reminders${r.overdue.length ? ` · ${r.overdue.length} overdue` : ""}</div>
       ${due.slice(0, 4).map(i => row({title: i.title, time: new Date(i.at).getTime() < now ? "overdue" : "today"})).join("") || '<p class="hint">Nothing due today.</p>'}
       ${r.undated ? `<div class="cap-item"><span>${r.undated} more with no date</span></div>` : ""}` : ""}`,
-    {kicker: "Your day", count: fresh, label: "Your day"});
+    {kicker: "Your day", count: fresh, label: "Your day", attrs: 'id="home-day" tabindex="-1"'});
 }
 function homeNow(){
   const C = S.captures || {items: [], open: 0};
@@ -2907,9 +3641,18 @@ async function attachAdd(){
   const j = await post("/api/attach", {path, name, apply: true, confirm: true, edits: attachEdits(), agents_md: !!$("#at-agents").checked});
   if(!j) return;
   if(nwBrief.id) await post("/api/brief/action", {id: nwBrief.id, action: "link", project: j.proposal.name, confirm: true});   // the brief now belongs to the project it was written for
-  closeDrawer();
   toast(`Added ${j.proposal.name}.` + ({written: " AGENTS.md was added to the project.", exists: " An AGENTS.md was already there, so it was left alone.", failed: " AGENTS.md could not be written."}[j.agents_md] || ""));
+  attachDone(j);
   await tick();
+}
+function attachDone(j){        // the drawer's last screen: the real checklist, in the same order, and the one next step
+  const name = j.proposal.name, r = j.ready;
+  $("#dtitle").textContent = `Added ${name}`;
+  $("#dbody").innerHTML = `<p>${esc(name)} is in your registry, and its survey is kept in your data folder. Nothing was changed inside the project.</p>
+    <div class="sec-h">Is it ready?</div>${readyItemsHtml(r.items, null)}
+    <p class="sub">Next: ${esc(r.next.text)}</p>
+    <div class="btns">${btn("Open the Ready card", {variant: "primary", click: act("seq", ["closeDrawer"], ["selectProject", name], ["rdShow"], ["go", "projects"])})}${btn("Close", {click: act("closeDrawer")})}</div>`;
+  focusSoon("#dtitle");
 }
 const drawerOn = () => { const d = $("#drawer"); return !!(d && d.open); };
 const paletteOn = () => { const d = $("#palette"); return !!(d && d.open); };
@@ -2931,6 +3674,7 @@ function paletteResults(q){
   const out = [];
   const push = (scope, label, action) => out.push({scope, label, action});
   if(q.length >= 3 && hitq(q, "brain", "3d map", "memory map")) push("place", "Brain", act("seq", ["closePalette"], ["dockGo", "brain"]));
+  if(q.length >= 3 && hitq(q, "projects", "all projects", "overview")) push("place", "Projects, every project together", act("seq", ["closePalette"], ["openProjects"]));
   for(const p of S.projects) if(hitq(q, p.name)) push("project", p.name, act("seq", ["selectProject", p.name], ["closePalette"]));
   for(const m of S.missions || []) if(hitq(q, m.objective, m.project))
     push(`mission · ${m.project}`, m.objective, act("seq", ["closePalette"], ["selectProject", m.project], ["go", "missions"], ["openMission", m.id]));
@@ -3510,7 +4254,7 @@ async function doCommand(t, opts = {}){
   if(!asst) return "Still loading. Try again in a second.";
   if(cv) mem = cv.expire(mem, Date.now());
   const placeName = id => (EXT.places.find(pl => pl.id === id) || {}).label;
-  const views = [...VIEWS.filter(v => !v.hidden).map(v => ({id: v.id, label: v.place ? placeName(v.place) + " " + v.label : v.label})), {id: "overview", label: "Home"}, ...EXT.places.map(pl => ({id: pl.id, label: pl.label}))];
+  const views = [...VIEWS.filter(v => !v.hidden).map(v => ({id: v.id, label: v.id === "projects" ? "Projects" : v.place ? placeName(v.place) + " " + v.label : v.label})), ...EXT.places.map(pl => ({id: pl.id, label: pl.label}))];
   let c = asst.parseCommand(t, {views, projects: S.projects.map(p => p.name), duties: [...new Set(S.projects.flatMap(p => p.duties || []))]});
   if(c.intent === "unknown") c = await understandRemote(t, views, c);
   $("#talk-confirm").replaceChildren();
@@ -3666,15 +4410,15 @@ function brainBar(){
 // The Map | Rhythm switch: one click either way, the toolbar and the page stay where they are.
 function setBrainMode(m){
   if(brainMode === m) return;
-  brainMode = m; paintFocus(true); rhythmSync();
+  brainMode = m; routeTouch(); paintFocus(true); rhythmSync();
   if(m === "map") window.dispatchEvent(new Event("resize"));
 }
 // My rhythm's project choice is the app's one project scope (the same `sel` the top bar sets). The top bar is hidden inside the Brain, so the toolbar shows it in the first slot after the switch.
 const rhythmProject = () => ((S && S.projects) || []).some(p => p.name === sel) ? sel : "";
 function rhythmScope(v){
   if(v === sel) return;
-  sel = v; localStorage.setItem("quarterdeck.project", v); curLog = null; board = null; boardFor = null; prs = null; prsFor = null;
-  renderProjSwitch(); paintFocus(true); rhythmSync();
+  setKept(v); curLog = null; board = null; boardFor = null; prs = null; prsFor = null; scopeAddon = "";
+  routeTouch(); renderProjSwitch(); paintFocus(true); rhythmSync();
 }
 // Replay: drag a day slider and the nodes re-size from that day's buckets, with that day's Ledger events in the panel.
 // It never plays by itself and nothing moves but the sizes.
@@ -4162,33 +4906,41 @@ async function brainAttach(){
   }catch(e){ brainErr = e.message || String(e); if(view === "brain") render(); }
 }
 // What the page header says: a mono kicker (where you are), the big heading, one line of description, and any actions.
+// The scope every page is showing: all projects, one project, or one add-on. It is shown as a chip in the page header; the chip opens the project select, which stays the one place to choose it.
+function scopeNow(){
+  if(atPlace){ const a = addonList().find(x => x.place === atPlace); return {kind: "addon", label: "Add-on: " + (a ? a.label : (EXT.places.find(pl => pl.id === atPlace) || {}).label || atPlace)}; }
+  if(scopeAddon){ const a = addonList().find(x => x.id === scopeAddon); return {kind: "addon", label: "Add-on: " + (a ? a.label : scopeAddon)}; }
+  return S.projects.some(p => p.name === sel) ? {kind: "project", label: sel} : {kind: "all", label: "All projects"};
+}
+const scopeChip = sc => `<button class="chip scope-chip" data-kind="${sc.kind}" ${act("openScope")} aria-label="Scope: ${esc(sc.label)}. Change the scope." title="What this page shows. Choose a project or an add-on.">${slIcon("folder2")}<b>${esc(sc.label)}</b></button>`;
+function openScope(){ const el = $("#proj-switch"); if(el && el.show) el.show(); else if(el) el.focus(); }
 function pageMeta(v){
-  const g = groupOf(v.id), scope = atPlace || v.id === "brain" ? "" : sel || "All projects";
+  const g = groupOf(v.id), scope = v.id === "brain" || !(atPlace || scopeApplies(v.id)) ? null : scopeNow();
   const where = atPlace ? ((EXT.places.find(pl => pl.id === atPlace) || {}).label || "") : g ? g.label : v.label;
-  const kicker = [where, v.id !== "overview" && g && g.views.length > 1 ? v.label : "", scope].filter(Boolean).join(" · ");
+  const kicker = [where, v.id !== "overview" && g && g.views.length > 1 ? v.label : ""].filter(Boolean).join(" · ");
   const p = atPlace || v.id === "brain" || v.id === "fleet" ? null : S.projects.find(x => x.name === sel);
   let title = p ? `${sel} · ${v.title}` : v.title, sub = v.sub, acts = "";
-  if(v.id === "overview" && !atPlace){
-    const f = homeFacts(), h = homeHeadline(f, nextNow());
-    title = h.text; sub = h.sub; acts = h.noProjects ? "" : pill(h.state, h.state === "idle" ? "Idle" : MSTATE[h.state][0]);
+  if(v.id === "projects" && p){
+    title = sel; sub = (pjOf(sel) || {}).stack || p.summary || v.sub;
   } else if(v.id === "mission" && missionNow()){
-    const m = missionNow(); title = m.title; sub = ""; acts = pill(m.state, (MSTATE[m.state] || MSTATE.idle)[0]);
-    return {kicker: `Mission · ${m.project || "No project"} · ${m.mission_ref}`, title, sub, acts, p: null};
+    const m = missionNow(); title = m.title; sub = m.line || ""; acts = pill(m.state, (MSTATE[m.state] || MSTATE.idle)[0]);
+    return {kicker: `Mission · ${m.mission_ref}`, title, sub, acts, p: null, scope, project: m.project ? ["Project", m.project] : m.addon ? ["Add-on", (addonList().find(a => a.id === m.addon || a.place === m.addon) || {}).label || m.addon.charAt(0).toUpperCase() + m.addon.slice(1)] : ["Project", "None"]};
   } else if(v.id === "crew" && crewMod){
     const rows = crewRows().filter(r => r.state !== "off"), n = rows.length, run = rows.filter(r => r.state === "running").length, att = rows.filter(r => r.state === "attention").length;
     const where = sel ? `on ${sel}` : `across ${S.projects.length} ${plural(S.projects.length, "project")}`;
     sub = `${n} ${plural(n, "agent")} ${where}: ${run ? run + " running" : "none running"}, ${att ? att + " " + plural(att, "needs", "need") + " attention" : "none need attention"}. A run only reports unless you switch on Write for real.`;
-  } else if(v.id === "spend") sub = v.sub + " Figures shown are fleet-wide regardless of project selection.";
+  } else if(v.id === "spend") sub = v.sub + " Figures shown are for every project together.";
   else if(v.id === "board" && p && p.board && boardFor === sel && board && board.fetched) sub = v.sub + "  ·  read " + ago(board.fetched);
-  if(p) acts = `<a class="pill blue" href="https://github.com/${esc(p.repo)}" target="_blank" rel="noopener">${esc(p.repo)} ↗</a>
-       <a class="pill" href="https://github.com/${esc(p.repo)}/issues" target="_blank" rel="noopener">issues ↗</a>
+  if(p) acts = `${p.repo ? `<a class="pill blue" href="https://github.com/${esc(p.repo)}" target="_blank" rel="noopener">${esc(p.repo)} ↗</a>
+       <a class="pill" href="https://github.com/${esc(p.repo)}/issues" target="_blank" rel="noopener">issues ↗</a>` : pill("", "no GitHub repo")}
        ${p.board ? `<a class="pill" href="${esc(safeUrl(p.board))}" target="_blank" rel="noopener">project board ↗</a>` : ""}
        ${p.cycle ? pill("", "cycle: opted in") : ""}
        ${(p.guardrails||[]).length ? btn(p.guardrails.length + " guardrails", {size: "small", click: act("showGuardrails")}) : ""}`;
-  return {kicker, title, sub, acts, p};
+  return {kicker, title, sub, acts, p, scope, project: null};
 }
 function render(){
   if(!S) return;
+  syncSel();
   if(cardSel && (view !== "board" || cardSel.project !== sel)) closeCard();
   if(schedOpen && $("#s-project")) schedDraft = {
     project:$("#s-project").value, duty:$("#s-duty").value, args:$("#s-args").value,
@@ -4204,6 +4956,7 @@ function render(){
   };
   // A remembered view can belong to the other side of the rail; fall back to its front page.
   if(!VIEWS.some(x => x.id === view && (x.place || "") === atPlace)) view = atPlace || "overview";
+  syncSel();                                              // the project the page shows: the chosen one on a page with a scope, none elsewhere
   const v = VIEWS.find(x => x.id === view);
   const home = v.id === "overview" && !atPlace;
   const imm = v.id === "brain" && !atPlace;
@@ -4213,19 +4966,21 @@ function render(){
   const meta = pageMeta(v), p = meta.p;
   $("#ptitle").title = v.id === "brain" ? v.sub : "";
   $("#pkicker").textContent = meta.kicker; $("#ptitle").textContent = meta.title; $("#psub").textContent = meta.sub;
+  setHtml($("#pscope"), meta.scope ? scopeChip(meta.scope) : "");
+  { const pp = $("#pproj"); pp.hidden = !meta.project; setHtml(pp, meta.project ? `${slIcon("folder2")}<span class="pp-l">${esc(meta.project[0])}</span><b>${esc(meta.project[1])}</b>` : ""); }
   setHtml($("#pacts"), meta.acts);
   if(document.title !== meta.title + " · Quarterdeck"){ document.title = meta.title + " · Quarterdeck"; if(annRunning !== null) announce(meta.title); }
   const brainMounted = v.id === "brain" && !brainErr && $("#brain-slot .brain-host");
   const keep = ["cap-in", "note-new", "note-q", "note-edit", "bf-note"].map(id => ({id, e: document.getElementById(id)})).filter(k => k.e)
-    .map(k => ({id: k.id, v: k.e.value, f: document.activeElement === k.e, at: k.e.selectionStart, to: k.e.selectionEnd}));
+    .map(k => ({id: k.id, v: k.e.value, f: document.activeElement === k.e, at: k.e.selectionStart, to: k.e.selectionEnd})).filter(k => typeof k.v === "string");     // a field the browser has not upgraded yet has no value to keep
   const fleetNote = fleetProjects.has(sel) && !["fleet", "brain", "crew"].includes(v.id) && !atPlace
     ? `<div class="note-line">${esc(sel)} runs its own agents, so this page has nothing from Quarterdeck's duties. ${btn("See all its work in Fleet", {size: "small", variant: "primary", click: act("go", "fleet")})}</div>` : "";
   // Pages that are about a project say so plainly, with the one next step, when there are no projects at all.
-  const needsProject = !atPlace && S.projects && !S.projects.length && !(S.demo && S.demo.on) && ["panels", "documents", "board", "prs", "crew", "log", "ledger", "timeline", "operations"].includes(v.id);
+  const needsProject = !atPlace && S.projects && !S.projects.length && !(S.demo && S.demo.on) && ["projects", "panels", "documents", "board", "prs", "crew", "log", "ledger", "timeline", "operations"].includes(v.id);
   renderTabs(v.id);
   const hadTab = $("#view").contains(document.activeElement) && document.activeElement.tagName === "SL-TAB";
   if(needsProject) setHtml($("#view"), emptyState({kicker: v.label, title: "No projects yet.", body: "This page fills in once a project is added.", label: "Add a project", click: act("openAttach")}));
-  else if(!brainMounted) setHtml($("#view"), fleetNote + (({overview:viewCommandCenterNew, brain:viewBrain, missions:viewMissions, notes:viewNotes, timeline:viewTimeline, inbox:viewInbox, mission:viewMission,
+  else if(!brainMounted) setHtml($("#view"), fleetNote + (({overview:viewCommandCenterNew, projects:viewProjects, brain:viewBrain, missions:viewMissions, notes:viewNotes, timeline:viewTimeline, inbox:viewInbox, mission:viewMission,
                            showcase:viewShowcase, operations:viewOperations, panels:viewPanels, documents:viewDocuments,
                            board:viewBoard, prs:viewPrs, spend:viewSpend, crew:viewCrew, fleet:viewFleet, connections:viewConnections, settings:viewSettings, ledger:viewLedger, log:viewLog})[v.id] || v.render)());
   if(runBack && Date.now() < runBack.until && (!document.activeElement || document.activeElement === document.body)) setTimeout(() => focusRun(runBack.key), 40);   // the poll re-draws the rows: the Run button the dialog gave focus back to keeps it
@@ -4240,6 +4995,8 @@ function render(){
   renderSelBar();
   if(v.id === "log") loadLog();
   if(v.id === "timeline") loadTimeline();
+  if(v.id === "projects"){ loadTickets(); loadReady(); loadGuardrails(); }
+  if(v.id === "overview" && !atPlace) loadTimeline("24h");
   if(v.id === "fleet") loadFleet();
   if(v.id === "connections") loadConnections();
   if(v.id === "settings") loadSettings();
@@ -4310,6 +5067,7 @@ async function tick(){
     if(r.status === 401){ showUnpaired(); return; }
     if(!r.ok) throw new Error("state " + r.status);
     S = await r.json();
+    if(!routeReady){ await routeLoad; initRoute(); }
     try{ sgTick(); }catch(e){}
     loadAttention();
     lastOk = Date.now();
@@ -4364,7 +5122,6 @@ const ACTIONS = {
   briefNote: v => { briefUi.note = v; },
   tlClear: () => { tlUi.duty = tlUi.verdict = ""; tlSave(); render(); },
   selectBy: (pid, project, mode) => selectWhere(pid, project, mode === "serious" ? r => ["critical", "major"].includes(r.severity) : mode === "all" ? () => true : () => false),
-  openEvent: i => openEvent(tlEvents[i]),
   cycleProject: v => { cycleDlg.project = v; cycleDlg.est = null; paintCycleFacts(); loadCycleEstimate(); },
   cycleIssue: v => { cycleDlg.issue = v; paintCycleFacts(); },
   caseStepBy: d => caseStepTo(caseStep + d),
@@ -4380,12 +5137,14 @@ const ACTIONS = {
   crewEnableHelp, crewSchedule, openRun, runGo, runPaint,
   dockStartOver, dockGo, dockToggle, explainWrites, fileAsIssues, fixItem, fixSelected, fleetAct, focusEdit, go, helmOrb, leaveBrain, linkPanelToMission,
   loadBoard, markSeen, mergePr, noteAdd, noteDone, noteEditSave, noteEditStart, noteEditStop, noteFilter, notePromote, noteTag, nwMakeBrief,
-  openAttach, openAttention, openCard, openCycleDialog, openDoc, openFocusDrawer, openFullLog, openMission, openMissionPage, openPalette, openPanel, openShowcase,
+  openScope, openAttach, openAttention, openCard, openCycleDialog, openDoc, openFocusDrawer, openFullLog, openMission, openMissionPage, openPalette, openPanel, openShowcase,
   openWhatChanged, palGo, pickCase, planAct, planMove, projSwitch, proposeMissionPlan, publishShowcase, queueAction, replayStep, restartDemo, rhythmScope,
   rowClick, rowKey, runHarbourmaster, runNext, saveFocus, saveMissionDraft, saveMissionEdit, saveShowcaseDraft, saveShowcaseEdit, schedAction,
-  selectPlace, selectProject, setBilling, setBrainMode, setCapSave, setFleetView, setHandsFree, setKeyRemove, setKeySave, setLens, setSizeBy, setTheme, sgSpeakToggle, showGuardrails, showLog, showPrivacy,
+  selectAddon, selectPlace, selectProject, setBilling, setBrainMode, setCapSave, setFleetView, setHandsFree, setKeyRemove, setKeySave, setLens, setSizeBy, setTheme, sgSpeakToggle, showGuardrails, showLog, showPrivacy,
   startCycle, startMissionPanel, stopRun, talkSubmit, thinkToggle, tlClick, tlHover, tlSet, toggleCalm, toggleDemo, toggleLedger,
   toggleMissionForm, toggleMobileMenu, toggleOld, toggleReplay, toggleSched, toggleSel, toggleShowcaseForm, unpublishShowcase, unqueue, workOn,
+  grEdit, grNew, grAdd, grRemove, grMove, grSave, openProject, openProjects, addonNeeds, homeDay, finToggle, trajToggle, tkRequest, tkDraft, tkFile, tkDiscard, tkRepoName, tkRepoSave, tkRepoCreate, tkMission,
+  rdShow, rdToggle, rdNext, rdDraft, rdApply, rdTurnOn, rdCycle,
   ...EXT.actions,                                   // an add-on's own (assets/ext-*.js), by name
 };
 

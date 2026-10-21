@@ -368,6 +368,75 @@ gh_post() {
   guard "$secs" "${QUARTERDECK_GH:-gh}" "$@"
 }
 
+# ---- filing issues -----------------------------------------------------------------------------------------------------
+# existing_issues <repo> [state]: one "#n [STATE] title" line per issue already on the tracker (state: all by default), the list the foreman
+# gives its model so it can dedupe against reality. The planner's ticket drafts are checked against the same list.
+existing_issues() {
+  guard 60 "${QUARTERDECK_GH:-gh}" issue list -R "$1" --state "${2:-all}" --limit 100 \
+    --json number,title,state --jq '[.[] | "#\(.number) [\(.state)] \(.title)"] | join("\n")' 2>>"${LOG_FILE:-$QUARTERDECK_HOME/logs/quarterdeck.log}"
+}
+# issues_scan <issues-json-array>: 0 when no title, body or label holds a credential; otherwise says which ticket (its number, never its text) and returns 3.
+# file_issues scans each post too (gh_post); this is the check made BEFORE the first one, so a secret in the fourth ticket posts none of the four.
+issues_scan() {
+  local n=0 item tmp bad=0
+  tmp=$(mktemp)
+  while IFS= read -r item; do
+    [ -n "$item" ] || continue
+    n=$((n + 1))
+    jq -r '.title + "\n" + .body + "\n" + ((.labels // []) | join("\n"))' <<<"$item" > "$tmp"
+    if ! python3 "$QUARTERDECK_DIR/bin/outscan.py" "$tmp" >/dev/null 2>&1; then
+      say "quarterdeck: refused: ticket $n looks like it holds a credential. Nothing was sent."; bad=1
+    fi
+  done < <(jq -c '.[]' <<<"$1")
+  rm -f "$tmp"
+  [ "$bad" = 0 ] || return 3
+}
+# file_issues <repo> <issues-json-array of {title, body, labels}> [<callback>]: files each one with gh_post, so the credential scan runs on every
+# title and body. Labels that do not exist make `gh issue create` fail outright, so they are best effort: one retry without them (not after a scan
+# refusal). Sets FILED (how many) and MADE (a JSON array of {number, url, title}); calls <callback> <index> <url> <title> for each issue made.
+# Returns 3 when the scan refused any, else 0.
+file_issues() {
+  local repo=$1 issues=$2 cb=${3:-} item title body labels url rc i=0 refused=0
+  FILED=0; MADE='[]'
+  while IFS= read -r item; do
+    [ -n "$item" ] || continue
+    title=$(jq -r .title <<<"$item"); body=$(jq -r .body <<<"$item"); labels=$(jq -r '(.labels // []) | join(",")' <<<"$item")
+    url=$(gh_post 60 issue create -R "$repo" --title "$title" --body "$body" ${labels:+--label "$labels"} 2>>"${LOG_FILE:-/dev/null}"); rc=$?
+    if [ $rc != 0 ] && [ $rc != 3 ]; then
+      url=$(gh_post 60 issue create -R "$repo" --title "$title" --body "$body" 2>>"${LOG_FILE:-/dev/null}"); rc=$?
+      [ $rc = 0 ] && log "filed without labels: $title"
+    fi
+    if [ $rc != 0 ]; then
+      log "FAILED to file: $title"
+      if [ $rc = 3 ]; then refused=1; say "  ✗ $title (refused: it looks like it holds a credential; nothing was sent)"; else say "  ✗ $title"; fi
+    else
+      FILED=$((FILED + 1))
+      MADE=$(jq -c --arg u "$url" --arg t "$title" '. + [{number: ($u | split("/") | last | tonumber? // 0), url: $u, title: $t}]' <<<"$MADE")
+      say "  ✓ $url  $title"
+      [ -z "$cb" ] || "$cb" "$i" "$url" "$title"
+    fi
+    i=$((i + 1))
+  done < <(jq -c '.[]' <<<"$issues")
+  [ "$refused" = 0 ] || return 3
+  return 0
+}
+
+# ---- local tickets (bin/tickets.py) --------------------------------------------------------------------------------------
+# A ticket the owner or the planner wrote down on this computer: the purser, the dev panel and the shipwright take --ticket <n> where they take
+# --issue <n>. None of that touches GitHub. A ticket that was filed there (source "github") is its issue: --issue <number> is the way in.
+TICKETS_PY="$QUARTERDECK_DIR/bin/tickets.py"
+ticket_load() { # ticket_load <project> <n>: sets TK_JSON, TK_TITLE and TK_TEXT; dies for a missing ticket and for one that is a GitHub issue
+  local n=$2 iss
+  need_num "--ticket" "$n"
+  TK_JSON=$(python3 "$TICKETS_PY" show --json "$1" "$n" 2>/dev/null) || die "there is no local ticket $n for $1 (see: qtdeck ticket list $1)"
+  if [ "$(jq -r .source <<<"$TK_JSON")" = github ]; then
+    iss=$(jq -r .issue <<<"$TK_JSON")
+    die "this ticket is GitHub issue #$iss: use --issue $iss"
+  fi
+  TK_TITLE=$(jq -r .title <<<"$TK_JSON")
+  TK_TEXT=$(python3 "$TICKETS_PY" text "$1" "$n")
+}
+
 # ---- project registry -------------------------------------------------------
 # Adding a project is a JSON block in config/projects.json and nothing else.
 # No duty may hardcode a repo, a path, or a guardrail.
@@ -798,7 +867,8 @@ claude_run() { # claude_run <workdir> <prompt> [tools, comma separated] [deny-to
       # A tracked change turns reuse off for the call. An untracked file counts by name and content (review r9 D2; a link, a borrowed node_modules,
       # by where it points). ponytail: ignored files are not in the key (hashing a node_modules on every call costs more than the call saves).
       if head=$(safe_git -C "$wdir" rev-parse HEAD 2>/dev/null) && [ -z "$(safe_git -C "$wdir" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
-        rkey=$( { printf '%s\n' "$duty" "$QD_PROVIDER" "billing=$bmode" "$model" "$effort" "$names" "$allow" "$deny" "$turns" "$head" "$wdir"
+        # profile=: the survey facts of the project (profile_block) are part of what decides the answer, whether or not this prompt carries them
+        rkey=$( { printf '%s\n' "$duty" "$QD_PROVIDER" "billing=$bmode" "$model" "$effort" "$names" "$allow" "$deny" "$turns" "$head" "$wdir" "profile=$(profile_block "${QUARTERDECK_PROJECT:-}" | shasum -a 256 | cut -c1-16)"
                   safe_git -C "$wdir" status --porcelain 2>/dev/null
                   safe_git -C "$wdir" ls-files -o --exclude-standard -z 2>/dev/null | (cd "$wdir" && python3 -c '
 import hashlib, os, sys
@@ -1168,11 +1238,22 @@ untrusted() { # untrusted <label>  (the text on stdin)
     "BEGIN UNTRUSTED $label $nonce" "$text" "END UNTRUSTED $label $nonce"
 }
 
+# profile_block <project>: the facts the survey gathered about a project (bin/survey.py), as one bounded block (at most 3000 characters) for the START
+# of a prompt, where it can be cached. Built by the harness from state/projects/<project>/profile.json: every name that came from the project's files is
+# clipped and made plain there, and the block says in words that these are data. Byte-stable for an unchanged project (no time, no absolute path), so a
+# prompt prefix that carries it is the same from one run to the next. Empty when the project was never surveyed (or this install has no survey.py).
+profile_block() {
+  [ -f "$QUARTERDECK_DIR/bin/survey.py" ] || return 0
+  case "${1:-}" in ""|*[!a-z0-9_.-]*) return 0 ;; esac
+  python3 "$QUARTERDECK_DIR/bin/survey.py" block "$1" 2>/dev/null || true
+}
+
 preamble() { # preamble <project>
+  local pb; pb=$(profile_block "$1"); [ -z "$pb" ] || pb="$pb"$'\n\n'
   cat <<EOF
 You are working on the project "$1" ($(project_get "$1" repo)).
 
-Hard rules for this project:
+${pb}Hard rules for this project:
 $(project_guardrails "$1")
 $(packs=$(project_packs_text "$1"); [ -n "$packs" ] && printf '\nNotes on this project'"'"'s stack (follow them; the hard rules above win if they differ):\n%s\n' "$packs")
 

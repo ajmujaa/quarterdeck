@@ -31,19 +31,25 @@ bin/qtdeck setup
 bin/qtdeck dashboard      # switch Demo on to look around with invented data
 ```
 
-`bin/qtdeck attach ~/Projects/my-app` registers your first project. The [guide](GUIDE.md) has the rest. `bin/qtdeck check` runs every test.
+`bin/qtdeck attach ~/Projects/my-app` registers your first project. It names the stack it found (for example React 18 with Vite, tests by Vitest), proposes build and lint commands next to the verify command, and says why each duty is on or off; duties that also fit the stack are listed as "also fit this stack" and stay off until you tick them. **What attach does.** Attaching is onboarding. It surveys the folder from its files alone (layout, entry points, scripts, dependencies worth knowing, which documents exist, size, git), says which documents are missing and offers to draft them (`bin/qtdeck docs my-app`; you read the draft, and only your yes puts it on a new branch), chooses the crew with a reason for each duty, hands the survey to the agents as their stable context so they do not re-read the project every run, and ends with one checklist (`bin/qtdeck ready my-app`) and one next action, such as filing your first ticket. The dry run writes nothing. The [guide](GUIDE.md) has the rest. `bin/qtdeck check` runs every test.
 
 ## Why Quarterdeck
 
 - **The model thinks, the harness acts.** Agents never hold credentials or write tools. A script does the privileged step, only with an explicit `--apply`.
 - **Safe by test.** 701 real runs against planted prompt injections: none obeyed. 400 control runs without the guard: 2 obeyed.
 - **Calm.** One next action on Home. Calm mode shows one column of larger text.
+- **Home is you, Projects is where the work is.** Home holds your day, your notes, the fleet timeline and the day's budget; Projects opens on every project together and filters to one when you open it. The project scope lives in the address.
 - **Yours.** No keystrokes, screen, apps, clipboard or location, ever. A test scans the code for the APIs that would do it.
 - **Your plan or your key.** Use your Claude plan, or an API key with spending caps.
+- **Say what you want, with or without GitHub.** `qtdeck ticket new my-app "a page with a counter"` has the planner draft one to five tickets (title, body, acceptance checks) and keeps the draft; `--apply` files them as GitHub issues. A project with no GitHub repo keeps them as local tickets on your computer, and `qtdeck cycle my-app --ticket 1` builds one on a local branch for you to review, with nothing pushed. `qtdeck repo my-app` lists the ways to get a repo: use yours, make one (`qtdeck repo create`, only after you type yes), sign up first, or stay local. The dashboard's Missions page has the same: a New ticket box that shows the draft before anything is filed, the ticket list with a Start a mission button, and, for a project with no repo, the four options as short rows.
+
+The dashboard keeps its place in the address: Back, Forward, reload and links work, and the address holds the page, the project and the open mission.
 
 ## What is in it
 
 Dashboard · Crew · Brain map · Fleet · Connections · Helm (optional voice)
+
+Guardrails, the rules every agent is given for a project, are editable on the project page and with `qtdeck guardrail <project> list|add|remove|move`. Three are locked and cannot be removed: never merge, never push to the default branch, never touch secrets.
 
 ## Status
 

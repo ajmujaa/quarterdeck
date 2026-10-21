@@ -17,6 +17,10 @@
 #   qtdeck cycle <project> --issue 12              report only: purser and the dev panel run (they write nothing), the
 #                                                   later stages are listed with what each WOULD do
 #   qtdeck cycle <project> --issue 12 --apply      every stage follows its own duty's --apply rules
+#   qtdeck cycle <project> --ticket 3 [--apply]    the same for a LOCAL ticket (qtdeck ticket): purser, dev panel and shipwright with --ticket, then it
+#                                                   STOPS at a local branch ticket/3-... for you to review. Nothing is pushed and no pull request is
+#                                                   opened, so the stages that need one (assayer, the five reviewers, the caulker) are recorded as
+#                                                   skipped, with the reason. The record has "ticket": 3 and "issue": null.
 #   qtdeck cycle --resume <id>                     a stopped or crashed cycle goes on at the failed stage; a finished stage is never repeated
 #   qtdeck cycle --status [<id>]                   the stages, their verdicts and what each cost
 #
@@ -49,18 +53,36 @@ CEILING="${QUARTERDECK_CYCLE_BUDGET:-15}"
 PANEL_ROUNDS="${QUARTERDECK_CYCLE_PANEL_ROUNDS:-1}"
 REVIEWERS="surveyor marshal lookout pilot inspector"
 
-PROJECT="" ISSUE="" APPLY=0 RESUME="" STATUS_ID="" WANT_STATUS=0
+PROJECT="" ISSUE="" TICKET="" APPLY=0 RESUME="" STATUS_ID="" WANT_STATUS=0 WANT_RESUME=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --issue)  ISSUE="${2:-}"; need_num "--issue" "$ISSUE"; shift ;;
+    --ticket) TICKET="${2:-}"; need_num "--ticket" "$TICKET"; shift ;;
     --apply)  APPLY=1 ;;
-    --resume) RESUME="${2:-}"; shift ;;
-    --status) WANT_STATUS=1; case "${2:-}" in ""|--*) ;; *) STATUS_ID="$2"; shift ;; esac ;;
+    # --resume and --status take a cycle id, or a project (with --ticket n): then the latest cycle of that project (of that ticket) is meant
+    --resume) WANT_RESUME=1; case "${2:-}" in ""|--*) ;; *) if [ -f "$CYCLES/$2.json" ] || ! project_exists "$2"; then RESUME="$2"; else PROJECT="$2"; fi; shift ;; esac ;;
+    --status) WANT_STATUS=1; case "${2:-}" in ""|--*) ;; *) if [ -f "$CYCLES/$2.json" ] || ! project_exists "$2"; then STATUS_ID="$2"; else PROJECT="$2"; fi; shift ;; esac ;;
     -*) die "cycle: unknown argument '$1'" ;;
     *)  [ -z "$PROJECT" ] && PROJECT="$1" || die "cycle: one project at a time" ;;
   esac
   shift
 done
+
+# latest_cycle <project> [<ticket>]: the id of the newest cycle record of that project (and ticket), else nothing
+latest_cycle() {
+  local f
+  for f in $(ls -t "$CYCLES"/*.json 2>/dev/null); do
+    jq -e --arg p "$1" --arg t "${2:-}" 'select(.kind == "cycle" and .project == $p and ($t == "" or ((.ticket // "") | tostring) == $t))' "$f" >/dev/null 2>&1 && { basename "$f" .json; return 0; }
+  done
+  return 1
+}
+if [ -z "$STATUS_ID$RESUME" ] && { [ "$WANT_STATUS" = 1 ] || [ "$WANT_RESUME" = 1 ]; } && [ -n "$PROJECT" ]; then
+  project_exists "$PROJECT" || die "unknown project '$PROJECT' (see: qtdeck projects)"
+  cid=$(latest_cycle "$PROJECT" "$TICKET") || die "cycle: no cycle on record for $PROJECT${TICKET:+ ticket $TICKET}"
+  if [ "$WANT_STATUS" = 1 ]; then STATUS_ID=$cid; else RESUME=$cid; fi
+  PROJECT=""; ISSUE=""; TICKET=""
+fi
+[ "$WANT_RESUME" = 0 ] || [ -n "$RESUME" ] || die "cycle: --resume needs a cycle id, or <project> [--ticket n] for the latest one"
 
 num_ok() { [[ "${1:-}" =~ ^[0-9]+(\.[0-9]+)?$ ]]; }
 gt() { awk -v a="$1" -v b="$2" 'BEGIN { exit !(a + 0 > b + 0) }'; }
@@ -77,13 +99,15 @@ table() { # table <record> — the stages, their verdicts, their cost, and the t
 }
 show() { # show <record>
   local f=$1
-  echo "cycle $(jq -r .id "$f")  ·  $(jq -r .project "$f") issue #$(jq -r .issue "$f")  ·  $(jq -r 'if .apply then "apply" else "report only" end' "$f")"
+  echo "cycle $(jq -r .id "$f")  ·  $(jq -r .project "$f") $(jq -r 'if (.ticket // null) != null then "local ticket #\(.ticket)" else "issue #\(.issue)" end' "$f")  ·  $(jq -r 'if .apply then "apply" else "report only" end' "$f")"
   echo "state: $(jq -r .status "$f")"
   jq -r 'if (.final // "") != "" then "       " + .final else empty end' "$f"
   echo
   table "$f"
   echo
   jq -r 'if .pr then "pull request: " + .pr else empty end' "$f"
+  jq -r 'if (.branch // null) != null then "local branch: " + .branch else empty end' "$f"
+  jq -r 'if (.review // "") != "" then "review it: " + .review else empty end' "$f"
   jq -r '(.notes // []) | map("note: " + .) | .[]' "$f"
   jq -r 'if .finished then "wall time: " + (.seconds | tostring) + "s" else empty end' "$f"
 }
@@ -92,7 +116,7 @@ if [ "$WANT_STATUS" = 1 ]; then
   if [ -z "$STATUS_ID" ]; then
     echo "cycles on record (newest first):"
     ls -t "$CYCLES"/*.json 2>/dev/null | while read -r f; do
-      jq -r 'select(.kind == "cycle") | "  \(.id)  \(.status)  \(.project) #\(.issue)"' "$f" 2>/dev/null
+      jq -r 'select(.kind == "cycle") | "  \(.id)  \(.status)  \(.project) " + (if (.ticket // null) != null then "ticket \(.ticket)" else "#\(.issue)" end)' "$f" 2>/dev/null
     done
     exit 0
   fi
@@ -104,11 +128,11 @@ fi
 
 # ---- which cycle, and may it run -----------------------------------------------------------------------------------
 if [ -n "$RESUME" ]; then
-  [ -z "$PROJECT$ISSUE" ] || die "cycle: --resume takes only the cycle id"
+  [ -z "$PROJECT$ISSUE$TICKET" ] || die "cycle: --resume takes only the cycle id"
   [[ "$RESUME" =~ ^[A-Za-z0-9._-]+$ ]] || die "cycle: that is not a cycle id"
   REC="$CYCLES/$RESUME.json"
   [ -f "$REC" ] && [ "$(jq -r .kind "$REC" 2>/dev/null)" = cycle ] || die "cycle: no cycle called $RESUME"
-  ID="$RESUME"; PROJECT=$(jq -r .project "$REC"); ISSUE=$(jq -r .issue "$REC"); APPLY=$(jq -r 'if .apply then 1 else 0 end' "$REC")
+  ID="$RESUME"; PROJECT=$(jq -r .project "$REC"); ISSUE=$(jq -r '.issue // empty' "$REC"); TICKET=$(jq -r '.ticket // empty' "$REC"); APPLY=$(jq -r 'if .apply then 1 else 0 end' "$REC")
   [ "$APPLY" = 1 ] || die "cycle: $ID was a report-only run; there is nothing to resume. Run it again with --apply."
   case "$(jq -r .status "$REC")" in
     running|failed|stopped-cap|stopped-ceiling) ;;
@@ -120,35 +144,43 @@ if [ -n "$RESUME" ]; then
     *) die "cycle: $ID is finished ($(jq -r .status "$REC")); there is nothing to resume" ;;
   esac
 else
-  [ -n "$PROJECT" ] || die "usage: qtdeck cycle <project> --issue <n> [--apply]   |   --resume <id>   |   --status [<id>]"
-  [[ "$ISSUE" =~ ^[0-9]+$ ]] || die "cycle: which issue? --issue <number>"
+  [ -n "$PROJECT" ] || die "usage: qtdeck cycle <project> --issue <n> [--apply]   |   <project> --ticket <n> [--apply]   |   --resume <id>   |   --status [<id>]"
+  [ -z "$ISSUE" ] || [ -z "$TICKET" ] || die "cycle: --issue and --ticket are two different jobs; give one"
+  [[ "$ISSUE" =~ ^[0-9]+$ ]] || [ -n "$TICKET" ] || die "cycle: which issue? --issue <number> (or --ticket <number> for a local ticket)"
 fi
+# What names this cycle: a GitHub issue, or a local ticket. The lock, the id, the plan file and the messages follow from it.
+if [ -n "$TICKET" ]; then KEY="t$TICKET"; LABEL="ticket #$TICKET"; PLAN_N="ticket$TICKET"; else KEY="$ISSUE"; LABEL="#$ISSUE"; PLAN_N="$ISSUE"; fi
 project_exists "$PROJECT" || die "unknown project '$PROJECT' (see: qtdeck projects)"
 [ "$(jq -r --arg p "$PROJECT" '.[$p].cycle // false' "$PROJECTS_FILE")" = true ] \
-  || die "cycle: '$PROJECT' has not opted in. Add \"cycle\": true to its entry in $PROJECTS_FILE first; a cycle spends real money and opens real pull requests, so it is never on by default."
+  || die "cycle: '$PROJECT' has not opted in. Add \"cycle\": true to its entry in $PROJECTS_FILE first; a cycle spends real money$([ -n "$TICKET" ] || echo ' and opens real pull requests'), so it is never on by default."
 project_has_duty "$PROJECT" shipwright || die "cycle: the shipwright is not enabled for '$PROJECT' (duties[] in the registry); a cycle with nothing to build with has no point"
+if [ -n "$TICKET" ]; then   # a ticket has no pull request to fall back on: without the purser and the dev panel there is no plan for the shipwright to build from
+  missing=""; for d in purser panel; do project_has_duty "$PROJECT" "$d" || missing="$missing $d"; done
+  [ -z "$missing" ] || die "cycle: a ticket goes through the purser, the dev panel and the shipwright, and these are not enabled for '$PROJECT':$missing. Add them to \"duties\" in its entry in $PROJECTS_FILE (attach turns on only the read-only duties and the shipwright)."
+fi
 WORKDIR=$(project_path "$PROJECT")
 [ -d "$WORKDIR/.git" ] || die "cycle: no git checkout at $WORKDIR"
 REPO=$(project_get "$PROJECT" repo)
+[ -n "$TICKET" ] || [ -n "$REPO" ] || { python3 "$QUARTERDECK_DIR/bin/repo.py" sentence "$PROJECT" >&2; die "cycle: a cycle on an issue needs a GitHub repo. A local ticket does not: qtdeck cycle $PROJECT --ticket <n>"; }
 num_ok "$CEILING" || die "cycle: QUARTERDECK_CYCLE_BUDGET must be a number of dollars"
 
 LOG_FILE="$QUARTERDECK_HOME/logs/cycle-$PROJECT.log"
 mkdir -p "$CYCLES"
-if [ -d "$QUARTERDECK_HOME/state/cycle-$PROJECT-$ISSUE.lock" ] && holder=$(cat "$QUARTERDECK_HOME/state/cycle-$PROJECT-$ISSUE.lock/pid" 2>/dev/null) && kill -0 "$holder" 2>/dev/null; then
-  die "cycle: a cycle is already running for $PROJECT #$ISSUE (pid $holder)"
+if [ -d "$QUARTERDECK_HOME/state/cycle-$PROJECT-$KEY.lock" ] && holder=$(cat "$QUARTERDECK_HOME/state/cycle-$PROJECT-$KEY.lock/pid" 2>/dev/null) && kill -0 "$holder" 2>/dev/null; then
+  die "cycle: a cycle is already running for $PROJECT $LABEL (pid $holder)"
 fi
-acquire_lock "cycle-$PROJECT-$ISSUE"
+acquire_lock "cycle-$PROJECT-$KEY"
 # acquire_lock set a trap that drops the lock; keep that, and never leave a record saying "running" behind a process that is gone.
 trap 'if [ -n "${REC:-}" ] && [ -f "$REC" ] && [ "$(jq -r .status "$REC" 2>/dev/null)" = running ]; then
         jq --arg at "$(now)" ".status = \"failed\" | .final = \"stopped before it finished; resume with: qtdeck cycle --resume ${ID:-}\" | .finished = \$at" "$REC" > "$REC.t" && mv "$REC.t" "$REC"; fi
       rm -rf "$QUARTERDECK_LOCK"' EXIT
 
 if [ -z "$RESUME" ]; then
-  ID="cyc-$(tr -c 'A-Za-z0-9._\n-' '-' <<<"$PROJECT")-$ISSUE-$(date +%s)"
+  ID="cyc-$(tr -c 'A-Za-z0-9._\n-' '-' <<<"$PROJECT")-$KEY-$(date +%s)"
   REC="$CYCLES/$ID.json"
-  jq -n --arg id "$ID" --arg p "$PROJECT" --argjson i "$ISSUE" --argjson a "$([ "$APPLY" = 1 ] && echo true || echo false)" \
+  jq -n --arg id "$ID" --arg p "$PROJECT" --argjson i "${ISSUE:-null}" --argjson tk "${TICKET:-null}" --argjson a "$([ "$APPLY" = 1 ] && echo true || echo false)" \
         --arg at "$(now)" --argjson t "$(date +%s)" --argjson ceil "$CEILING" --arg daily "${QUARTERDECK_DAILY_BUDGET:-}" --arg call "${QUARTERDECK_CALL_BUDGET:-}" \
-    '{kind:"cycle", id:$id, project:$p, issue:$i, apply:$a, status:"running", final:"", started:$at, finished:null, t0:$t, seconds:null,
+    '{kind:"cycle", id:$id, project:$p, issue:$i} + (if $tk == null then {} else {ticket:$tk, branch:null, review:""} end) + {apply:$a, status:"running", final:"", started:$at, finished:null, t0:$t, seconds:null,
       pr:null, prnum:null, cost:0, notes:[],
       budget:{ceiling:$ceil, daily:($daily | tonumber? // null), call:($call | tonumber? // null)}, stages:[]}' > "$REC"
 else
@@ -159,8 +191,8 @@ export QUARTERDECK_MISSION_RUN="cycle:$ID" QUARTERDECK_FIX_KEY="cycle:$ID"
 [ "$APPLY" = 1 ] || export QUARTERDECK_DRY_RUN=1
 TMPD=$(mktemp -d)
 SPEND="$QUARTERDECK_HOME/state/spend.jsonl"; touch "$SPEND"
-PLAN="$QUARTERDECK_HOME/workspace/${PROJECT}-plan-${ISSUE}.md"
-working_on "cycle $ID · issue #$ISSUE"
+PLAN="$QUARTERDECK_HOME/workspace/${PROJECT}-plan-${PLAN_N}.md"
+working_on "cycle $ID · $([ -n "$TICKET" ] && echo "ticket #$TICKET" || echo "issue #$ISSUE")"
 
 # ---- the record ----------------------------------------------------------------------------------------------------
 rec_set() { local t; t=$(mktemp "$REC.XXXXXX") && jq "$@" "$REC" > "$t" && mv "$t" "$REC"; }
@@ -187,7 +219,7 @@ finish() { # finish <status> <message> <exit-code> — the one way out after the
     awaiting-review) tok=AWAITING-REVIEW ;; needs-human) tok=NEEDS_HUMAN ;; stopped-cap) tok=STOPPED-CAP ;; stopped-ceiling) tok=STOPPED-CEILING ;;
     failed) tok=FAILED ;; nothing) tok=NOTHING-TO-BUILD ;; report-only) tok=DRY-RUN ;; *) tok=STOPPED ;;
   esac
-  record_run "$PROJECT" cycle "$tok" "$ID — #$ISSUE: $msg" "$(jq -r '.pr // ""' "$REC")"
+  record_run "$PROJECT" cycle "$tok" "$ID: $LABEL: $msg" "$(jq -r '.pr // ""' "$REC")"
   say ""
   say "── cycle $ID · $status ──"
   say "$msg"
@@ -196,6 +228,7 @@ finish() { # finish <status> <message> <exit-code> — the one way out after the
   say ""
   say "  wall time $(human "$secs")"
   [ "$(jq -r '.pr // ""' "$REC")" != "" ] && say "  pull request: $(jq -r .pr "$REC")"
+  [ "$(jq -r '.review // ""' "$REC")" != "" ] && say "  review it: $(jq -r .review "$REC")"
   jq -r '(.notes // []) | map("  note: " + .) | .[]' "$REC" >&2
   say ""
   say "  record: $REC"
@@ -324,17 +357,29 @@ open_findings() { # the findings the caulker could act on: files for this exact 
 note() { rec_set --arg n "$1" 'if (.notes | index($n)) then . else .notes += [$n] end'; }
 
 # ---- 0. is there anything to start from ------------------------------------------------------------------------------
-if [ -z "$RESUME" ]; then
+if [ -z "$RESUME" ] && [ -n "$TICKET" ]; then
+  # a local ticket (bin/tickets.py): in the data folder, never on GitHub; one that was filed there is its issue
+  tkj=$(python3 "$TICKETS_PY" show --json "$PROJECT" "$TICKET" 2>/dev/null) || { rec_set '.status = "failed"'; die "cycle: there is no local ticket $TICKET for $PROJECT (see: qtdeck ticket list $PROJECT)"; }
+  if [ "$(jq -r .source <<<"$tkj")" = github ]; then
+    rec_set '.status = "failed"'; die "cycle: this ticket is GitHub issue #$(jq -r .issue <<<"$tkj"): use --issue $(jq -r .issue <<<"$tkj")"
+  fi
+  case "$(jq -r .status <<<"$tkj")" in
+    open|building) ;;
+    *) rec_set '.status = "failed"'; die "cycle: ticket $TICKET is $(jq -r .status <<<"$tkj")$(jq -r 'if (.branch // "") != "" then " on the local branch " + .branch else "" end' <<<"$tkj"); a cycle starts from an open ticket" ;;
+  esac
+  rec_set --arg t "$(jq -r .title <<<"$tkj")" '.title = $t'
+elif [ -z "$RESUME" ]; then
   info=$(guard 60 "$GH" issue view "$ISSUE" -R "$REPO" --json title,state 2>>"$LOG_FILE") || { rec_set '.status = "failed"'; die "cycle: could not read issue #$ISSUE in $REPO"; }
   [ "$(jq -r .state <<<"$info")" = OPEN ] || { rec_set '.status = "failed"'; die "cycle: issue #$ISSUE is not open"; }
   rec_set --arg t "$(jq -r .title <<<"$info")" '.title = $t'
 fi
 TITLE=$(jq -r '.title // ""' "$REC")
-say "qtdeck cycle: $PROJECT — #$ISSUE $TITLE"
+say "qtdeck cycle: $PROJECT: $LABEL $TITLE"
 say "  $ID · $([ "$APPLY" = 1 ] && echo apply || echo 'report only') · ceiling \$$CEILING · $(num_ok "${QUARTERDECK_DAILY_BUDGET:-}" && echo "daily cap \$$QUARTERDECK_DAILY_BUDGET" || echo 'no daily cap')"
 
 # ---- 1. the purser -------------------------------------------------------------------------------------------------
-simple_stage purser "Purser" purser --issue "$ISSUE" $([ "$APPLY" = 1 ] && echo --apply)
+if [ -n "$TICKET" ]; then SUBJ=(--ticket "$TICKET"); else SUBJ=(--issue "$ISSUE"); fi
+simple_stage purser "Purser" purser "${SUBJ[@]}" $([ "$APPLY" = 1 ] && echo --apply)
 [ "$LST" = failed ] && finish failed "the purser failed: $LD. Resume with: qtdeck cycle --resume $ID" 1
 [ "$LV" = NEEDS_HUMAN ] && finish needs-human "the purser could not write requirements: $LD" 0
 
@@ -352,7 +397,7 @@ panel_stage() {
   gate panel
   say ""; say "── Dev panel ──"
   begin_stage panel "Dev panel" panel
-  QUARTERDECK_MODEL_OVERRIDE="$PANEL_MODEL" run_duty panel --panel dev --issue "$ISSUE" --rounds "$PANEL_ROUNDS" >&2; rc=$?
+  QUARTERDECK_MODEL_OVERRIDE="$PANEL_MODEL" run_duty panel --panel dev "${SUBJ[@]}" --rounds "$PANEL_ROUNDS" >&2; rc=$?
   end_stage panel panel "$rc"
 }
 panel_stage
@@ -360,18 +405,37 @@ panel_stage
 if [ "$LST" != skipped ]; then
   case "$LV" in
     RULED) kept=$(sed -nE 's/^dev: ([0-9]+) of .*/\1/p' <<<"$LD")
-           [ "${kept:-0}" = 0 ] && finish nothing "the dev panel ruled there is nothing to change for #$ISSUE" 0
+           [ "${kept:-0}" = 0 ] && finish nothing "the dev panel ruled there is nothing to change for $LABEL" 0
            [ -f "$PLAN" ] || finish failed "the dev panel ruled but wrote no plan ($PLAN)" 1 ;;
-    CLEAN) finish nothing "the dev panel found nothing to change for #$ISSUE" 0 ;;
+    CLEAN) finish nothing "the dev panel found nothing to change for $LABEL" 0 ;;
     *)     finish failed "the dev panel did not reach a ruling: $LV $LD. Resume with: qtdeck cycle --resume $ID" 1 ;;
   esac
 fi
+
+# ---- a local ticket has no pull request: the stages that need one are skipped, saying why -------------------------------------------------
+PR_NEEDED="needs a GitHub pull request: connect a repo with qtdeck repo $PROJECT and run them there"
+skip_pr_stages() {
+  local d id title
+  stage_patch assayer "$(jq -nc --arg w "$PR_NEEDED" '{title:"Assayer", duty:"assayer", state:"skipped", verdict:"SKIPPED", detail:$w, note:"skipped", url:"", cost:0, runs:[]}')"
+  for d in $REVIEWERS; do
+    title="$(tr '[:lower:]' '[:upper:]' <<<"${d:0:1}")${d:1} (round 1)"
+    stage_patch "r1:$d" "$(jq -nc --arg t "$title" --arg d "$d" --arg w "$PR_NEEDED" '{title:$t, duty:$d, state:"skipped", verdict:"SKIPPED", detail:$w, note:"skipped", url:"", cost:0, runs:[]}')"
+  done
+  stage_patch caulker "$(jq -nc --arg w "$PR_NEEDED" '{title:"Caulker", duty:"caulker", state:"skipped", verdict:"SKIPPED", detail:$w, note:"skipped", url:"", cost:0, runs:[]}')"
+}
+tk_set() { python3 "$TICKETS_PY" set "$PROJECT" "$TICKET" "$@" 2>>"$LOG_FILE" || log "could not update ticket $TICKET: $*"; }
 
 # ---- report only stops here: the rest is what it WOULD do ----------------------------------------------------------------
 if [ "$APPLY" != 1 ]; then
   would() { # would <id> <title> <duty> <text>
     stage_patch "$1" "$(jq -nc --arg t "$2" --arg d "$3" --arg w "$4" '{title:$t, duty:$d, state:"would", verdict:"WOULD", detail:$w, note:"report only", url:"", cost:0, runs:[]}')"
   }
+  if [ -n "$TICKET" ]; then
+    would shipwright "Shipwright" shipwright "would build the plan on a local branch ticket/$TICKET-... in your checkout and stop: no push, no pull request"
+    skip_pr_stages
+    would human "Human review" human "the cycle stops; a person reads the local branch and decides"
+    finish report-only "report only: the purser and the dev panel ran (they write nothing outside Quarterdeck's own folders, and the ticket is unchanged). The shipwright would build on a local branch; the stages that need a pull request are skipped. Add --apply to run them." 0
+  fi
   would shipwright "Shipwright" shipwright "would build the plan on a branch and open a pull request"
   r=$(skip_reason assayer)
   if [ -n "$r" ]; then would assayer "Assayer" assayer "would be skipped: $r"
@@ -384,6 +448,36 @@ if [ "$APPLY" != 1 ]; then
   would caulker "Caulker" caulker "would seal exactly the open findings, at most $MAX_CAULK cycles, the reviewers reading each new head again"
   would human "Human review" human "the cycle stops; a person reads the pull request and merges it"
   finish report-only "report only: the purser and the dev panel ran (they write nothing outside Quarterdeck's own folders). Each later stage is listed with what it would do. Add --apply to run them." 0
+fi
+
+# ---- 3. the shipwright, on a local ticket: a local branch, then stop for a person -----------------------------------------------------
+if [ -n "$TICKET" ]; then
+  if [ "$(stage_state shipwright)" != done ]; then
+    # a branch this cycle built before a crash: the ledger has the shipwright's BRANCH row under this cycle's tag
+    if jq -e --arg t "cycle:$ID" 'map(select(.mission == $t and .duty == "shipwright" and .verdict == "BRANCH")) | length > 0' "$RUNS_LEDGER" >/dev/null 2>&1; then
+      begin_stage shipwright "Shipwright" shipwright
+      stage_patch shipwright "$(jq -nc --arg at "$(now)" '{state:"done", verdict:"BRANCH", detail:"adopted: the local branch this cycle had already built", url:"", finished:$at}')"
+    else
+      tk_set status=building "cycle=$ID"
+    fi
+  fi
+  simple_stage shipwright "Shipwright" shipwright --ticket "$TICKET" --plan "$PLAN" --apply
+  [ "$LST" = failed ] && finish failed "the shipwright failed: $LD. Resume with: qtdeck cycle --resume $ID" 1
+  case "$LV" in
+    BRANCH) ;;
+    NO_CHANGE) tk_set status=open; finish nothing "the shipwright judged nothing should change: $LD" 0 ;;
+    *) tk_set status=open; finish needs-human "no local branch: the shipwright said $LV${LD:+: $LD}" 0 ;;
+  esac
+  TBRANCH=$(python3 "$TICKETS_PY" show --json "$PROJECT" "$TICKET" 2>/dev/null | jq -r '.branch // empty')
+  [ -n "$TBRANCH" ] || finish failed "the shipwright reported a branch but the ticket does not name one. Look in $WORKDIR for a branch that starts with ticket/$TICKET-" 1
+  TBASE=$(project_get "$PROJECT" default_branch main)
+  safe_git -C "$WORKDIR" rev-parse --verify -q "refs/remotes/origin/$TBASE" >/dev/null 2>&1 && TBASE="origin/$TBASE"
+  REVIEW_CMD=$(printf 'git -C %s diff %s...%s' "$WORKDIR" "$TBASE" "$TBRANCH")
+  rec_set --arg b "$TBRANCH" --arg r "$REVIEW_CMD" '.branch = $b | .review = $r'
+  skip_pr_stages
+  stage_patch human "$(jq -nc '{title:"Human review", duty:"human", state:"waiting", verdict:"WAITING", detail:"a person reads the local branch and decides", url:"", cost:0, runs:[]}')"
+  DISCARD_CMD=$(printf 'git -C %s branch -D %s' "$WORKDIR" "$TBRANCH")
+  finish awaiting-review "The build is on the local branch $TBRANCH in $WORKDIR, as one commit. Nothing was pushed and no pull request exists. Review it: $REVIEW_CMD   Throw it away: $DISCARD_CMD   To get reviewers and a pull request, connect a repo (qtdeck repo $PROJECT) and cycle an issue." 0
 fi
 
 # ---- 3. the shipwright -------------------------------------------------------------------------------------------------

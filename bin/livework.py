@@ -63,7 +63,7 @@ def collect(cfg, cached=None, events_dir=None, now=None):
     have = {s.get("id"): s for s in (cached or {}).get("sources", []) if isinstance(s, dict)}
     out = []
     for s in cfg.get("sources", []):
-        if s.get("kind") != "repo-agents":
+        if s.get("kind") not in ("repo-agents", "reported"):
             continue
         ev = fv.read_events(s["id"], events_dir)
         out.append({"id": s["id"], "title": s.get("title") or s["id"], "project": s.get("project") or "",

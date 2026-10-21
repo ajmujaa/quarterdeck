@@ -524,7 +524,7 @@ const routeLog = [];                                       // history index -> t
 const routeLoad = import("/assets/route.js").then(m => (routeMod = m)).catch(() => null);
 function addonList(){                                      // the installed add-ons: those the server names (S.addons) and the places an add-on script registered (EXT.places)
   const out = new Map();
-  for(const a of (S && Array.isArray(S.addons) ? S.addons : [])) if(a && typeof a.id === "string" && a.id) out.set(a.id, {id: a.id, label: String(a.label || a.id), place: typeof a.place === "string" ? a.place : ""});
+  for(const a of (S && Array.isArray(S.addons) ? S.addons : [])) if(a && typeof a.id === "string" && a.id) out.set(a.id, {id: a.id, label: String(a.label || a.id), place: typeof a.place === "string" ? a.place : "", local: a.where === "local"});
   for(const pl of EXT.places){
     const a = [...out.values()].find(x => x.place === pl.id || x.id === pl.id);
     if(a){ a.place = pl.id; a.label = a.label || pl.label || pl.id; }
@@ -873,7 +873,7 @@ function renderProjSwitch(){
   if(!show) return;
   const addons = addonList();
   setHtml(el, `<sl-option value="_">All projects</sl-option>` + S.projects.map(p => `<sl-option value="${esc(p.name)}">${esc(p.name)}</sl-option>`).join("")
-    + (addons.length ? `<sl-divider></sl-divider><small class="sw-grp">Add-ons</small>` + addons.map(a => `<sl-option value="${ADDON_VALUE}${esc(a.id)}">${esc(a.label)}</sl-option>`).join("") : "")
+    + (addons.length ? `<sl-divider></sl-divider><small class="sw-grp">Add-ons</small>` + addons.map(a => `<sl-option value="${ADDON_VALUE}${esc(a.id)}">${esc(a.label)}${a.local ? " (local add-on)" : ""}</sl-option>`).join("") : "")
     + `<sl-divider></sl-divider><sl-option value="__add">Add a project…</sl-option>`);
   const want = scopeValue();
   if(el.value !== want) el.value = want;
@@ -1563,7 +1563,7 @@ function openProjects(){ setKept(""); curLog = null; board = null; boardFor = nu
 function addonsStrip(){
   const att = obsAttention(false), rows = addonList().map(a => ({a, alerts: att.filter(x => x.addon && x.addon.id === a.id)})).filter(r => r.alerts.length || (r.a.place && isPlace(r.a.place)));
   if(!rows.length) return "";
-  const row = ({a, alerts}) => li({icon: "plug", title: `${pill("", "Add-on: " + a.label)} ${alerts.length ? esc(alerts[0].text) : "Nothing needs you."}`,
+  const row = ({a, alerts}) => li({icon: "plug", title: `${pill("", (a.local ? "Local add-on: " : "Add-on: ") + a.label)} ${alerts.length ? esc(alerts[0].text) : "Nothing needs you."}`,
     sub: alerts.length ? `${alerts.length} ${plural(alerts.length, "alert")}${alerts[0].at ? " · " + esc(ago(alerts[0].at)) : ""}` : "Has its own page.",
     end: (a.place && isPlace(a.place) ? btn("Open " + esc(a.label), {size: "small", click: act("selectPlace", a.place)}) : "")
       + (alerts.length ? btn("See in Needs you", {size: "small", variant: "primary", click: act("addonNeeds", a.id)}) : "")});
@@ -2718,7 +2718,7 @@ function fleetRepo(s){
     : card(null, (liveS.map(sess).join("") || `<p class="hint">No Claude Code session is open in this repository.</p>`)
         + (otherS.length ? `<sl-details summary="Earlier today · ${otherS.length} quiet or ended" data-fk="s:${esc(s.id)}" ${fleetOpen.has("s:" + s.id) ? "open" : ""} style="margin-top:var(--s3)">${otherS.map(sess).join("")}</sl-details>` : ""),
         {kicker: "Sessions now", count: liveS.length ? `${liveS.filter(x => x.state === "working").length} working, ${liveS.filter(x => x.state === "idle").length} waiting for you` : "", label: "Sessions now"});
-  const runs = s.runs === "own" ? "Runs its own agents, defined in the repository." : s.runs === "crew" ? `Works with the built-in crew: ${esc((s.crew || []).join(", "))}. The repository has no agents of its own.` : "No agents are set up for this project yet.";
+  const runs = s.kind === "reported" ? "Reports its own sessions and agents to Quarterdeck, one line at a time." : s.runs === "own" ? "Runs its own agents, defined in the repository." : s.runs === "crew" ? `Works with the built-in crew: ${esc((s.crew || []).join(", "))}. The repository has no agents of its own.` : "No agents are set up for this project yet.";
   const work = card(null, group("In progress", "Changes, commits without a pull request, drafts and reviews.", live, true) || emptyState({inline: true, title: "Nothing in progress.", body: "Every worktree is finished or quiet."})
       + group("Finished, still on disk", "The pull request merged or closed; the worktree can be removed.", done, false) + group("Quiet", "No changes and nothing ahead of the base.", quiet, false),
     {kicker: "Work in this repository", count: `${T.length} ${plural(T.length, "worktree")}: ${live.length} in progress, ${done.length} finished, ${quiet.length} quiet`, label: "Work in this repository"});
@@ -2736,7 +2736,7 @@ function viewFleet(){
   const mineOnly = sel && fleetData.sources.some(s => s.project === sel), shown = mineOnly ? fleetData.sources.filter(s => s.project === sel) : fleetData.sources;
   const scope = sel && !mineOnly ? callout("running", `${esc(sel)} has no fleet of its own, so every registered fleet is shown.`, "")
     : mineOnly && fleetData.sources.length > shown.length ? callout("running", `Showing ${esc(sel)} only.`, "", {actions: btn("Show every fleet", {size: "small", click: act("selectProject", "")})}) : "";
-  return errs + scope + shown.map(s => s.kind === "repo-agents" ? fleetRepo(s) : `<section class="fleet-src"><div class="phead2">${kicker("Local agents")}<h2 class="card-t">${esc(s.title)}</h2><p class="sub">${esc(s.about)}</p></div>
+  return errs + scope + shown.map(s => s.kind === "repo-agents" || s.kind === "reported" ? fleetRepo(s) : `<section class="fleet-src"><div class="phead2">${kicker("Local agents")}<h2 class="card-t">${esc(s.title)}</h2><p class="sub">${esc(s.about)}</p></div>
     ${s.error ? callout("blocked", esc(s.error), "") : ""}<div class="grid g3">${s.jobs.map(j => fleetJob(s.id, j)).join("")}</div></section>`).join("");
 }
 /* ---- connections: every service, where it stands, what it needs ---- */

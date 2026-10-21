@@ -72,6 +72,12 @@ Usage: qtdeck <command>
   guardrail <project> list|add|remove|move   the rules every agent is given for a project; three are locked (see: list)
   enable <project> <duty>... | cycle      turn duties on; "cycle" also allows full cycles and turns on the purser and the panel
   disable <project> <duty>... | cycle     turn duties off
+  fleet source add <id> <label>
+                              register a source that reports its own agents (once); then any script can show up in Fleet:
+  fleet report --source <id> --kind <kind> --session <id> [--worktree <n>] [--branch <b>] [--agent <a>]
+                              append one event line (kinds: session_start session_end prompt stop agent_start agent_stop); needs a registered source
+  addon new <name>            scaffold addons/ext_<name>.py and a test in your data folder; never overwrites a file
+  addon list                  the add-ons in your data folder: loaded, skipped and why (QUARTERDECK_ADDONS=off loads none of them)
   ticket list <project>       the local tickets and the drafts, one line each
   ticket show <project> <id>  one ticket (a number) or one draft (d1, d2 ...)
   ticket file <project> <draft-id> [--apply] [--local]
@@ -176,7 +182,7 @@ cmd="${1:-status}"; shift || true
 case "$cmd" in
   -h|--help|help) if [ "${1:-}" = more ]; then usage_more; else usage; fi; exit 0 ;;
   setup) exec python3 "$SELF/setup.py" "$@" ;;
-  status|doctor|check|home|projects|duties|crew|add|remove|repo|run|spend|fix|cycle|plan|brief|mockup|dashboard|keys|billing|logs|runs|new|attach|connect|ticket|ready|docs|enable|disable|guardrail) ;;
+  status|doctor|check|home|projects|duties|crew|add|remove|repo|run|spend|fix|cycle|plan|brief|mockup|dashboard|keys|billing|logs|runs|new|attach|connect|ticket|ready|docs|enable|disable|guardrail|fleet|addon) ;;
   *) { echo "qtdeck: unknown command '$cmd'"; echo; usage; } >&2; exit 2 ;;
 esac
 source "$SELF/lib.sh"
@@ -372,6 +378,13 @@ case "$cmd" in
       echo "  run one with: qtdeck run <project> panel --panel <name>"
     fi
     ;;
+
+  fleet)
+    # show your own agents in the Fleet view: register a source, then report one line per event (bin/fleetreport.py; docs/public/AGENTS.md)
+    exec python3 "$QUARTERDECK_DIR/bin/fleetreport.py" "$@" ;;
+  addon)
+    # add-ons in your data folder: scaffold one, list what loaded and what was skipped (bin/addons.py; docs/public/ADDONS.md)
+    exec python3 "$QUARTERDECK_DIR/bin/addons.py" "$@" ;;
 
   attach)
     # scan a folder, propose how the crew should work on it, and register it only with --apply

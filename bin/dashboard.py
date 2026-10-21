@@ -36,6 +36,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import types
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from http.server import HTTPServer, ThreadingHTTPServer, BaseHTTPRequestHandler
@@ -46,6 +47,7 @@ import home as _home
 import firstrun as _firstrun                            # the first-run checklist and its one small state file (bin/firstrun.py)
 import markers as _markers                              # the marks written into GitHub bodies (bin/markers.py)
 import safegit as _safegit
+import addons as _addons                              # add-ons in the data folder: which files may load, and `qtdeck addon` (bin/addons.py)
 import packs as _packs_mod                              # stack and infrastructure packs (bin/packs.py)
 import spend as _spend                                  # where the tokens went: the Spend view and `qtdeck spend` share it (bin/spend.py)
 
@@ -374,17 +376,42 @@ class _Core:
 
 
 def load_extensions():
-    """Import every bin/ext_*.py next to this file and let it install itself. One that fails to load is logged and skipped, never fatal."""
-    loaded = []
-    for f in sorted(Path(__file__).resolve().parent.glob("ext_*.py")):
+    """Import every bin/ext_*.py next to this file, then every <data folder>/addons/ext_*.py that passes bin/addons.py's checks (a real 0700 folder
+    and plain files that are yours and not writable by others; QUARTERDECK_ADDONS=off loads none of them), and let each install itself. One that fails
+    to load, or is skipped, is logged with the reason and never fatal. The outcome is kept in state/addons-status.json for `qtdeck addon list`."""
+    loaded, rows = [], []
+    todo = [(f, "built-in") for f in sorted(Path(__file__).resolve().parent.glob("ext_*.py"))]
+    ok, skipped = _addons.candidates(HOME)
+    for name, why in skipped:
+        log_error(f"add-on {name}", ValueError("skipped: " + why))
+        rows.append({"id": name, "where": "local", "status": "skipped", "reason": why})
+    taken = {f.stem for f, _ in todo}
+    for f, stem in ok:
+        if stem in taken:
+            log_error(f"add-on {stem}", ValueError("skipped: a built-in add-on has the same name"))
+            rows.append({"id": stem[4:], "where": "local", "status": "skipped", "reason": "a built-in add-on has the same name"})
+        else:
+            todo.append((f, "local"))
+    for f, where in todo:
         try:
-            spec = importlib.util.spec_from_file_location(f.stem, f)
-            mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)
+            if where == "local":        # read through one checked descriptor and run from memory: no cached bytecode in the folder is ever trusted
+                mod = types.ModuleType(f.stem)
+                mod.__file__ = str(f)
+                exec(compile(_addons.read_source(f), str(f), "exec"), mod.__dict__)
+            else:
+                spec = importlib.util.spec_from_file_location(f.stem, f)
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
             mod.install(_Core())
+            mod.ADDON_WHERE = where
             loaded.append(mod)
+            if where == "local":
+                rows.append({"id": f.stem[4:], "where": "local", "status": "loaded", "reason": ""})
         except Exception as e:
             log_error(f"extension {f.stem}", e)
+            if where == "local":
+                rows.append({"id": f.stem[4:], "where": "local", "status": "failed", "reason": f"{type(e).__name__}: {str(e)[:150]}"})
+    _addons.write_status(HOME, rows)
     return loaded
 
 
@@ -403,7 +430,8 @@ def addons_list(mods=None):
             continue
         name, place = getattr(m, "ADDON_NAME", None), getattr(m, "ADDON_PLACE", None)
         out.append({"id": aid, "label": name.strip()[:40] if isinstance(name, str) and name.strip() else aid.replace("_", " ").replace("-", " ").title(),
-                    "place": place if isinstance(place, str) and ADDON_ID.match(place) else ""})
+                    "place": place if isinstance(place, str) and ADDON_ID.match(place) else "",
+                    "where": "local" if getattr(m, "ADDON_WHERE", "") == "local" else "built-in"})
     return out
 
 

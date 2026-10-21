@@ -49,6 +49,8 @@ The dashboard keeps its place in the address: Back, Forward, reload and links wo
 
 Dashboard · Crew · Brain map · Fleet · Connections · Helm (optional voice)
 
+Home has a **Running now** strip: every session and duty working across your projects, one line each, with how long and whether it waits for you. Each project's page has a **Live work** card with its worktrees, pull requests and who is working in each. Sessions come from the hook you install with `bin/fleet-hook.sh install`; without it the strip says so and still shows duties. On the Crew page the agents a project uses come first and the rest are folded into an **Available (N)** list with an Enable button.
+
 Guardrails, the rules every agent is given for a project, are editable on the project page and with `qtdeck guardrail <project> list|add|remove|move`. Three are locked and cannot be removed: never merge, never push to the default branch, never touch secrets.
 
 ## Status

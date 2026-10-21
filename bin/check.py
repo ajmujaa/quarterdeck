@@ -59,6 +59,11 @@ LABELS = {
 }
 
 
+# the slowest suites, left out by `--quick` (a pull request); the nightly run and a merge to main run everything. About half the time on a CI runner.
+SLOW = {"selftest-infra.sh", "selftest-flow.sh", "selftest-injection.sh", "selftest-quartermaster.sh", "selftest-tickets.sh", "selftest-caulker.sh",
+        "selftest-cycle.sh", "selftest-tickets-ui.sh", "selftest-pilot.sh", "selftest-assayer.sh"}
+
+
 def suites(root=ROOT):
     """Every selftest `qtdeck check` runs: bin/selftest.py, then every bin/selftest*.sh but the shared library, found by name so a new one is never left out."""
     return ["selftest.py"] + sorted(p.name for p in (Path(root) / "bin").glob("selftest*.sh") if p.name != "selftest-lib.sh")
@@ -100,12 +105,13 @@ def health():
 
 
 def main():
-    steps = [(LABELS.get(f, f), [sys.executable if f.endswith(".py") else "bash", "bin/" + f]) for f in suites()]
+    quick = "--quick" in sys.argv[1:]
+    steps = [(LABELS.get(f, f), [sys.executable if f.endswith(".py") else "bash", "bin/" + f]) for f in suites() if not (quick and f in SLOW)]
     steps += [("privacy limit", [sys.executable, "bin/forbidden_signals.py"]), ("secrets", [sys.executable, "bin/guard.py"]), ("vendor files", [sys.executable, "bin/vendor-verify.py"]), ("smoke test", [sys.executable, "bin/smoke.py"]),
              ("rehearsal", [sys.executable, "bin/rehearse.py"])]
     if nodeok.path():
         steps.insert(1, ("assistant test", ["node", "--no-warnings", "bin/selftest-assistant.mjs"]))
-    print("── Quarterdeck check ──\n")
+    print("── Quarterdeck check" + (f" (quick: {len(SLOW)} slow suites left out)" if quick else "") + " ──\n")
     failed = []
     for label, argv in steps:
         ok, summary, bad = step(label, argv)

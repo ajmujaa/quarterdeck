@@ -128,7 +128,72 @@ The source appears in Fleet under its label, with "Sessions now" and "Earlier to
 
 ## Level 2: an agent source you add in a form
 
-(The form on the Connections page, the URL rules and the field map are described here once that level is built.)
+Use this when your agents live somewhere else (a service, a server, a dashboard of your own) and that place can answer a plain web request with a small JSON list. You fill in a form once; Quarterdeck asks for the list in the background and shows what comes back. It only reads. It cannot start, stop or change anything over there.
+
+### Add a source
+
+Open the Connections page and scroll to "Add an agent source". The form asks for:
+
+| Field | What to put |
+|---|---|
+| Name | A short label. It is the title of the source in Fleet. |
+| Address | `https://...`, or `http://127.0.0.1:<port>/...` for a tunnel you run yourself. |
+| Token | Optional. Sent as `Authorization: Bearer <token>`. |
+| Path to the list | Where the list of agents or tasks is in the reply: `tasks`, or `data.agents` for a list inside an object. Leave it empty if the reply is the list itself. |
+| Field: name | Where each agent's name is, relative to one entry. Required. |
+| Field: status | Where its status is. Required. |
+| Field: last run | Where the time of its last run is. Optional. |
+| Field: detail | One short line about it. Optional. |
+
+Two buttons above the form fill it in with examples to change: "A JSON list over HTTPS" and "A dashboard reached through my own SSH tunnel". Their addresses use `example.com`; replace them with yours.
+
+A path is names separated by dots, and a number picks an entry of a list: `data.agents`, `runs.0.state`. It holds letters, digits, `-` and `_` only.
+
+With an address of `https://agents.example.com/api/tasks` and a reply like this:
+
+```json
+{"tasks": [
+  {"title": "Nightly report", "state": "running", "finished_at": "2026-01-05T08:00:00Z", "message": "3 of 10 done"},
+  {"title": "Weekly sync", "state": "completed", "finished_at": "2026-01-04T17:30:00Z", "message": ""}
+]}
+```
+
+the field map is list `tasks`, name `title`, status `state`, last run `finished_at`, detail `message`.
+
+### Status words
+
+Whatever your service calls a state, Quarterdeck shows one of four, or "status unknown":
+
+| Shown as | Words it recognises (any capitals) |
+|---|---|
+| running | running, active, in_progress, started, busy, working, executing, processing, live, on |
+| waiting | waiting, pending, queued, paused, idle, blocked, needs_input, scheduled |
+| done | done, success, succeeded, completed, complete, ok, finished, passed |
+| failed | failed, failure, error, errored, crashed, cancelled, aborted, timeout |
+
+If your service uses other words, add them in `config/agent-sources.json` as `"status_words": {"running": ["go"], "done": ["landed"]}` on that source.
+
+### The rules it keeps
+
+- **Address.** `https://` only, or `http://127.0.0.1:<port>`. Quarterdeck never starts ssh or a tunnel: if you use one, you start it and leave it running. An address with a user name, a password or a secret in its query is refused. Put the token in the token field.
+- **No redirects.** A reply that sends Quarterdeck to another address is not followed, because the token would go with it. The source shows as unreachable and says why.
+- **Limits.** 10 seconds for the whole request, a reply of at most 256 KB, and no more often than once a minute per source. The request runs on a background thread, so a slow source never slows the dashboard or any other page.
+- **The token.** It is saved in the same place as the other connections (the private file in `~/.config/quarterdeck`, or the macOS Keychain if you chose that), under the name `AGENT_SOURCE_TOKEN@<source id>`. It is never written to `config/agent-sources.json`, to a snapshot or to a log, and it is never shown again. Removing the source deletes it.
+- **Only the mapped fields are kept.** Name (80 characters), status, last run (40) and detail (200). Everything else in the reply, and the reply itself, is dropped. They are shown as text: if a name holds `<b>` or a script tag you see those characters, nothing runs.
+- **Where things are kept.** The setup is in `config/agent-sources.json` (mode 0600, no secrets). The last answer is in `state/agent-sources/<id>/snapshot.json`.
+
+### Where you see it
+
+- **Fleet** lists each source under its name with its agents, their status and last run. If a source cannot be reached, the page says so in plain words ("Could not reach it. Check the address and your connection, and that the tunnel is running if you use one.") and keeps showing the last list with how old it is. Nothing else on the page changes.
+- **Home**, in the Running now strip, shows an agent from a source while its status is running, labelled "agent source".
+
+### Take it away
+
+Press Remove on the source in the Connections page. Its entry, its token and its snapshots are deleted. Nothing is touched on the service.
+
+### What it is not
+
+It is not a way to control agents, to see their transcripts or to read their files. A service that needs a login page, a cookie, or a sign-in flow cannot be used here; for that, write an [add-on](ADDONS.md). A remote agent still cannot write to your disk. If you cannot offer a JSON address, report from a script on your machine instead (level 1).
 
 ## Level 3: write an add-on
 

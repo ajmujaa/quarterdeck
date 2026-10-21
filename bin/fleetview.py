@@ -8,6 +8,8 @@ this repository):
                   `<cli> test <job>`). Quarterdeck calls that command; it does not reimplement the scheduler.
   repo-agents     a repository that holds its own agents as markdown (agents/*.md), its own workflow commands
                   (commands/*.md) and, while agents work, worktrees. Read only.
+  reported        no folder at all: any script, job or agent that appends one line per event to state/fleet-events/<id>.jsonl
+                  (`qtdeck fleet report`, bin/fleetreport.py). The owner registers the id first (`qtdeck fleet source add`).
 
 Rules this module keeps, because it can start and stop things:
   * every path comes from the local config and must resolve inside that source's own folder;
@@ -26,13 +28,14 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import agentsources
 import home as _home
 import safegit as _safegit
 CONFIG = _home.resolve() / "config" / "fleet.local.json"
 SAFE_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,30}$")
 SYNC_ACTIONS = ("pause", "resume")
 ASYNC_ACTIONS = ("test",)
-KINDS = ("command-fleet", "repo-agents")
+KINDS = ("command-fleet", "repo-agents", "reported")
 LOG_LINES, LOG_WIDTH, MAX_AGENTS, MAX_TREES, MAX_HEAD_LOOKUPS = 3, 200, 60, 80, 25
 
 
@@ -52,6 +55,9 @@ def _source(raw):
     sid, kind = raw["id"], raw.get("kind")
     if kind not in KINDS:
         return None, f"{sid}: kind must be one of {', '.join(KINDS)}"
+    if kind == "reported":      # nothing on disk to look at: only the events the source reports about itself
+        return {"id": sid, "kind": kind, "title": str(raw.get("title") or sid)[:80], "about": str(raw.get("about") or "")[:300], "root": None, "project": "",
+                "implicit": False, "crew": []}, None
     root = Path(str(raw.get("path", ""))).expanduser()
     if not root.is_dir():
         return None, f"{sid}: its folder does not exist"
@@ -440,6 +446,12 @@ def command_status(src, runner=subprocess.run):
     return {"id": src["id"], "kind": src["kind"], "project": src["project"], "title": src["title"], "about": src["about"], "jobs": jobs, "error": err}
 
 
+def reported_status(src):
+    ev = read_events(src["id"])
+    return {"id": src["id"], "kind": src["kind"], "project": "", "title": src["title"], "about": src["about"], "implicit": False,
+            "runs": "none", "crew": [], "agents": [], "commands": [], "worktrees": [], "sessions": build_sessions(ev) if ev is not None else None}
+
+
 def repo_status(src, runner=subprocess.run):
     agents = read_agents(src["agents"])
     trees = read_all_worktrees(src["root"], src.get("base", ""), runner=runner)
@@ -539,9 +551,10 @@ def projects(cfg=None):
 def snapshot(cfg=None, runner=subprocess.run):
     cfg = cfg or load_config()
     def one(s):
-        return command_status(s, runner) if s["kind"] == "command-fleet" else repo_status(s, runner)
+        return command_status(s, runner) if s["kind"] == "command-fleet" else reported_status(s) if s["kind"] == "reported" else repo_status(s, runner)
     with ThreadPoolExecutor(max_workers=6) as pool:                 # each project is its own git and gh calls: read them side by side, keep the order
         out = list(pool.map(one, cfg["sources"]))
+    out += agentsources.fleet_sources()                              # the sources added in a form: their last snapshots, no network here (bin/agentsources.py)
     return {"sources": out, "errors": cfg["errors"], "at": int(time.time())}
 
 

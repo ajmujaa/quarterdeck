@@ -524,7 +524,7 @@ const routeLog = [];                                       // history index -> t
 const routeLoad = import("/assets/route.js").then(m => (routeMod = m)).catch(() => null);
 function addonList(){                                      // the installed add-ons: those the server names (S.addons) and the places an add-on script registered (EXT.places)
   const out = new Map();
-  for(const a of (S && Array.isArray(S.addons) ? S.addons : [])) if(a && typeof a.id === "string" && a.id) out.set(a.id, {id: a.id, label: String(a.label || a.id), place: typeof a.place === "string" ? a.place : ""});
+  for(const a of (S && Array.isArray(S.addons) ? S.addons : [])) if(a && typeof a.id === "string" && a.id) out.set(a.id, {id: a.id, label: String(a.label || a.id), place: typeof a.place === "string" ? a.place : "", local: a.where === "local"});
   for(const pl of EXT.places){
     const a = [...out.values()].find(x => x.place === pl.id || x.id === pl.id);
     if(a){ a.place = pl.id; a.label = a.label || pl.label || pl.id; }
@@ -873,7 +873,7 @@ function renderProjSwitch(){
   if(!show) return;
   const addons = addonList();
   setHtml(el, `<sl-option value="_">All projects</sl-option>` + S.projects.map(p => `<sl-option value="${esc(p.name)}">${esc(p.name)}</sl-option>`).join("")
-    + (addons.length ? `<sl-divider></sl-divider><small class="sw-grp">Add-ons</small>` + addons.map(a => `<sl-option value="${ADDON_VALUE}${esc(a.id)}">${esc(a.label)}</sl-option>`).join("") : "")
+    + (addons.length ? `<sl-divider></sl-divider><small class="sw-grp">Add-ons</small>` + addons.map(a => `<sl-option value="${ADDON_VALUE}${esc(a.id)}">${esc(a.label)}${a.local ? " (local add-on)" : ""}</sl-option>`).join("") : "")
     + `<sl-divider></sl-divider><sl-option value="__add">Add a project…</sl-option>`);
   const want = scopeValue();
   if(el.value !== want) el.value = want;
@@ -1473,13 +1473,13 @@ function liveHeader(){
   return `<p class="live-head">Live data updated ${m < 1 ? "less than a minute" : minWords(m)} ago.</p>`;
 }
 function liveRow(i, o = {}){
-  const duty = i.kind === "duty", agent = i.agent === NO_DETAIL ? "Agent: " + NO_DETAIL : (duty ? "Duty: " : "Agent: ") + i.agent;
-  const where = duty ? "A Quarterdeck duty" : (i.branch ? `<span class="mono">${esc(i.branch)}</span>` : "") + (i.worktree ? (i.branch ? " in " : "") + esc(i.worktree) : "") || "No branch reported";
+  const duty = i.kind === "duty", fromSrc = i.kind === "source", agent = i.agent === NO_DETAIL ? "Agent: " + NO_DETAIL : (duty ? "Duty: " : "Agent: ") + i.agent;
+  const where = duty ? "A Quarterdeck duty" : fromSrc ? "From the agent source " + esc(i.source_title || i.source) : (i.branch ? `<span class="mono">${esc(i.branch)}</span>` : "") + (i.worktree ? (i.branch ? " in " : "") + esc(i.worktree) : "") || "No branch reported";
   const st = i.state === "working" ? pill("running", "working") : i.waiting_on_owner ? pill("awaiting", "waiting for you") : pill("", i.state);
   const pr = i.pr ? pill(i.pr.draft ? "" : "running", (i.pr.draft ? "draft " : "") + "PR #" + i.pr.number) : "";
-  const title = `${o.project === false ? "" : esc(i.project || "Other") + " "}${pill("", duty ? "duty" : "session")}`;
+  const title = fromSrc ? `${esc(i.agent)} ${pill("", "agent source")}` : `${o.project === false ? "" : esc(i.project || "Other") + " "}${pill("", duty ? "duty" : "session")}`;
   return `<div class="live-row" data-kind="${esc(i.kind)}" data-state="${esc(i.state)}">${li({title, end: st + pr,
-    sub: `${where}<br>${esc(agent)} · ${esc(i.doing)} · ${esc(minWords(i.minutes))}${!i.project ? "<br>Not in a registered project." : ""}`})}</div>`;
+    sub: `${where}<br>${esc(agent)} · ${esc(i.doing)} · ${esc(minWords(i.minutes))}${!i.project && !fromSrc ? "<br>Not in a registered project." : ""}`})}</div>`;
 }
 const liveSplit = items => ({work: items.filter(i => i.state === "working"), wait: items.filter(i => i.state === "idle" && i.waiting_on_owner), idle: items.filter(i => i.state === "idle" && !i.waiting_on_owner)});
 // Home: one line per session or duty working or waiting for you, the quiet ones folded into "N idle sessions", the finished ones not shown.
@@ -1563,7 +1563,7 @@ function openProjects(){ setKept(""); curLog = null; board = null; boardFor = nu
 function addonsStrip(){
   const att = obsAttention(false), rows = addonList().map(a => ({a, alerts: att.filter(x => x.addon && x.addon.id === a.id)})).filter(r => r.alerts.length || (r.a.place && isPlace(r.a.place)));
   if(!rows.length) return "";
-  const row = ({a, alerts}) => li({icon: "plug", title: `${pill("", "Add-on: " + a.label)} ${alerts.length ? esc(alerts[0].text) : "Nothing needs you."}`,
+  const row = ({a, alerts}) => li({icon: "plug", title: `${pill("", (a.local ? "Local add-on: " : "Add-on: ") + a.label)} ${alerts.length ? esc(alerts[0].text) : "Nothing needs you."}`,
     sub: alerts.length ? `${alerts.length} ${plural(alerts.length, "alert")}${alerts[0].at ? " · " + esc(ago(alerts[0].at)) : ""}` : "Has its own page.",
     end: (a.place && isPlace(a.place) ? btn("Open " + esc(a.label), {size: "small", click: act("selectPlace", a.place)}) : "")
       + (alerts.length ? btn("See in Needs you", {size: "small", variant: "primary", click: act("addonNeeds", a.id)}) : "")});
@@ -2451,7 +2451,45 @@ function connHelp(id){
 function viewConnections(){
   if(!connData) return `<div class="stack"><sl-skeleton effect="sheen" style="height:120px"></sl-skeleton><sl-skeleton effect="sheen" style="height:120px"></sl-skeleton></div>`;
   const rows = connData.services, on = rows.filter(c => c.state === "ok").length;
-  return `<p class="hint" style="margin-bottom:var(--s4)"><b>${on} of ${rows.length} working.</b> Nothing here is read until you switch a service on.</p>` + storeCard(connData.store) + rows.map(connRow).join("");
+  return `<p class="hint" style="margin-bottom:var(--s4)"><b>${on} of ${rows.length} working.</b> Nothing here is read until you switch a service on.</p>` + storeCard(connData.store) + rows.map(connRow).join("") + agentSourcesCard(connData.agent_sources);
+}
+// "Add an agent source": a read-only list of agents or tasks from a small JSON API you already have (bin/agentsources.py). The token goes to the same store as the other credentials.
+const AS_FIELDS = [["name", "Name"], ["url", "Address"], ["token", "Token (if it needs one)"], ["list", "Path to the list"], ["f-name", "Field: name"], ["f-status", "Field: status"], ["f-last_run", "Field: last run (optional)"], ["f-detail", "Field: one short detail (optional)"]];
+const asVal = k => { const el = document.getElementById("as-" + k); return el ? String(el.value || "").trim() : ""; };
+function agentSourcesCard(a){
+  if(!a) return "";
+  const rows = (a.sources || []).map(x => li({title: esc(x.name), sub: `${esc(x.host)} · ${x.token ? "token saved" : "no token"} · ` + (x.state === "waiting" ? "waiting for the first answer" : x.state === "ok" ? `${x.agents} ${plural(x.agents, "agent")}, read ${esc(srcAgo(x.ok_at))}` : esc(x.error || "cannot be reached")),
+    end: pill(x.state === "ok" ? "done" : x.state === "waiting" ? "" : "bad", x.state === "ok" ? "Working" : x.state === "waiting" ? "Waiting" : "Unreachable") + btn("Remove", {size: "small", click: act("asRemove", x.id), attrs: `aria-label="Remove the agent source ${esc(x.name)}"`})})).join("");
+  const presets = (a.presets || []).map((p, i) => btn(esc(p.label), {size: "small", click: act("asPreset", i)})).join("");
+  const input = ([k, label]) => slInput({id: "as-" + k, label: label, type: k === "token" ? "password" : "text", password: k === "token"});
+  return `<section class="card conn" id="conn-agent-sources"><div class="conn-h"><h2>Add an agent source</h2>${pill("", (a.sources || []).length + " added")}</div>
+    <div class="conn-body"><p class="sub">An agent source shows agents that live somewhere else in Fleet, and on Home while one is running. Quarterdeck asks the address you give for one small JSON list, at most once a minute, over https or through a tunnel you run yourself (http://127.0.0.1:port). It only reads, never follows a redirect, keeps only the fields you map below, and the token stays in the credential store, never in a file or a log.</p>
+      ${rows}
+      <p class="sub" style="margin-top:var(--s3)">Start from an example, then change the address and the field names to match your service:</p><div class="btns">${presets}</div>
+      <p class="sub" id="as-note"></p>
+      <form class="conn-cred conn-add" ${actOn("submit", "seq", ["asAdd"], ["preventDefault"])}>${AS_FIELDS.map(input).join("")}
+        <div class="btns">${btn("Add source", {size: "small", variant: "primary", attrs: 'type="submit"'})}</div></form></div></section>`;
+}
+function asPreset(i){
+  const p = ((((connData || {}).agent_sources || {}).presets) || [])[i]; if(!p) return;
+  const set = (k, v) => { const el = document.getElementById("as-" + k); if(el) el.value = v || ""; };
+  set("name", p.name); set("url", p.url); set("token", ""); set("list", p.map.list); set("f-name", p.map.name); set("f-status", p.map.status); set("f-last_run", p.map.last_run); set("f-detail", p.map.detail);
+  const n = document.getElementById("as-note"); if(n) n.textContent = p.note || "";
+}
+async function asAdd(){
+  const name = asVal("name"), url = asVal("url");
+  if(!name) return fieldError(document.getElementById("as-name"), "Give the source a short name.");
+  if(!url) return fieldError(document.getElementById("as-url"), "Enter its address.");
+  if(!asVal("f-name")) return fieldError(document.getElementById("as-f-name"), "Say which field holds the agent's name.");
+  if(!asVal("f-status")) return fieldError(document.getElementById("as-f-status"), "Say which field holds the status.");
+  const j = await post("/api/agent-sources", {action: "add", name, url, token: asVal("token"), confirm: true,
+    map: {list: asVal("list"), name: asVal("f-name"), status: asVal("f-status"), last_run: asVal("f-last_run"), detail: asVal("f-detail")}});
+  if(j){ toast("Added. Quarterdeck will read it in the background."); loadConnections(true); }
+}
+async function asRemove(id){
+  if(!await confirmDlg("The source, its saved token and what was read from it are deleted from this computer. The service itself is not touched.", {title: "Remove this agent source?", ok: "Remove source", danger: true})) return;
+  const j = await post("/api/agent-sources", {action: "remove", id, confirm: true});
+  if(j){ toast("Source removed."); loadConnections(true); }
 }
 // Where credentials are kept. The file is the default; the Keychain is opt-in and the move is confirmed.
 function storeCard(s){
@@ -2718,7 +2756,7 @@ function fleetRepo(s){
     : card(null, (liveS.map(sess).join("") || `<p class="hint">No Claude Code session is open in this repository.</p>`)
         + (otherS.length ? `<sl-details summary="Earlier today · ${otherS.length} quiet or ended" data-fk="s:${esc(s.id)}" ${fleetOpen.has("s:" + s.id) ? "open" : ""} style="margin-top:var(--s3)">${otherS.map(sess).join("")}</sl-details>` : ""),
         {kicker: "Sessions now", count: liveS.length ? `${liveS.filter(x => x.state === "working").length} working, ${liveS.filter(x => x.state === "idle").length} waiting for you` : "", label: "Sessions now"});
-  const runs = s.runs === "own" ? "Runs its own agents, defined in the repository." : s.runs === "crew" ? `Works with the built-in crew: ${esc((s.crew || []).join(", "))}. The repository has no agents of its own.` : "No agents are set up for this project yet.";
+  const runs = s.kind === "reported" ? "Reports its own sessions and agents to Quarterdeck, one line at a time." : s.runs === "own" ? "Runs its own agents, defined in the repository." : s.runs === "crew" ? `Works with the built-in crew: ${esc((s.crew || []).join(", "))}. The repository has no agents of its own.` : "No agents are set up for this project yet.";
   const work = card(null, group("In progress", "Changes, commits without a pull request, drafts and reviews.", live, true) || emptyState({inline: true, title: "Nothing in progress.", body: "Every worktree is finished or quiet."})
       + group("Finished, still on disk", "The pull request merged or closed; the worktree can be removed.", done, false) + group("Quiet", "No changes and nothing ahead of the base.", quiet, false),
     {kicker: "Work in this repository", count: `${T.length} ${plural(T.length, "worktree")}: ${live.length} in progress, ${done.length} finished, ${quiet.length} quiet`, label: "Work in this repository"});
@@ -2729,6 +2767,19 @@ function fleetRepo(s){
   return `<section class="fleet-src"><div class="phead2">${kicker("Repository")}<h2 class="card-t">${esc(s.title)}</h2><p class="sub">${esc(s.about)}</p><p class="sub">${runs}</p></div>
     <div class="split"><div class="stack">${work}${flow}</div><div class="stack" data-calm="hide">${sessions}${agents}</div></div></section>`;
 }
+// An agent source added in a form (bin/agentsources.py): only the four mapped fields, every one shown as text. An unreachable source says so and keeps its last list.
+const SRC_PILL = {running: ["running", "running"], waiting: ["awaiting", "waiting"], done: ["done", "done"], failed: ["bad", "failed"], unknown: ["", "status unknown"]};
+const srcAgo = sec => sec ? ago(new Date(sec * 1000).toISOString()) : "";
+function fleetAgentSource(s){
+  const list = s.agents || [];
+  const note = s.waiting ? callout("running", "Waiting for the first answer.", "Quarterdeck asks a source in the background, once a minute at most.")
+    : s.error ? callout("blocked", "This source cannot be reached right now.", `${esc(s.error)}${list.length && s.ok_at ? ` Showing what it last reported, ${esc(srcAgo(s.ok_at))}.` : ""}`) : "";
+  const rows = list.map(a => { const p = SRC_PILL[a.status] || SRC_PILL.unknown, when = a.last_run ? "last run " + srcAgo(Date.parse(a.last_run) / 1000) : a.last_run_text ? "last run " + a.last_run_text : "";
+    return li({title: esc(a.name), sub: [a.detail ? esc(a.detail) : "", esc(when)].filter(Boolean).join(" · ") || "no detail reported", end: pill(p[0], p[1])}); }).join("");
+  const run = list.filter(a => a.status === "running").length;
+  return `<section class="fleet-src"><div class="phead2">${kicker("Agent source")}<h2 class="card-t">${esc(s.title)}</h2><p class="sub">Read only. Added on the Connections page.</p></div>${note}
+    ${card(null, rows || (s.waiting || s.error ? "" : `<p class="hint">The source reported no agents.</p>`), {kicker: "Agents", count: list.length ? `${list.length} ${plural(list.length, "agent")}${run ? ", " + run + " running" : ""}` : null, label: "Agents of " + s.title})}</section>`;
+}
 function viewFleet(){
   if(!fleetData) return `<div class="stack"><sl-skeleton effect="sheen" style="height:90px"></sl-skeleton><sl-skeleton effect="sheen" style="height:200px"></sl-skeleton></div>`;
   const errs = (fleetData.errors || []).map(e => callout("blocked", esc(e), "")).join("");
@@ -2736,7 +2787,7 @@ function viewFleet(){
   const mineOnly = sel && fleetData.sources.some(s => s.project === sel), shown = mineOnly ? fleetData.sources.filter(s => s.project === sel) : fleetData.sources;
   const scope = sel && !mineOnly ? callout("running", `${esc(sel)} has no fleet of its own, so every registered fleet is shown.`, "")
     : mineOnly && fleetData.sources.length > shown.length ? callout("running", `Showing ${esc(sel)} only.`, "", {actions: btn("Show every fleet", {size: "small", click: act("selectProject", "")})}) : "";
-  return errs + scope + shown.map(s => s.kind === "repo-agents" ? fleetRepo(s) : `<section class="fleet-src"><div class="phead2">${kicker("Local agents")}<h2 class="card-t">${esc(s.title)}</h2><p class="sub">${esc(s.about)}</p></div>
+  return errs + scope + shown.map(s => s.kind === "agent-source" ? fleetAgentSource(s) : s.kind === "repo-agents" || s.kind === "reported" ? fleetRepo(s) : `<section class="fleet-src"><div class="phead2">${kicker("Local agents")}<h2 class="card-t">${esc(s.title)}</h2><p class="sub">${esc(s.about)}</p></div>
     ${s.error ? callout("blocked", esc(s.error), "") : ""}<div class="grid g3">${s.jobs.map(j => fleetJob(s.id, j)).join("")}</div></section>`).join("");
 }
 /* ---- connections: every service, where it stands, what it needs ---- */
@@ -5423,7 +5474,7 @@ const ACTIONS = {
   seeAttention: () => { go("brain"); setTimeout(openAttention, 900); },
   brainErrClear: () => { brainErr = ""; render(); },
   copyCommand, firstRunDemo, firstRunSkip, homeTicket, ackInbox, addSched, approveMissionPlan, attachAdd, attachLook, attachNew, backToLedger, bargeInToggle, briefAct, briefAsk, briefForIssue, briefRetry, briefSend,
-  capDone, capSubmit, caseStepTo, closeCard, closeDrawer, closeMissionPage, closeMobileMenu, closePalette, connAddOpen, connAddSave, connEnable, connHelp, connRemove, connRemoveAccount, connSave, connStore, connTest, crewRun,
+  capDone, capSubmit, caseStepTo, closeCard, closeDrawer, closeMissionPage, closeMobileMenu, closePalette, asAdd, asPreset, asRemove, connAddOpen, connAddSave, connEnable, connHelp, connRemove, connRemoveAccount, connSave, connStore, connTest, crewRun,
   crewEnable, liveJump, crewSchedule, openRun, runGo, runPaint,
   dockStartOver, dockGo, dockToggle, explainWrites, fileAsIssues, fixItem, fixSelected, fleetAct, focusEdit, go, helmOrb, leaveBrain, linkPanelToMission,
   loadBoard, markSeen, mergePr, noteAdd, noteDone, noteEditSave, noteEditStart, noteEditStop, noteFilter, notePromote, noteTag, nwMakeBrief,

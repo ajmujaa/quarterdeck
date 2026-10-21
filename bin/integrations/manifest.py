@@ -167,7 +167,7 @@ def status(services=None, cfg=None, have=None, recorded=None):
 # ---- changing things: a credential goes in and is never read back out; a feed is switched on or off ---------------------------
 
 def known_keys(services=None):
-    return {c["key"] for s in (load_services() if services is None else services) for c in s["credentials"]}
+    return {c["key"] for s in (load_services() if services is None else services) for c in s["credentials"]} | {common.AGENT_SOURCE_KEY}
 
 
 _LOCK = threading.RLock()
@@ -250,7 +250,7 @@ def _move_store(to, services=None):
     if to == "keychain" and not keychain.available():
         raise ValueError("the macOS Keychain is not available on this computer")
     base = known_keys(services)
-    labels = {accounts.DEFAULT} | {l for src_ in common.load_config()["sources"].values() for l in accounts.labels_of(src_)}
+    labels = {accounts.DEFAULT} | {l for src_ in common.load_config()["sources"].values() for l in accounts.labels_of(src_)} | set(common.agent_source_ids())
     keys = {stored_name(k, l) for k in base for l in labels} | set(common.EXTRA_KEYS)
     try:
         if frm == "keychain":

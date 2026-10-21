@@ -4010,7 +4010,7 @@ def attach_api(b):
     except ValueError as e:
         return 400, {"error": str(e)}
     if not path.exists():
-        return 400, {"error": f"there is no folder at {raw}"}
+        return 400, {"error": f"{raw} is not a folder (there is nothing at that path)"}
     if not path.is_dir():
         return 400, {"error": f"{raw} is a file, not a folder"}
     try:

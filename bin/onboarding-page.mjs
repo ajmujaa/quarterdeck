@@ -125,7 +125,7 @@ try {
     };
     const bads = [
       ["an empty field", "   ", /Paste a folder path first/],
-      ["a folder that does not exist", "~/projects/not-there/", /no folder at/],
+      ["a folder that does not exist", "~/projects/not-there/", /nothing at that path/],
       ["a file instead of a folder", `${HOME}/projects/sample-react/package.json`, /is a file, not a folder/],
       ["a hidden folder", `${HOME}/.hidden-proj`, /hidden folder/],
       ["a folder outside the allowed places", OUTSIDE, /outside the places/],

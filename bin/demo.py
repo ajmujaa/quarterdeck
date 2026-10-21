@@ -972,6 +972,7 @@ class World:
             "missions": self.missions(), "showcase": self.showcase,
             "inbox": self.inbox(t, runs), "panels": panels, "fixes": fixes, "cycles": self.cycle_list(), "fixqueue": self.queue,
             "dismissed_missions": {"fix:issue#18": {"at": self.ago(minutes=30)}},
+            "first_run": False,                    # Demo is what the first-run screen's button switches on: it never asks again here
             "briefs": self.maker.summary() if self.maker else [], "plans": self.maker.plan_summary() if self.maker else [],
             "spend": self.spend(t), "schedules": self.schedules(), "docs": self.docs(),
             "projects": [{"name": k, "repo": "" if k in NO_REPO else f"{ORG}/{k}", "summary": v["summary"], "duties": v["duties"], "guardrails": GUARDRAILS,

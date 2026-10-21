@@ -2828,7 +2828,7 @@ with _tf.TemporaryDirectory() as _ad:
         _none = not d.PROJECTS_FILE.exists()
         _c5, _b5 = d.attach_api({"path": str(_app), "apply": True, "confirm": True, "name": "Tidy-App"})
         _c6, _b6 = d.attach_api({"path": str(_app), "apply": True, "confirm": True, "name": "Tidy-App"})
-        check("attach endpoint: no folder, or a folder that is not there, is a plain 400", _c1 == 400 and _c2 == 400 and "not a folder" in _b2["error"])
+        check("attach endpoint: no folder, or a folder that is not there, is a plain 400", _c1 == 400 and _c2 == 400 and "not a folder" in _b2["error"] and "nothing at that path" in _b2["error"])
         check("attach endpoint: looking returns the profile and the proposal and registers nothing", _c3 == 200 and _b3["proposal"]["entry"]["verify"] == "npm test" and not _b3["applied"])
         check("attach endpoint: applying without confirm is refused and nothing is written", _c4 == 400 and "confirm" in _b4["error"] and _none)
         check("attach endpoint: with confirm the project is registered under the lowercase name; a second time is refused",
@@ -3322,7 +3322,7 @@ with _tf.TemporaryDirectory() as _id_dir:
     _g2, _s2 = _scan.infra_changed(_r, ["host.json", "p/x.bicepparam", "t/arm.json", "run/service.yaml", ".dev.vars"])
     check("infra: Azure Functions host.json, .bicepparam, an ARM template and a Cloud Run service are found; a committed .dev.vars is named and never opened",
           dict(_g2) == {"host.json": "Azure Functions", "p/x.bicepparam": "Azure Bicep", "t/arm.json": "Azure ARM template", "run/service.yaml": "Google Cloud Run"} and _s2 == [".dev.vars"], (_g2, _s2))
-check("attach: the proposal names the stack packs that fit", _attach.propose(_scan.scan(ROOT))["entry"]["packs"] == ["python"])
+check("attach: the proposal names the stack packs that fit", _attach.propose(_scan.scan(ROOT))["entry"]["packs"] == ["python", "typescript-node"])   # the repo carries packaging/npm/package.json, which the scan reads as a Node package
 
 # ---- theme: light tokens exist, every token used is defined, no raw colours outside the token blocks ----
 # One scheme: the semantic tokens in assets/ui.css (dark by default, a light block as an explicit choice and as the OS default).

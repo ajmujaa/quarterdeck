@@ -4,7 +4,7 @@
 - Author every commit as `Mujahid <500292+ajmujaa@users.noreply.github.com>` (`git -c user.name=Mujahid -c user.email=500292+ajmujaa@users.noreply.github.com commit`).
 - Never mention Claude, an AI, an assistant or a session link anywhere: commits, code, comments, docs, PR text, reports. No `Co-Authored-By`, no `Claude-Session`.
 - No em dashes in user-facing text. Nothing loads from the internet at runtime.
-- Do not push in pieces. Run `python3 bin/check.py` green on your branch, then one push. Open a PR into `main` (it is protected; both CI jobs must pass).
+- Do not run the full `bin/check.py` locally; GitHub CI runs it for free on both macOS and Ubuntu. Run only the suites for the files you touched (`python3 bin/selftest.py` and the matching `bin/selftest-*.sh`). Push the branch and open a PR into `main` (it is protected; both CI jobs must pass). Read the CI log, fix, and push again if it is red. Keep pushes few: each CI run takes about 35 minutes.
 - Use the name Relay for any sample add-on in tests and demos. Never name real products.
 - Tests use temp folders and a fake HOME. Never touch port 7878, real `~/.quarterdeck`, `~/.config`, LaunchAgents or the keychain.
 - Write `docs/reports/cloud-round-3.md`: what was built, what was not checked, what still confuses a newcomer.

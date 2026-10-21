@@ -1,6 +1,7 @@
 """Google OAuth for an installed app: loopback redirect on 127.0.0.1, PKCE, one scope per source.
 
-Run once by hand:  python3 bin/integrations/google_oauth.py gmail [--account <label>]
+The dashboard runs this for you when you press Save on the last credential (it passes --no-browser and shows you the address as a button).
+By hand:  python3 bin/integrations/google_oauth.py gmail [--account <label>] [--no-browser]
 The refresh token (one per account) is kept beside the env file, mode 0600. Nothing here prints a secret.
 """
 import base64
@@ -35,7 +36,7 @@ def build_auth_url(client_id, redirect, scope, verifier, state):
     return AUTH_URL + "?" + urlencode({
         "client_id": client_id, "redirect_uri": redirect, "response_type": "code", "scope": scope,
         "code_challenge": b64u(hashlib.sha256(verifier.encode()).digest()),
-        "code_challenge_method": "S256", "state": state, "access_type": "offline", "prompt": "consent"})
+        "code_challenge_method": "S256", "state": state, "access_type": "offline", "prompt": "select_account consent"})
 
 
 def exchange_code(env, code, redirect, verifier):
@@ -100,7 +101,7 @@ def authorize(env, name, label="default", open_browser=True, timeout=240):
     srv.result, srv.timeout = None, 1
     redirect = f"http://127.0.0.1:{srv.server_port}/"
     url = build_auth_url(common.need(env, "GOOGLE_OAUTH_CLIENT_ID"), redirect, scope, verifier, state)
-    print("Open this address to sign in (it asks for read-only access to " + name + "):\n" + url)
+    print("Open this address to sign in (it asks for read-only access to " + name + "):\n" + url, flush=True)
     if open_browser:
         webbrowser.open(url)
     waited = 0
@@ -117,12 +118,14 @@ def authorize(env, name, label="default", open_browser=True, timeout=240):
     import json
     common.write_private(token_file(name, label), json.dumps({"refresh_token": d["refresh_token"], "scope": scope}))
     more = "" if label == accounts.DEFAULT else f" --account {label}"
-    print("Saved. Test it with: python3 bin/integrations/run.py " + name + more)
+    print("Saved. Test it with: python3 bin/integrations/run.py " + name + more, flush=True)
 
 
 if __name__ == "__main__":
     args = sys.argv[1:]
     label = "default"
+    open_browser = "--no-browser" not in args
+    args = [a for a in args if a != "--no-browser"]
     if "--account" in args:
         i = args.index("--account")
         try:
@@ -134,6 +137,6 @@ if __name__ == "__main__":
     if which not in SCOPES:
         sys.exit("usage: google_oauth.py gmail [--account <label>]")
     try:
-        authorize(common.load_env(label), which, label)
+        authorize(common.load_env(label), which, label, open_browser=open_browser)
     except common.IntegrationError as e:
         sys.exit(e.short)

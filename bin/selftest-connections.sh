@@ -20,7 +20,7 @@ print(len(bad))
 PY
 )" = 0 ]'
 ck "Gmail says the token expires after 7 days while the app is in Testing, and tells you to publish it to production first" \
-   'py "from integrations import manifest; s = [x for x in manifest.load_services() if x[\"id\"] == \"gmail\"][0][\"steps\"]; t = \" \".join(s); assert \"7 days\" in t and \"In production\" in t and \"Testing\" in t; assert [i for i, x in enumerate(s) if \"In production\" in x][0] < [i for i, x in enumerate(s) if \"google_oauth.py\" in x][0]" >/dev/null'
+   'py "from integrations import manifest; s = [x for x in manifest.load_services() if x[\"id\"] == \"gmail\"][0][\"steps\"]; t = \" \".join(s); assert \"7 days\" in t and \"In production\" in t and \"Testing\" in t; assert [i for i, x in enumerate(s) if \"In production\" in x][0] < [i for i, x in enumerate(s) if \"Continue with Google\" in x][0]" >/dev/null'
 ck "Site analytics has a property id field, and its steps name the exact data folder path of integrations.json" \
    'py "from integrations import manifest, common; r = [x for x in manifest.status(have=set(), cfg=common.load_config(), recorded={}) if x[\"id\"] == \"ga4\"][0]; assert \"GA4_PROPERTY_ID\" in [c[\"key\"] for c in r[\"credentials\"]]; assert any(str(common.HOME) + \"/config/integrations.json\" in s for s in r[\"steps\"]), r[\"steps\"]" >/dev/null'
 ck "Site analytics reads the property id from the page field first, then from the config file" \
@@ -415,7 +415,8 @@ assert "gmail@work" not in common.read_status() and "work" not in common.load_co
 # the status shape
 rows = {r["id"]: r for r in json.loads(json.dumps(manifest.status()))}
 assert rows["gmail"]["multi"] is True and rows["calendar"]["multi"] is False and rows["calendar"]["accounts"][0]["label"] == "default"
-assert set(rows["gmail"]["accounts"][0]) == {"label", "enabled", "state", "missing", "last_at", "error", "credentials"}
+assert set(rows["gmail"]["accounts"][0]) == {"label", "enabled", "state", "missing", "last_at", "error", "credentials", "signin"}
+assert rows["gmail"]["accounts"][0]["signin"] == {"kind": "google", "signed_in": False} and "signin" not in rows["calendar"]["accounts"][0]
 assert set(rows["gmail"]["accounts"][0]["credentials"][0]) == {"key", "label", "secret", "help", "looks", "optional", "present", "stored"}
 assert rows["gmail"]["accounts"][1]["credentials"][0]["key"] == "GOOGLE_OAUTH_CLIENT_ID", "the base key name, the page sends the label separately"
 # test: refused in demo mode, and never calls a real service
@@ -428,6 +429,9 @@ d.subprocess.run = lambda argv, **k: (ran.append(argv), type("R", (), {"returnco
 code, body = api(action="enable", id="gmail", label="personal", on=True, test=True)
 assert code == 200 and body["ok"] is False and "needs credentials" in body["message"], body
 assert ran[0][-3:] == ["gmail", "--account", "personal"] and ran[0][-4].endswith("run.py"), ran
+d.subprocess.run = lambda argv, **k: type("R", (), {"returncode": 1, "stdout": "gmail: failed: needs credentials: not signed in yet: run python3 bin/integrations/google_oauth.py gmail\n", "stderr": ""})()
+code, body = api(action="enable", id="gmail", label="personal", on=True, test=True)
+assert body["ok"] is False and "Sign in with Google" in body["message"] and "python3" not in body["message"], body
 code, body = api(action="enable", id="gmail", label="nobody", on=True, test=True)
 assert body["ok"] is False and "no such account" in body["message"]
 log = (d.LOGS / "connections.log").read_text()
@@ -439,6 +443,105 @@ assert mail["multi"] is True and [a["label"] for a in mail["accounts"]] == ["def
 assert w.post("/api/connections", {"action": "enable", "test": True, "confirm": True})[0] == 400
 gm = [c for c in w.connectors(0) if c["name"] == "gmail"]
 assert [c["account"] for c in gm] == ["work", "personal"] and len({c["key"] for c in gm}) == 2 and gm[0]["items"] != gm[1]["items"]
+PY
+pyk "the Google sign-in from the page: starts a stand-in, shows only a Google address, ends done or failed, cancel stops it, nothing sensitive is logged, and the real script runs with --no-browser" <<'PY'
+import importlib.util, time, subprocess, tempfile, textwrap, pathlib
+spec = importlib.util.spec_from_file_location("dash", sys.path[0] + "/dashboard.py")
+d = importlib.util.module_from_spec(spec); sys.modules["dash"] = d; spec.loader.exec_module(d)
+api = lambda **b: d.connections_api({"confirm": True, **b})
+fake = pathlib.Path(tempfile.mkdtemp()) / "fake_signin.py"
+fake.write_text(textwrap.dedent("""
+    import sys, time
+    mode = sys.argv[1]
+    if mode == "evil":
+        print("http://evil.example/steal?code=1", flush=True)
+    else:
+        print("Open this address to sign in:", flush=True)
+        print("https://accounts.google.com/o/oauth2/v2/auth?client_id=x&state=s", flush=True)
+    if mode == "hang":
+        time.sleep(60)
+    time.sleep(0.4)
+    if mode == "fail":
+        sys.exit("sign-in was cancelled or timed out: run it again")
+"""))
+def run_fake(mode, label="t1"):
+    code, body = d.signin_start("gmail", label, argv=[sys.executable, "-u", str(fake), mode])
+    assert code == 200 and body["state"] in ("starting", "waiting"), (code, body)
+    return label
+def wait_for(label, states, secs=10):
+    end = time.time() + secs
+    while time.time() < end:
+        v = d.signin_view(("gmail", label))
+        if v["state"] in states:
+            return v
+        time.sleep(0.05)
+    raise AssertionError(("timed out", d.signin_view(("gmail", label))))
+# success: the address appears while waiting, then done with no address left
+lab = run_fake("ok")
+v = wait_for(lab, ("waiting",))
+assert v["url"].startswith("https://accounts.google.com/o/oauth2/v2/auth?") and 0 < v["seconds_left"] <= 240, v
+v = wait_for(lab, ("done",)); assert v["url"] == "" and v["message"] == "Signed in.", v
+# a second start while one is waiting returns the running one instead of starting another
+lab = run_fake("hang", "t2")
+wait_for(lab, ("waiting",))
+before = d._SIGNIN[("gmail", lab)]["proc"].pid
+code, body = d.signin_start("gmail", lab, argv=[sys.executable, "-u", str(fake), "ok"])
+assert code == 200 and d._SIGNIN[("gmail", lab)]["proc"].pid == before, "one sign-in per account at a time"
+# cancel ends the process and says so
+v = d.signin_cancel(("gmail", lab)); assert v["state"] == "cancelled" and v["url"] == "", v
+d._SIGNIN[("gmail", lab)]["proc"].wait(timeout=5)
+assert d._SIGNIN[("gmail", lab)]["proc"].returncode != 0
+# a failure shows the child's short reason, and a non-Google address is never offered
+lab = run_fake("fail", "t3"); v = wait_for(lab, ("failed",))
+assert "cancelled or timed out" in v["message"] and v["url"] == "", v
+lab = run_fake("evil", "t4"); v = wait_for(lab, ("done", "failed"))
+assert v["url"] == "" and "evil" not in json.dumps(v), v
+# the API: confirm is needed, an unknown service and a bad label are 400, demo refuses, status is not logged, no address or code in the log
+assert d.connections_api({"action": "signin", "id": "gmail"})[0] == 400
+assert api(action="signin", id="ga4")[0] == 400
+assert api(action="signin", id="gmail", label="Bad Label")[0] == 400
+d.demo_set(True); assert api(action="signin", id="gmail")[0] == 400 and "Demo" in api(action="signin", id="gmail")[1]["error"]; d.demo_set(False)
+code, body = api(action="signin_status", id="gmail", label="t1"); assert code == 200 and body["state"] in ("done", "idle"), body
+log = (d.LOGS / "connections.log").read_text() if (d.LOGS / "connections.log").exists() else ""
+assert "accounts.google.com" not in log and "signin_status" not in log, log
+# the real script, with --no-browser and no credentials: no browser, a short message, a non-zero exit
+r = subprocess.run([sys.executable, "-u", str(pathlib.Path(sys.path[0]) / "integrations" / "google_oauth.py"), "gmail", "--no-browser"],
+                   capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL)
+assert r.returncode != 0 and "needs credentials" in (r.stderr + r.stdout) and "accounts.google.com" not in r.stdout, (r.returncode, r.stdout, r.stderr)
+PY
+pyk "HTTPS: with no certificates in this Python the Mac's list is used, and a certificate failure says so instead of 'could not reach the service'" <<'PY'
+import ssl, urllib.error
+from integrations import common
+# the context loads the system list only when the default one is empty
+calls = []
+class Ctx:
+    def cert_store_stats(self): return {"x509_ca": 0}
+    def load_verify_locations(self, p): calls.append(p)
+real = ssl.create_default_context
+ssl.create_default_context = lambda *a, **k: Ctx()
+try:
+    common._ssl_context()
+    assert calls == ["/etc/ssl/cert.pem"] or not __import__("os").path.isfile("/etc/ssl/cert.pem"), calls
+    calls.clear()
+    Ctx.cert_store_stats = lambda self: {"x509_ca": 140}
+    common._ssl_context(); assert calls == [], "a Python that has certificates keeps them"
+finally:
+    ssl.create_default_context = real
+# a failed certificate check is named
+class Fake:
+    def open(self, req, timeout=0): raise urllib.error.URLError(ssl.SSLCertVerificationError(1, "unable to get local issuer certificate"))
+common._NO_REDIRECT = Fake()
+try:
+    common._urllib_transport("GET", "https://example.com/", {}, None, 5); raise AssertionError("no error")
+except common.IntegrationError as e:
+    assert "cannot check the service's certificate" in str(e) and "could not reach" not in str(e), str(e)
+class Down:
+    def open(self, req, timeout=0): raise urllib.error.URLError(OSError("no route"))
+common._NO_REDIRECT = Down()
+try:
+    common._urllib_transport("GET", "https://example.com/", {}, None, 5); raise AssertionError("no error")
+except common.IntegrationError as e:
+    assert "could not reach the service" in str(e), str(e)
 PY
 pyk "qtdeck connect: list, enter (piped), remove, a secret as an argument is refused, a bad label exits non-zero, and nothing leaves the temp folders" <<'PY'
 import subprocess

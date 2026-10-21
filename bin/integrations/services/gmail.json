@@ -42,9 +42,9 @@
     "Publish the app: on the consent screen set the publishing status to In production. While it stays in Testing, Google expires the sign-in token after 7 days and Gmail stops until you sign in again.",
     "Google may show an unverified-app warning for your own account. That is expected for a personal app: choose Advanced, then continue. Do this publish step before you sign in, because a token made in Testing keeps the 7-day limit.",
     "Copy the client id and the client secret into the two fields here and save each one.",
-    "In a terminal in the Quarterdeck folder run: python3 bin/integrations/google_oauth.py gmail. For a second account add its label: python3 bin/integrations/google_oauth.py gmail --account work",
-    "Open the address it prints and approve read-only access. The sign-in token is kept beside the credentials file, readable by you only.",
-    "Switch Gmail on. If it later says the token expired or was revoked, run the sign-in command again."
+    "Press Save on the second value. Quarterdeck then opens the Google sign-in for you: pick your account and approve read-only access. For a second account use Add another account and do the same.",
+    "The sign-in token is kept beside the credentials file, readable by you only. If no tab opens, press Continue with Google on the card.",
+    "Switch Gmail on. If it later says the token expired or was revoked, press Sign in with Google again."
   ],
   "revoke": "In your Google Account, open Security, then Third-party access, pick the app and remove access. Then remove both fields here and delete ~/.config/quarterdeck/google-gmail-token.json.",
   "tested": "Parsing tested against sample data only; not tested against the real service.",

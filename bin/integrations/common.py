@@ -283,7 +283,23 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None                                  # a redirect would forward the Authorization header to another host
 
 
-_NO_REDIRECT = urllib.request.build_opener(_NoRedirect)
+SYSTEM_CA = "/etc/ssl/cert.pem"                  # the Mac's own list of trusted certificate authorities
+
+
+def _ssl_context():
+    """The default HTTPS context. A Python from python.org ships with no certificates until its Install Certificates step has been run, and then every
+    HTTPS call fails with "unable to get local issuer certificate". When this Python found none, use the system's list instead (the same trust a browser or curl uses)."""
+    import ssl
+    ctx = ssl.create_default_context()
+    try:
+        if not ctx.cert_store_stats().get("x509_ca") and os.path.isfile(SYSTEM_CA):
+            ctx.load_verify_locations(SYSTEM_CA)
+    except (OSError, ssl.SSLError):
+        pass
+    return ctx
+
+
+_NO_REDIRECT = urllib.request.build_opener(_NoRedirect, urllib.request.HTTPSHandler(context=_ssl_context()))
 SNAPSHOT_NAMES = {"meta": ("facebook", "instagram")}   # a source that writes more than one snapshot
 
 
@@ -300,7 +316,10 @@ def _urllib_transport(method, url, headers, data, timeout):
             return r.status, r.read()
     except urllib.error.HTTPError as e:
         return e.code, b""                      # the body is never read, so it can never be logged
-    except Exception:
+    except Exception as e:
+        import ssl
+        if isinstance(getattr(e, "reason", e), ssl.SSLCertVerificationError):
+            raise IntegrationError("this Python cannot check the service's certificate: run its Install Certificates.command, or use /usr/bin/python3")
         raise IntegrationError("network error: could not reach the service")
 
 

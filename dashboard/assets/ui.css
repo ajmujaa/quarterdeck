@@ -476,6 +476,8 @@ blockquote{margin:8px 0;padding:2px 12px;border-left:3px solid var(--line-2);col
 .conn-acct{margin-top:var(--s4);padding-top:var(--s3);border-top:1px solid var(--line)}.conn-acct .conn-h h3{font:500 14px var(--font-ui);flex:1;min-width:120px}
 .conn-more{margin-top:var(--s3)}
 .conn-cred{margin:var(--s3) 0;display:grid;grid-template-columns:minmax(0,1fr);gap:6px}
+.conn-cred .conn-field{margin-bottom:var(--s3)}
+.conn-signin{margin:var(--s3) 0}
 .conn-cred .field-row sl-input{flex:1}
 .set-row{display:grid;grid-template-columns:200px minmax(0,1fr);gap:2px 16px;padding:12px 0;border-top:1px solid var(--line)}
 .set-row:first-child{border-top:0}

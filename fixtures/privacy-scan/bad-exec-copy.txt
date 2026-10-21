@@ -1,0 +1,2 @@
+# execCommand copy
+document.execCommand('copy');

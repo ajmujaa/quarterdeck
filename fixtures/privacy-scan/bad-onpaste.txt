@@ -1,0 +1,2 @@
+# an onpaste handler
+el.onpaste = f;

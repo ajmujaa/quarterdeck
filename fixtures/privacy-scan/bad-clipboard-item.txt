@@ -1,0 +1,2 @@
+# writing a ClipboardItem
+navigator.clipboard.write([new ClipboardItem({})]);

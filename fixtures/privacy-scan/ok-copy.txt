@@ -1,0 +1,2 @@
+# the one allowed form
+function copyCommand(t){ navigator.clipboard.writeText(String(t)); }

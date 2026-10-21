@@ -1,0 +1,2 @@
+# an oncopy handler
+el.oncopy = f;

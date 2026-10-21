@@ -1,0 +1,2 @@
+# a write call built from pieces
+navigator['clip' + 'board']['write' + 'Text'](x);

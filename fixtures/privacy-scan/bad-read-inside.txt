@@ -1,0 +1,2 @@
+# a read inside the allowed function
+function copyCommand(t){ navigator.clipboard.writeText(t); navigator.clipboard.readText(); }

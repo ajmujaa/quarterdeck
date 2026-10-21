@@ -1,0 +1,2 @@
+# a cut listener
+document.addEventListener("cut", f);

@@ -1,0 +1,2 @@
+# the write call at the top level
+navigator.clipboard.writeText('x');

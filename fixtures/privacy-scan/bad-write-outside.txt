@@ -1,0 +1,2 @@
+# the write call outside the allowed function
+function other(t){ navigator.clipboard.writeText(t); }

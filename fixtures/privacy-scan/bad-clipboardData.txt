@@ -1,0 +1,2 @@
+# clipboardData in an event
+document.addEventListener('x', e => e.clipboardData.getData('text'));

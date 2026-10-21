@@ -424,6 +424,13 @@ class World:
                                           "verdict": "PROVEN", "detail": "opened by Quarterdeck",
                                           "plan": "wayfarer-web-plan-29.md" if item == 1 else "the ruling item itself, mechanical, no developer panel",
                                           **({"diff": DEMO_DIFF} if item == 1 else {})}
+        # fixes started from a board issue (panel "issue"): one the shipwright found already fixed, one stopped weeks ago, one stopped and then dismissed
+        for n, title, status, detail, mins in ((41, "Round the totals on the invoice page", "blocked", "NO_CHANGE already fixed on main in 4f2a9c1e", 300),
+                                               (12, "Remember the last filter on the list page", "failed", "the shipwright could not get the tests to pass", 60 * 24 * 21),
+                                               (18, "Show the time in the viewer's time zone", "failed", "the shipwright ran out of budget before it finished", 60 * 24 * 2)):
+            out[f"issue#{n}"] = {"project": "wayfarer-web", "panel": "issue", "item": n, "title": title, "kind": "change", "tier": "routine", "batch": None,
+                                 "status": status, "step": None, "lock": f"fix-wayfarer-web-issue-{n}", "fixrun": f"fix-i{n}", "started": self.ago(minutes=mins + 6),
+                                 "finished": self.ago(minutes=mins), "issue": n, "pr": None, "verdict": None, "detail": detail, "plan": None}
         running, finished, _ = self.timeline(t)
         for j in running + finished:
             if j.get("panel") is None:
@@ -962,6 +969,7 @@ class World:
             "crew": [{"name": n, "discipline": d, "panels": d.split(","), "seat": s, "bias": b} for n, d, s, b in CREW],
             "missions": self.missions(), "showcase": self.showcase,
             "inbox": self.inbox(t, runs), "panels": panels, "fixes": fixes, "cycles": self.cycle_list(), "fixqueue": self.queue,
+            "dismissed_missions": {"fix:issue#18": {"at": self.ago(minutes=30)}},
             "briefs": self.maker.summary() if self.maker else [], "plans": self.maker.plan_summary() if self.maker else [],
             "spend": self.spend(t), "schedules": self.schedules(), "docs": self.docs(),
             "projects": [{"name": k, "repo": "" if k in NO_REPO else f"{ORG}/{k}", "summary": v["summary"], "duties": v["duties"], "guardrails": GUARDRAILS,
@@ -1342,7 +1350,7 @@ class World:
             return 400, {"error": "Demo mode: nothing is drafted, filed or created."}
         if path in ("/api/ready/prove", "/api/docs/draft", "/api/docs/apply", "/api/project/duties"):
             return 400, {"error": "Demo mode: nothing is run, drafted or changed."}
-        if path == "/api/project/guardrails":
+        if path in ("/api/project/guardrails", "/api/mission/action"):
             return 400, {"error": "Demo mode: nothing is changed."}
         if path == "/api/work":
             project, issue, action = b.get("project"), b.get("issue"), b.get("action")

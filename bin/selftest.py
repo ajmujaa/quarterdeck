@@ -3789,8 +3789,12 @@ check("the helper model has no fixed port: it is chosen afresh (an unused one) e
       d.LLM_PORT != 8089 and "8089" not in (ROOT / "bin" / "dashboard.py").read_text() and d._free_port() not in (0, 8089))
 _ls = _so.socket(); _ls.bind(("127.0.0.1", 0)); _ls.listen(1); _lp = _ls.getsockname()[1]
 _pids = d.listener_pids(_lp)
-if _pids is None:
-    print("  skip  listener check: neither lsof nor ss is available here")
+# This process is the listener, so a correct answer names it. An empty or missing answer means processes cannot be inspected from here: neither
+# lsof nor ss is installed, or the project-command sandbox (which forbids listing other processes on purpose) hides them. Skip, with the reason.
+_inspect = _dos.getpid() in (_pids or ())
+if not _inspect:
+    _why = "the sandbox forbids inspecting processes" if _dos.environ.get("QUARTERDECK_IN_SANDBOX") == "1" else "neither lsof nor ss can list listeners here"
+    print(f"  skip  listener check: {_why}")
 else:
     check("a listener that is not the helper's child is refused, and one that is the child is accepted; the key stays unsent otherwise",
           d.llm_ours(_ty.SimpleNamespace(pid=_dos.getpid()), _lp) and not d.llm_ours(_ty.SimpleNamespace(pid=_dos.getpid() + 1), _lp))
@@ -3811,7 +3815,7 @@ try:
         _refused = False
     finally:
         d.urllib.request.urlopen = _oldurl; _ls2.close()
-    if _pids is not None:
+    if _inspect:
         check("llm_stream refuses to send the key or the digest when something else owns the port", _refused and not _sent)
 finally:
     d.LLM.up = _saved_up; d.LLM.proc = _saved_pop; d.LLM_PORT = 0

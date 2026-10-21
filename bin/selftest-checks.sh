@@ -50,10 +50,11 @@ ship "$SRC_EDIT"
 ck "F2 control: an ordinary source edit is not refused, and the checks run before and after (2 runs)" '[ "$(last_verdict)" = DRY-RUN ] && [ "$(nchecks)" = 2 ]'
 case "$(uname -s)" in Darwin) sbname="the macOS sandbox" ;; Linux) sbname="bubblewrap" ;; *) sbname="" ;; esac
 if [ -n "$sbname" ]; then
-  ck "F2 a check command inherits no secrets: nothing from ~/.config/quarterdeck/env, no GH_TOKEN, no QUARTERDECK_*, a scratch HOME" '[ -s "$T/check-env.txt" ] && ! grep -qE "DECOY_FROM_ENVFILE|QD_DECOY_ENV|GH_TOKEN|^QUARTERDECK_|leak-" "$T/check-env.txt" && grep -q "^PATH=" "$T/check-env.txt" && ! grep -q "^HOME=$REALHOME\$" "$T/check-env.txt"'
+  ck "F2 a check command inherits no secrets: nothing from ~/.config/quarterdeck/env, no GH_TOKEN, no QUARTERDECK_*, a scratch HOME" '[ -s "$T/check-env.txt" ] && ! grep -v "^QUARTERDECK_IN_SANDBOX=1\$" "$T/check-env.txt" | grep -qE "DECOY_FROM_ENVFILE|QD_DECOY_ENV|GH_TOKEN|^QUARTERDECK_|leak-" && grep -q "^PATH=" "$T/check-env.txt" && ! grep -q "^HOME=$REALHOME\$" "$T/check-env.txt"'
+  ck "F2 a check command in the sandbox is told so (QUARTERDECK_IN_SANDBOX=1, the only QUARTERDECK_ word it gets), so a test can skip what the sandbox forbids on purpose" 'grep -q "^QUARTERDECK_IN_SANDBOX=1\$" "$T/check-env.txt"'
   ck "F2 a check command runs in $sbname: it cannot read the private state files, and cannot write in the owner's home" '[ -s "$T/check-read.txt" ] && ! grep -q TOPSECRET_CAPTURE "$T/check-read.txt" && [ ! -e "$REALHOME/.qd-check-write" ]'
 else
-  ck "F2 a check command inherits no secrets: nothing from ~/.config/quarterdeck/env, no GH_TOKEN, no QUARTERDECK_*, a scratch HOME" '[ -s "$T/check-env.txt" ] && ! grep -qE "DECOY_FROM_ENVFILE|QD_DECOY_ENV|GH_TOKEN|^QUARTERDECK_|leak-" "$T/check-env.txt" && ! grep -q "^HOME=$REALHOME\$" "$T/check-env.txt"'
+  ck "F2 a check command inherits no secrets: nothing from ~/.config/quarterdeck/env, no GH_TOKEN, no QUARTERDECK_*, a scratch HOME" '[ -s "$T/check-env.txt" ] && ! grep -v "^QUARTERDECK_IN_SANDBOX=1\$" "$T/check-env.txt" | grep -qE "DECOY_FROM_ENVFILE|QD_DECOY_ENV|GH_TOKEN|^QUARTERDECK_|leak-" && ! grep -q "^HOME=$REALHOME\$" "$T/check-env.txt"'
   st_skip "the sandbox check (neither sandbox-exec nor bubblewrap on this platform; the record says sandbox none and the pull request says so)"
 fi
 rm -f "$REALHOME/.qd-check-write"
@@ -329,7 +330,7 @@ APPNET=; [ "$(uname -s)" = Linux ] && APPNET=share
 QUARTERDECK_APP_NET=${APPNET:-} QUARTERDECK_QA_READY_WAIT=2 st_duty pilot --pr 5; QUARTERDECK_APP_NET=${APPNET:-} QUARTERDECK_QA_READY_WAIT=2 st_duty lookout --pr 5; st_duty inspector --pr 5 >/dev/null 2>&1
 ck "R6 control: a pull request from a branch of the repository itself does run its build, start and verify commands" 'grep -qx build "$R6RAN" && grep -qx start "$R6RAN" && grep -qx verify "$R6RAN"'
 ck "R6 and each runs with a scratch HOME, no secrets, and in the sandbox (a Mac's, or bubblewrap on Linux): it cannot write in the owner's home" \
-   'grep -q "^build:PATH=" "$R6ENV" && grep -q "^start:PATH=" "$R6ENV" && ! grep -qE "^(build|start|verify):HOME=$REALHOME\$" "$R6ENV" && ! grep -qE "^(build|start):(GH_TOKEN|QUARTERDECK_)" "$R6ENV" && [ ! -e "$REALHOME/.qd-r6-write" ]'
+   'grep -q "^build:PATH=" "$R6ENV" && grep -q "^start:PATH=" "$R6ENV" && ! grep -qE "^(build|start|verify):HOME=$REALHOME\$" "$R6ENV" && ! grep -v ":QUARTERDECK_IN_SANDBOX=1\$" "$R6ENV" | grep -qE "^(build|start):(GH_TOKEN|QUARTERDECK_)" && [ ! -e "$REALHOME/.qd-r6-write" ]'
 rm -f "$REALHOME/.qd-r6-write"
 
 # ---- R1: the network rule really confines a project command to this machine (real sandbox-exec, real curl) ----------------------

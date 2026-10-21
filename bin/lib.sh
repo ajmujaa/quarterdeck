@@ -1696,6 +1696,8 @@ px_prepare() {
       fi
     fi
   fi
+  # The marker for a test that must skip what the sandbox forbids on purpose (listing other processes, say). Set only where a sandbox is applied.
+  if [ "$RUN_SANDBOX" != none ]; then PX_ENV+=("QUARTERDECK_IN_SANDBOX=1"); fi
   return 0
 }
 # A check runs in a throwaway clone of the worktree (px_prepare ... clone); what it writes goes away with the clone, and the clone's path in its

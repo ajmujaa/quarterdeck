@@ -182,8 +182,10 @@ cat > "$T/p4.py" <<'PY'
 exec(open(__import__("os").environ["T"] + "/qc.py").read())
 before = json.load(open(VJ))["at"]
 start(); up = wait_running()
-time.sleep(2)
+end = time.time() + 30
 st, r = live(0)
+while time.time() < end and not r.get("lines"):
+    time.sleep(0.3); st, r = live(0)
 chk("a long run shows running and its first line", up and r["state"] == "running" and r["lines"][:1] == ["ok begun"], r)
 bad = post("/api/ready/prove-stop", {"project": P})
 chk("Stop without confirm is a 400, and for a project with nothing running a 409", bad[0] == 400 and post("/api/ready/prove-stop", {"project": "nosuch", "confirm": True})[0] == 400, bad)

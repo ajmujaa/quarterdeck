@@ -120,4 +120,52 @@ ck "setup: checks the tools, keeps the data folder, and ends with the attach ste
 # ---- dashboard: the Demo hint ----
 ck "dashboard ends with the Demo hint" 'grep -qF "Switch Demo on to look around before you connect anything." "$REAL/bin/qtdeck"'
 
+# ---- add: the default duty exists, and a duty or repo that does not is refused before anything is written ----
+AD="$T/home/Projects/addme"; mkdir -p "$AD"
+( cd "$AD" && git init -q && git remote add origin https://github.com/o/addme.git && echo x > f && git add -A && git -c user.email=t@t -c user.name=t commit -qm one ) >/dev/null 2>&1
+( cd "$AD" && qd "$H" "$P" add --duties bogus,surveyor ) >"$T/ad1" 2>&1; rad1=$?
+( cd "$AD" && qd "$H" "$P" add --repo bad ) >"$T/ad2" 2>&1; rad2=$?
+ck "add refuses a duty that does not exist and a repo that is not owner/name, and registers nothing" \
+  '[ "$rad1" != 0 ] && [ "$rad2" != 0 ] && grep -q "unknown duty .bogus." "$T/ad1" && grep -q "owner/name" "$T/ad2" && ! grep -q addme "$H/.quarterdeck/config/projects.json"'
+( cd "$AD" && qd "$H" "$P" add ) >"$T/ad3" 2>&1; rad3=$?
+adduty=$(sed -n 's/^Then: qtdeck run addme //p' "$T/ad3")
+ck "add registers with a default duty that exists, and the next command it prints names a real duty" \
+  '[ "$rad3" = 0 ] && [ -n "$adduty" ] && [ -f "$P/duties/$adduty.sh" ] && grep -q "duties: $adduty" "$T/ad3"'
+# ---- small command line gaps: logs -f, a bad number, one usage line, an empty list that says so ----
+qd "$H" "$P" logs -f >"$T/lg" 2>&1 & lgp=$!; sleep 2; pkill -P $lgp 2>/dev/null; kill $lgp 2>/dev/null; wait $lgp 2>/dev/null
+ck "logs -f follows the default log, it is not read as a log called -f" '! grep -q -- "-f.log" "$T/lg"'
+qd "$H" "$P" runs abc >"$T/rn" 2>&1; rrn=$?
+qd "$H" "$P" spend --days abc >"$T/sp" 2>&1; rsp=$?
+ck "runs and spend --days with something that is not a number say usage, with no jq error" \
+  '[ "$rrn" != 0 ] && [ "$rsp" != 0 ] && grep -q "usage: qtdeck runs" "$T/rn" && grep -q "usage: qtdeck spend" "$T/sp" && ! grep -qi "jq" "$T/rn" "$T/sp"'
+ck "run, plan, remove and mockup with a missing argument print one usage line, not the whole help" \
+  'good=1; for c in run plan remove mockup; do qd "$H" "$P" $c >"$T/u" 2>&1; rc=$?; [ "$rc" != 0 ] && [ "$(wc -l < "$T/u" | tr -d " ")" -le 2 ] && grep -q "usage: qtdeck $c" "$T/u" || good=0; done; [ "$good" = 1 ]'
+ck "plan list and brief list say so when there is nothing to list" \
+  'qd "$H" "$P" plan list addme >"$T/pl" 2>&1; qd "$H" "$P" brief list >"$T/bl" 2>&1; grep -q "no plans" "$T/pl" && grep -q "no briefs" "$T/bl"'
+ck "the cycle refusal names the command that switches it on" 'grep -q "qtdeck enable \$PROJECT cycle" "$REAL/bin/cycle"'
+# ---- a data folder that cannot be written: one plain line and a non-zero exit, never a traceback; remove does not say removed ----
+RO="$T/ro"; RUNRO=""; ROOK=1; mkdir -p "$RO/home"; chmod 755 "$T" "$RO"; chmod -R a+rX "$P" "$T/stub"
+if [ "$(id -u)" = 0 ]; then
+  if command -v setpriv >/dev/null 2>&1; then RUNRO="setpriv --reuid=65534 --regid=65534 --clear-groups"; chown 65534 "$RO/home"; else ROOK=0; fi
+else
+  ROOK=0       # the owner of a folder can chmod it back (qtdeck does at start), so read-only needs another user to own it
+fi
+qdro() { $RUNRO env -u QUARTERDECK_HOME -u QUARTERDECK_DIR -u QUARTERDECK_HOME_WHY -u PROJECTS_FILE -u QUARTERDECK_SECRETS_DIR \
+  HOME="$RO/home" QUARTERDECK_GH="$T/stub/gh" CLAUDE_BIN="$T/stub/claude" QUARTERDECK_DASHBOARD_PORT=1 PYTHONDONTWRITEBYTECODE=1 bash "$P/bin/qtdeck" "$@"; }
+if [ "$ROOK" = 1 ]; then
+  qdro home init >/dev/null 2>&1
+  printf '{"demo":{"repo":"o/demo","path":"~/x","duties":["surveyor"],"default_branch":"main","guardrails":[]}}\n' > "$RO/home/.quarterdeck/config/projects.json"
+  [ "$(id -u)" = 0 ] && chown -R root "$RO/home/.quarterdeck"; chmod -R a-w,a+rX "$RO/home/.quarterdeck"
+  for c in "enable demo planner" "repo demo a/b" "billing cap daily 5" "dashboard link" "remove demo"; do
+    qdro $c >"$T/ro.out" 2>&1; rc=$?
+    ck "read-only data folder, qtdeck $c: one plain line, non-zero exit, no traceback" \
+      '[ "$rc" != 0 ] && grep -qi "read-only\|could not save" "$T/ro.out" && ! grep -q "Traceback\|Error:" "$T/ro.out" && [ "$(wc -l < "$T/ro.out" | tr -d " ")" -le 2 ]'
+  done
+  ck "read-only data folder: remove did not say removed and the project is still registered" \
+    '! grep -q "^removed" "$T/ro.out" && jq -e ".demo" "$RO/home/.quarterdeck/config/projects.json" >/dev/null'
+  chmod -R u+w "$RO/home/.quarterdeck"
+else
+  echo "  skip  read-only data folder: needs to run as root with setpriv, so the folder belongs to someone else"
+fi
+
 echo; [ "$fails" = 0 ] && echo "  all checks passed" || { echo "  $fails check(s) failed"; exit 1; }

@@ -3,6 +3,7 @@
 No AI is involved anywhere in here. Nothing in this file logs a header, a token or a response
 body, and every error a caller sees is a short sentence the owner can act on.
 """
+import errno
 import fcntl
 import json
 import os
@@ -69,6 +70,16 @@ def make_item(title, sub="", at="", new=False, url=None):
 
 def now_iso():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def why_not_saved(e):
+    """One plain sentence for a write that failed: a full disk, a read-only data folder, or the system's own reason. Never a Python error name."""
+    n = getattr(e, "errno", None)
+    if n == errno.ENOSPC:
+        return "the disk is full: nothing was saved"
+    if n in (errno.EROFS, errno.EACCES, errno.EPERM):
+        return "your data folder is read-only: nothing was saved"
+    return "could not save: " + (getattr(e, "strerror", None) or "the file could not be written")
 
 
 def write_private(path, text):

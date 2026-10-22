@@ -435,16 +435,31 @@ def main(argv):
             print(f"{argv[1]}: billed to {'the API key' if argv[2] == 'api' else 'your plan'}")
             return 0
         if cmd == "cap" and ((len(argv) == 3 and argv[1] == "daily") or (len(argv) == 4 and argv[1] == "duty" and (argv[2] == "*" or SAFE_NAME.match(argv[2])))):
-            cfg = load()
             v = _amount(argv[-1])
-            if argv[1] == "daily":
-                cfg["caps"]["daily_usd"] = v
-            elif v is None:
-                cfg["caps"]["duty_usd"].pop(argv[2], None)
+            if argv[1] == "duty" and v is not None and argv[2] != "*" and argv[2] not in duty_names():
+                raise ValueError(f"no duty called {argv[2]}")
+            try:
+                cfg = load()
+            except ConfigError:
+                if not (argv[1] == "duty" and v is None):
+                    raise
+                cfg = None   # removing a duty cap must work even when the file names a duty this version does not have
+            if cfg is None:
+                try:
+                    raw = json.loads(config_path().read_text())
+                    raw["caps"]["duty_usd"].pop(argv[2])
+                except (OSError, ValueError, KeyError, TypeError, AttributeError):
+                    raise ConfigError(f"config/billing.json cannot be repaired here; there is no cap for {argv[2]} to remove")
+                common.write_private(config_path(), json.dumps(raw, indent=2) + "\n")
             else:
-                cfg["caps"]["duty_usd"][argv[2]] = v
-            save(cfg)
-            print("cap " + ("removed" if v is None else f"set to ${v:.2f} a day"))
+                if argv[1] == "daily":
+                    cfg["caps"]["daily_usd"] = v
+                elif v is None:
+                    cfg["caps"]["duty_usd"].pop(argv[2], None)
+                else:
+                    cfg["caps"]["duty_usd"][argv[2]] = v
+                save(cfg)
+            print("cap " + ("removed" if v is None else f"set to ${v:.2f} a " + ("day" if argv[1] == "daily" else "day for " + argv[2])))
             return 0
         if cmd == "doctor" and len(argv) == 1:
             for ok, label, detail in doctor_lines():
@@ -453,6 +468,9 @@ def main(argv):
     except ValueError as e:
         print(f"billing: {e}", file=sys.stderr)
         return 2
+    except OSError as e:
+        print("billing: " + common.why_not_saved(e), file=sys.stderr)
+        return 1
     print(__doc__, file=sys.stderr)
     return 2
 

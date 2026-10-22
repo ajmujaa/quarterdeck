@@ -170,11 +170,11 @@ check("progress counts closed, open, and open issues that have an open PR",
 
 import tempfile as _tf
 _cd = Path(_tf.mkdtemp()); _cap = d.CAPTURE; d.CAPTURE = _cd / "capture.jsonl"
-_n1 = d.capture_add("  call the   dentist \n"); _n2 = d.capture_add("x" * 5000)
+_n1 = d.capture_add("  call the   dentist \n"); _n2 = d.capture_add("x" * 1000)
 d.capture_done(_n1["id"])
 _v = d.captures_view()
 _bad = []
-for _f in (lambda: d.capture_add("   "), lambda: d.capture_done("zzzzzzzz"), lambda: d.capture_done("deadbeef")):
+for _f in (lambda: d.capture_add("   "), lambda: d.capture_add("x" * 1001), lambda: d.capture_done("zzzzzzzz"), lambda: d.capture_done("deadbeef")):
     try: _f(); _bad.append("accepted")
     except ValueError: pass
 d.CAPTURE = _cap
@@ -211,7 +211,7 @@ check("notes: bad input is refused (id rules, empty text, nothing to change, reo
       all(_refused(f) for f in (lambda: d.capture_edit("zzzzzzzz", text="x"), lambda: d.capture_edit("deadbeef", text="x"), lambda: d.capture_edit("../../etc", text="x"),
                                 lambda: d.capture_edit(_a["id"], text="   "), lambda: d.capture_edit(_a["id"]), lambda: d.capture_reopen(_a["id"]),
                                 lambda: d.capture_reopen("deadbeef"), lambda: d.capture_edit(None, text="x")))
-      and len(d.capture_edit(_a["id"], text="y" * 5000)["text"]) == 1000)
+      and _refused(lambda: d.capture_edit(_a["id"], text="y" * 1001)) and len(d.capture_edit(_a["id"], text="y" * 1000)["text"]) == 1000)
 _m = d.capture_promote(_b["id"], "mission", "my-web-app")
 _ms = d.load_missions()
 check("notes: promoting to a mission makes a draft through the mission path and remembers it on the note",
@@ -4416,6 +4416,20 @@ check("overview: mission counts use the page's states (a pull request waiting, a
 check("overview: the stack sentence comes from the survey's profile, empty when there is none", _po["alpha"]["stack"] == "Python with pytest" and _po["beta"]["stack"] == "")
 check("overview: no registered project gives an empty list", d.project_overview({}, [], [], [], {}, [], [], [], [], [], "", "") == [])
 check("overview: the real state and the Demo state both carry it", '"overview": _safe(lambda: project_overview(' in (ROOT / "bin" / "dashboard.py").read_text() and 'st["overview"] = project_overview(' in (ROOT / "bin" / "dashboard.py").read_text())
+
+# two writes of the same file at the same moment both succeed (no shared temp file)
+import tempfile, threading, json; _wj_dir = pathlib.Path(tempfile.mkdtemp()); _wj_errs = []
+def _wj_hammer():
+    for n in range(60):
+        try:
+            d.write_json(_wj_dir / "same.json", {"n": n})
+        except Exception as e:
+            _wj_errs.append(repr(e))
+_wj_ts = [threading.Thread(target=_wj_hammer) for _ in range(8)]
+[t.start() for t in _wj_ts]; [t.join() for t in _wj_ts]
+check("simultaneous write_json calls on one file all succeed and leave no temp file",
+      not _wj_errs and json.loads((_wj_dir / "same.json").read_text()).get("n") is not None and not list(_wj_dir.glob("*.tmp")), str(_wj_errs[:1]))
+shutil.rmtree(_wj_dir, ignore_errors=True)
 
 print()
 if FAILS:

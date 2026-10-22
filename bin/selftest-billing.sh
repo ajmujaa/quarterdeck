@@ -218,4 +218,12 @@ printf 'see %s here\n' "$KEY" > "$T/post.txt"
 ck "the outgoing-text scan refuses a text that holds the stored key" '! python3 "$T/bin/outscan.py" "$T/post.txt" >/dev/null 2>&1'
 printf 'the reversed form %s\n' "$(rev <<<"$KEY")" > "$T/post2.txt"
 ck "and its reversed form, and says so without the value" '! out=$(python3 "$T/bin/outscan.py" "$T/post2.txt" 2>&1) && ! grep -qF "$KEY" <<<"$out"'
+# a mistyped duty in `cap duty` is refused when typed, and a cap left by an older version can still be removed
+rm -f "$T/config/billing.json"
+ck "cap duty with a duty that does not exist is refused and writes nothing" \
+   '! python3 "$T/bin/billing.py" cap duty nope 3 >/dev/null 2>&1 && ! grep -q nope "$T/config/billing.json" 2>/dev/null'
+printf '{"caps":{"duty_usd":{"nope":3.0,"shipwright":1.0}}}\n' > "$T/config/billing.json"
+ck "cap duty <name> off removes a cap for a duty this version lacks, keeping the rest" \
+   'python3 "$T/bin/billing.py" cap duty nope off >/dev/null 2>&1 && ! grep -q nope "$T/config/billing.json" && grep -q shipwright "$T/config/billing.json" && python3 "$T/bin/billing.py" cap daily off >/dev/null 2>&1'
+rm -f "$T/config/billing.json"
 st_done

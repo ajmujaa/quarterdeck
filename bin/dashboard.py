@@ -20,6 +20,7 @@ exactly as it was: the model thinks, the harness acts.
 import array
 import atexit
 import hashlib
+import itertools
 import importlib.util
 import json
 import shlex
@@ -346,7 +347,7 @@ def firstrun_api(b=None):
     try:
         st = _firstrun.record(HOME, b["action"])
     except OSError as e:
-        return 500, {"error": "could not save it: " + type(e).__name__}
+        return 500, {"error": integrations_common.why_not_saved(e)}
     if b["action"] == "demo":
         demo_set(True)
     return 200, {"first": False, "done_at": st.get("done_at"), "demo": demo_on()}
@@ -467,11 +468,39 @@ def read_json(path, default):
     return got
 
 
+_TMP_SEQ = itertools.count()
+
+
+def _nested_deeper_than(v, limit):
+    """True when lists and objects inside v are nested more than limit deep. Walks with a list, not recursion."""
+    stack = [(v, 1)]
+    while stack:
+        x, d = stack.pop()
+        if isinstance(x, (dict, list)):
+            if d > limit:
+                return True
+            stack.extend((y, d + 1) for y in (x.values() if isinstance(x, dict) else x))
+    return False
+
+
+def text_in(v, name):
+    """A text field of a request, stripped; missing is empty, and anything but text (a number, a list, a boolean) is refused with a plain message."""
+    if v is None:
+        return ""
+    if not isinstance(v, str):
+        raise ValueError(f"{name} must be text")
+    return v.strip()
+
+
 def write_json(path, data):
     no_demo(f"write {path}")
-    tmp = Path(str(path) + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2))
-    tmp.replace(path)
+    tmp = Path(f"{path}.{os.getpid()}.{threading.get_ident()}.{next(_TMP_SEQ)}.tmp")   # one name per writer: two writes at once must not share a file
+    try:
+        tmp.write_text(json.dumps(data, indent=2))
+        tmp.replace(path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 STARTED = time.time()
@@ -1699,15 +1728,15 @@ def showcase_act(action, body, source):
     items = load_showcase()
 
     if action == "create":
-        title = (body.get("title") or "").strip()
+        title = text_in(body.get("title"), "title")
         if not title or len(title) > 200:
             raise ValueError("title must be 1-200 characters")
         rec = {
             "id": "s-" + secrets.token_hex(6), "title": title,
-            "summary": (body.get("summary") or "").strip()[:1000],
-            "before": (body.get("before") or "").strip()[:600],
-            "after": (body.get("after") or "").strip()[:600],
-            "role": (body.get("role") or "").strip()[:600],
+            "summary": text_in(body.get("summary"), "summary")[:1000],
+            "before": text_in(body.get("before"), "before")[:600],
+            "after": text_in(body.get("after"), "after")[:600],
+            "role": text_in(body.get("role"), "role")[:600],
             "synthetic": bool(body.get("synthetic")),
             "mission_id": body.get("mission_id") if isinstance(body.get("mission_id"), str) else None,
             "status": "draft", "published_at": None,
@@ -1725,11 +1754,11 @@ def showcase_act(action, body, source):
     if action == "update":
         if s["status"] != "draft":
             raise ValueError("unpublish before editing")
-        if "title" in body and not (body.get("title") or "").strip():
+        if "title" in body and not text_in(body.get("title"), "title"):
             raise ValueError("title must be 1-200 characters")
         for field, limit in (("title", 200), ("summary", 1000), ("before", 600), ("after", 600), ("role", 600)):
             if field in body:
-                s[field] = (body.get(field) or "").strip()[:limit]
+                s[field] = text_in(body.get(field), field)[:limit]
         if "synthetic" in body:
             s["synthetic"] = bool(body.get("synthetic"))
         s["updated_at"] = iso(now_utc())
@@ -2656,13 +2685,13 @@ def mission_act(action, body, source):
         project = body.get("project")
         if not isinstance(project, str) or project not in projects:
             raise ValueError("unknown project")
-        objective = (body.get("objective") or "").strip()
+        objective = text_in(body.get("objective"), "objective")
         if not objective or len(objective) > 2000:
             raise ValueError("objective must be 1-2000 characters")
         rec = {
             "id": "m-" + secrets.token_hex(6), "project": project, "objective": objective,
-            "constraints": (body.get("constraints") or "").strip()[:2000],
-            "success_criteria": (body.get("success_criteria") or "").strip()[:2000],
+            "constraints": text_in(body.get("constraints"), "constraints")[:2000],
+            "success_criteria": text_in(body.get("success_criteria"), "success_criteria")[:2000],
             "status": "draft", "created_at": iso(now_utc()), "updated_at": iso(now_utc()),
             "links": {"panels": [], "runs": [], "fixes": [], "issues": [], "prs": [], "documents": []},
             "plan": None, "plan_revision": 0, "plan_approved_revision": None, "plan_approved_at": None,
@@ -2679,11 +2708,11 @@ def mission_act(action, body, source):
     if action == "update":
         if m["status"] != "draft":
             raise ValueError("only a draft can be edited")
-        if "objective" in body and not (body.get("objective") or "").strip():
+        if "objective" in body and not text_in(body.get("objective"), "objective"):
             raise ValueError("objective must be 1-2000 characters")
         for field in ("objective", "constraints", "success_criteria"):
             if field in body:
-                m[field] = (body.get(field) or "").strip()[:2000]
+                m[field] = text_in(body.get(field), field)[:2000]
         if m.get("plan_approved_revision") is not None:
             m["plan_approved_revision"] = None
             m["events"].append(record_event("approval-invalidated", "an edit invalidated the approved plan", source))
@@ -3237,8 +3266,12 @@ NOTE_ID = re.compile(r"[0-9a-f]{8}")
 NOTE_CHARS = 1000
 
 
-def _note_text(text):
-    return " ".join(str(text or "").split())[:NOTE_CHARS]
+def _note_text(text, strict=False):
+    """One line of text: control characters go and runs of white space become one space. With strict, a note over the limit is refused, not cut."""
+    out = " ".join(re.sub(r"[\x00-\x08\x0e-\x1b\x7f]", "", str(text or "")).split())
+    if strict and len(out) > NOTE_CHARS:
+        raise ValueError(f"a note is at most {NOTE_CHARS} characters")
+    return out[:NOTE_CHARS]
 
 
 def _note_project(project):
@@ -3251,7 +3284,7 @@ def _note_project(project):
 
 
 def capture_add(text, project=""):
-    text = _note_text(text)
+    text = _note_text(text, strict=True)
     if not text:
         raise ValueError("nothing to capture")
     rec = {"id": secrets.token_hex(4), "at": iso(now_utc()), "text": text}
@@ -3286,7 +3319,7 @@ def capture_edit(cid, text=None, project=None):
     _note(cid)
     rec = {"id": cid, "at": iso(now_utc())}
     if text is not None:
-        rec["text"] = _note_text(text)
+        rec["text"] = _note_text(text, strict=True)
         if not rec["text"]:
             raise ValueError("a note cannot be empty")
     if project is not None:
@@ -3499,7 +3532,7 @@ def _start_llm():
 
 def _start_tts():
     if not (TTS_PYTHON.is_file() and TTS_MODEL.is_file()):
-        raise RuntimeError("the natural voice is not set up: see the README")
+        raise RuntimeError(f"the natural voice is not set up: it needs the Kokoro model at {TTS_MODEL} and a Python at {TTS_PYTHON}")
     p = subprocess.Popen([str(TTS_PYTHON), str(TTS_SCRIPT)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                          stderr=subprocess.DEVNULL, bufsize=0)
     try:
@@ -3782,6 +3815,7 @@ import fleetview
 import livework
 import projagents
 from integrations import accounts as integrations_accounts
+from integrations import common as integrations_common
 from integrations import manifest as integrations_manifest
 import billing as _billing                               # who pays for a duty's model calls, and the API key's presence (bin/billing.py)
 
@@ -3897,7 +3931,7 @@ def settings_api(b):
     except ValueError as e:
         return 400, {"error": str(e)}
     except OSError as e:
-        return 500, {"error": "could not write: " + type(e).__name__}
+        return 500, {"error": integrations_common.why_not_saved(e)}
     try:
         LOGS.mkdir(parents=True, exist_ok=True)
         with open(LOGS / "settings.log", "a") as f:                     # what changed, never a value of the key
@@ -4048,13 +4082,15 @@ def agent_sources_api(b):
             agentsources.kick()
             result = {"id": src["id"], "name": src["name"]}
         elif action == "remove":
-            result = {"removed": agentsources.remove(str(b.get("id") or ""))}
+            if not agentsources.remove(str(b.get("id") or "")):
+                return 404, {"error": "no such source"}
+            result = {"removed": True}
         else:
             return 400, {"error": "action must be add or remove"}
     except ValueError as e:
         return 400, {"error": str(e)}
     except OSError as e:
-        return 500, {"error": "could not write: " + type(e).__name__}
+        return 500, {"error": integrations_common.why_not_saved(e)}
     try:
         LOGS.mkdir(parents=True, exist_ok=True)
         with open(LOGS / "connections.log", "a") as f:
@@ -4113,7 +4149,7 @@ def connections_api(b):
     except ValueError as e:
         return 400, {"error": str(e)}
     except OSError as e:
-        return 500, {"error": "could not write: " + type(e).__name__}
+        return 500, {"error": integrations_common.why_not_saved(e)}
     try:
         LOGS.mkdir(parents=True, exist_ok=True)
         what = "test" if b.get("test") is True else "remove" if b.get("remove") is True else action
@@ -4131,13 +4167,15 @@ def newproject_api(b):
         return 400, {"error": "confirm is required: this creates a folder on this computer"}
     try:
         parent = check_project_folder(str(b.get("folder") or "").strip() or Path.home() / "Projects", "a new project", whole=False)
+        if parent.exists() and not parent.is_dir():
+            raise ValueError(f"{b.get('folder')} is a file, not a folder")
         if str(b.get("name") or "").strip():
             check_project_folder(str(parent / str(b.get("name")).strip()), "a new project")
         dest = _np.create(str(b.get("name") or "").strip(), str(parent), b.get("about"))
     except ValueError as e:
         return 400, {"error": str(e)}
     except OSError as e:
-        return 500, {"error": "could not create it: " + type(e).__name__}
+        return 500, {"error": integrations_common.why_not_saved(e)}
     return 200, {"path": str(dest)}
 
 
@@ -4460,7 +4498,7 @@ def repo_api(b):
     except ValueError as e:
         return 400, {"error": str(e)}
     except OSError as e:
-        return 500, {"error": "could not write: " + type(e).__name__}
+        return 500, {"error": integrations_common.why_not_saved(e)}
     argv = [sys.executable, str(ROOT / "bin" / "repo.py"), "create", project, "--private", "--yes"] + (["--push"] if push else [])
     try:
         r = subprocess.run(argv, capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL, cwd=str(ROOT))
@@ -4830,7 +4868,7 @@ def project_duties_api(b):
     except ValueError as e:
         return 400, {"error": str(e)}
     except OSError as e:
-        return 500, {"error": "could not write: " + type(e).__name__}
+        return 500, {"error": integrations_common.why_not_saved(e)}
     _ticket_log("duties", project)
     return 200, r
 
@@ -4858,7 +4896,7 @@ def project_guardrails_api(b):
     except ValueError as e:
         return 400, {"error": str(e)}
     except OSError as e:
-        return 500, {"error": "could not write: " + type(e).__name__}
+        return 500, {"error": integrations_common.why_not_saved(e)}
     return 200, r
 
 
@@ -5913,6 +5951,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Referrer-Policy", "no-referrer")
         if cookie:
             self.send_header("Set-Cookie", cookie)
+        if code == 405:
+            self.send_header("Allow", "GET, POST")
         self.end_headers()
         try:
             self.wfile.write(data)
@@ -6002,10 +6042,12 @@ class Handler(BaseHTTPRequestHandler):
             return {}
         try:
             v = json.loads(raw)
-        except ValueError:
+        except (ValueError, RecursionError):
             raise BodyError(400, "the request body is not JSON")
         if not isinstance(v, dict):
             raise BodyError(400, "the request body must be a JSON object")
+        if _nested_deeper_than(v, 64):                                         # Python 3.12 parses very deep JSON; str() or dumps of it later would not survive
+            raise BodyError(400, "the request body is nested too deeply")
         return v
 
     def do_HEAD(self):
@@ -6013,6 +6055,12 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Allow", "GET, POST")
         self.send_header("Content-Length", "0")
         self.end_headers()
+
+    def _method_not_allowed(self):
+        self.close_connection = True                                           # a body that was sent is not read
+        return self._send(405, json.dumps({"error": "method not allowed"}))
+
+    do_PUT = do_DELETE = do_PATCH = do_OPTIONS = _method_not_allowed
 
     # ---- reads ----
     def do_GET(self):
@@ -6116,6 +6164,8 @@ class Handler(BaseHTTPRequestHandler):
 
         if u.path == "/api/cycle/estimate":
             pr = (q.get("project") or [""])[0]
+            if pr not in read_json(PROJECTS_FILE, {}):
+                return self._send(400, json.dumps({"error": "unknown project"}))
             return self._send(200, json.dumps({"project": pr, "opted_in": (read_json(PROJECTS_FILE, {}).get(pr) or {}).get("cycle") is True, **cycle_estimate(pr)}))
         if u.path == "/api/intent":
             return self._send(200, json.dumps(intent_view()))
@@ -6150,7 +6200,10 @@ class Handler(BaseHTTPRequestHandler):
             f = LOGS / f"{name}.log"
             if not f.is_file():
                 return self._send(200, json.dumps({"lines": []}))
-            n = min(int((q.get("n") or ["200"])[0] or 200), 2000)
+            try:
+                n = max(1, min(int((q.get("n") or ["200"])[0] or 200), 2000))
+            except ValueError:
+                return self._send(400, json.dumps({"error": "n must be a number"}))
             return self._send(200, json.dumps({"lines": f.read_text(errors="replace").splitlines()[-n:]}))
 
         if u.path == "/api/project-agents":
@@ -6448,7 +6501,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, json.dumps(understand(b.get("text"), b.get("views") if isinstance(b.get("views"), list) else [], names,
                                                           {n: v["duties"] for n, v in demo.PROJECTS.items()} if demo_on() else None)))
             except Exception as e:
-                return self._send(500, json.dumps({"error": str(e)[:200]}))
+                return self._send(503 if "is not set up" in str(e) else 500, json.dumps({"error": str(e)[:200]}))
 
         if u.path == "/api/chat":
             self.send_response(200)
@@ -6474,7 +6527,7 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as e:
                 return self._send(400, json.dumps({"error": str(e)}))
             except Exception as e:
-                return self._send(500, json.dumps({"error": str(e)[:200]}))
+                return self._send(503 if "is not set up" in str(e) else 500, json.dumps({"error": str(e)[:200]}))
 
         if u.path in EXT["post"]:
             try:
@@ -6627,7 +6680,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if u.path == "/api/fixqueue":
             project = b.get("project", "")
-            if project not in read_json(PROJECTS_FILE, {}):
+            if not isinstance(project, str) or project not in read_json(PROJECTS_FILE, {}):
                 return self._send(400, json.dumps({"error": "unknown project"}))
             action = b.get("action")
             with QLOCK:
@@ -6651,7 +6704,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if u.path == "/api/stop":
             lock = b.get("lock", "")
-            if not SAFE_LOCK.match(lock or ""):
+            if not isinstance(lock, str) or not SAFE_LOCK.match(lock):
                 return self._send(400, json.dumps({"error": "bad lock"}))
             d = STATE / f"{lock}.lock"
             try:
@@ -6680,6 +6733,8 @@ class Handler(BaseHTTPRequestHandler):
             scheds = load_schedules()
             sid = b.get("id")
             if b.get("delete"):
+                if not any(s.get("id") == sid for s in scheds):
+                    return self._send(404, json.dumps({"error": "no such schedule"}))
                 scheds = [s for s in scheds if s.get("id") != sid]
                 write_json(SCHEDULES_FILE, scheds)
                 return self._send(200, json.dumps({"deleted": sid}))
@@ -6693,7 +6748,10 @@ class Handler(BaseHTTPRequestHandler):
                 validate_run(b.get("project"), b.get("duty"), b.get("args") or [])
             except ValueError as e:
                 return self._send(400, json.dumps({"error": str(e)}))
-            every, at = (b.get("every") or "").strip(), (b.get("at") or "").strip()
+            try:
+                every, at = text_in(b.get("every"), "every"), text_in(b.get("at"), "at")
+            except ValueError as e:
+                return self._send(400, json.dumps({"error": str(e)}))
             if at and not AT.match(at):
                 return self._send(400, json.dumps({"error": "time must be HH:MM"}))
             if not at and not EVERY.match(every):
@@ -6756,7 +6814,11 @@ def main():
         demo_set(True)
     STATE.mkdir(exist_ok=True)
     PANELS.mkdir(parents=True, exist_ok=True)
-    (STATE / "dashboard.pid").write_text(str(os.getpid()))
+    try:
+        (STATE / "dashboard.pid").write_text(str(os.getpid()))
+    except OSError as e:
+        print("quarterdeck: the dashboard cannot start: " + integrations_common.why_not_saved(e), file=sys.stderr)
+        sys.exit(1)
     tok = STATE / "dashboard.token"
     fd = os.open(tok, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)            # owner-only from the first byte, not after
     with os.fdopen(fd, "w") as f:
@@ -6801,7 +6863,11 @@ if __name__ == "__main__":
         print("every paired browser is signed out; `qtdeck dashboard link` pairs one again")
         sys.exit(0)
     if sys.argv[1:2] == ["link"]:           # `qtdeck dashboard link`: a fresh one-time link, made by writing into state/, never over HTTP
-        STATE.mkdir(parents=True, exist_ok=True)
-        print(pair_link())
+        try:
+            STATE.mkdir(parents=True, exist_ok=True)
+            print(pair_link())
+        except OSError as e:
+            print("quarterdeck: could not make a link: " + integrations_common.why_not_saved(e), file=sys.stderr)
+            sys.exit(1)
         sys.exit(0)
     main()

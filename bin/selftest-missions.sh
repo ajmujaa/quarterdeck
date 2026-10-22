@@ -234,6 +234,76 @@ chk("  and a merged fix, an old stopped one (three weeks) and a dismissed one, t
 PY
 pyck "$T/t3.py"
 
+# ---- 3c. other methods get a JSON 405, and a voice that is not set up says what it needs and is not a 500 ------------------------------------
+cat > "$T/t3c.py" <<'PY'
+exec(open(__import__("os").environ["T"] + "/qc.py").read())
+for m in ("PUT", "DELETE", "PATCH", "OPTIONS"):
+    c = http.client.HTTPConnection("127.0.0.1", PORT, timeout=30)
+    c.request(m, "/api/state", headers={"Host": "127.0.0.1:%d" % PORT}); r = c.getresponse(); raw = r.read(); c.close()
+    chk(m + " is a JSON 405 that names the allowed methods and carries the security headers",
+        r.status == 405 and r.getheader("Allow") == "GET, POST" and "error" in json.loads(raw) and r.getheader("X-Frame-Options") == "DENY" and b"<html" not in raw.lower())
+st, j = post("/api/speak", {"text": "hello"})
+chk("/api/speak with no voice set up is a 503 that names the model it needs, not a pointer to the README", st == 503 and "kokoro" in j.get("error", "").lower() and "README" not in j["error"])
+PY
+pyck "$T/t3c.py"
+# ---- 3b. a body or a value of the wrong kind is a 400 with a message, never a dropped connection or a 500 -------------------------------------
+cat > "$T/t3b.py" <<'PY'
+exec(open(__import__("os").environ["T"] + "/qc.py").read())
+def raw(method, path, data=None):
+    c = http.client.HTTPConnection("127.0.0.1", PORT, timeout=30)
+    h = {"Cookie": S["cookie"], "X-Quarterdeck-Token": S["token"], "Origin": ORIGIN}
+    if data is not None: h.update({"Content-Type": "application/json", "Content-Length": str(len(data))})
+    try:
+        c.request(method, path, body=data, headers=h); r = c.getresponse(); r.read(); return r.status
+    except (ConnectionError, http.client.HTTPException) as e:
+        return type(e).__name__
+    finally:
+        c.close()
+os.makedirs(T + "/logs", exist_ok=True); open(T + "/logs/x.log", "w").write("one\ntwo\n")
+chk("JSON nested very deeply is a 400, not a dropped connection", raw("POST", "/api/capture", b'{"text":' + b"[" * 5000 + b"]" * 5000 + b"}") == 400)
+chk("/api/log with n that is not a number is a 400", raw("GET", "/api/log?name=x&n=abc") == 400)
+chk("/api/log with a negative n answers", raw("GET", "/api/log?name=x&n=-5") == 200)
+for label, path, body in (
+        ("a number as mission constraints", "/api/missions", {"action": "create", "project": "tp", "objective": "x", "constraints": 123}),
+        ("a list as the mission objective", "/api/missions", {"action": "create", "project": "tp", "objective": ["x"]}),
+        ("a number as a showcase title", "/api/showcase", {"action": "create", "title": 123}),
+        ("a boolean as a showcase summary", "/api/showcase", {"action": "create", "title": "t", "summary": True}),
+        ("a number as the schedule interval", "/api/schedule", {"project": "tp", "duty": "planner", "every": 123}),
+        ("a number as the schedule time", "/api/schedule", {"project": "tp", "duty": "planner", "at": 123}),
+        ("a number as the lock to stop", "/api/stop", {"lock": 123}),
+        ("a list as the fix queue project", "/api/fixqueue", {"project": [], "action": "pause"})):
+    st, j = post(path, body)
+    chk(label + " is a 400 with a message", st == 400 and isinstance(j.get("error"), str) and "Traceback" not in j["error"] and "object has no attribute" not in j["error"])
+PY
+pyck "$T/t3b.py"
+# ---- 3d. small refusals: a note that is too long, a folder that is a file, an id that does not exist, a credential that is not one line of text -----
+cat > "$T/t3d.py" <<'PY'
+exec(open(__import__("os").environ["T"] + "/qc.py").read())
+st, j = post("/api/capture", {"text": "b" * 1001})
+chk("a note over 1000 characters is refused, not cut", st == 400 and "1000" in j.get("error", ""))
+st, j = post("/api/capture", {"text": "a\u0000b\u0007c"})
+chk("control characters are removed from a note", st == 200 and j.get("text", j.get("note", {}).get("text")) == "abc")
+import tempfile
+home = tempfile.mkdtemp(); open(home + "/README.md", "w").write("x")
+with open(T + "/config/quarterdeck.env", "a") as f: f.write("\nQUARTERDECK_PROJECT_ROOTS=\"${QUARTERDECK_PROJECT_ROOTS:-" + home + "}\"\n")
+st, j = post("/api/newproject", {"name": "f1", "folder": home + "/README.md", "confirm": True})
+chk("a new project in a folder path that is a file says so with a 400", st == 400 and "file" in j.get("error", ""))
+st, j = get("/api/cycle/estimate?project=nope")
+chk("a cycle estimate for a project that does not exist is a 400", st == 400)
+st, j = post("/api/schedule", {"id": "zzzz", "delete": True})
+chk("deleting a schedule that does not exist is a 404", st == 404)
+st, j = post("/api/agent-sources", {"action": "remove", "id": "zork", "confirm": True})
+chk("removing an agent source that does not exist is a 404", st == 404)
+st, j = post("/api/agent-sources", {"action": "add", "name": "a\u0000b", "confirm": True})
+chk("an agent source name with a control character says so", st == 400 and "control" in j.get("error", ""))
+for v in ("xoxp-\u0000-1", 123):
+    st, j = post("/api/connections", {"action": "credential", "id": "slack", "key": "SLACK_USER_TOKEN", "value": v, "confirm": True})
+    chk("a credential value %r is refused" % (v,), st == 400)
+import shutil; shutil.rmtree(home, ignore_errors=True)
+PY
+pyck "$T/t3d.py"
+
+
 # ---- 4. each action does what it says and nothing more -----------------------------------------------------------------------------------------
 cat > "$T/t4.py" <<'PY'
 exec(open(__import__("os").environ["T"] + "/qc.py").read())

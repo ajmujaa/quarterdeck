@@ -342,6 +342,8 @@ def main(a):
             r = revise_context(a[1], a[2])
             print(json.dumps(r))
         elif c == "list":
+            if not list_all(a[1]):
+                print("no briefs yet")
             for r in list_all(a[1]):
                 t = (r.get("brief") or {}).get("title", r.get("idea", "")[:50])
                 print(f"{r['id']}  {r['status']:18}  {r.get('project') or '(new idea)':20}  {t}")

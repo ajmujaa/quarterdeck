@@ -105,7 +105,7 @@ find "$QUARTERDECK_HOME/state/tmp" -mindepth 1 -maxdepth 1 -mtime +2 -exec rm -r
 RUNS_LEDGER="$QUARTERDECK_HOME/state/runs.json"
 [ -f "$RUNS_LEDGER" ] || echo '[]' > "$RUNS_LEDGER"
 
-log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "${LOG_FILE:-$QUARTERDECK_HOME/logs/quarterdeck.log}"; }
+log() { { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "${LOG_FILE:-$QUARTERDECK_HOME/logs/quarterdeck.log}"; } 2>/dev/null || true; }   # a log that cannot be written must not hide the real message
 # need_num <what> <value> — a number the duty will put into a gh query, a --jq filter or a path must be digits and nothing else.
 need_num() { [[ "${2:-}" =~ ^[1-9][0-9]{0,8}$ ]] || die "${1} takes a number (digits only), not '${2:-}'"; }
 say() { printf '%s\n' "$*" >&2; }
@@ -651,7 +651,7 @@ private_read_rules() { # the same list as Read(...) deny rules, comma separated;
 # claude_sandbox_json <workdir> — the sandbox settings for a call that may run shell commands: the private list above, plus the secret
 # file names inside the working folder, no escape hatch for an unsandboxed command, no silent run without a sandbox (failIfUnavailable:
 # the CLI otherwise runs the shell unconfined where it cannot build one), the worktree's own .git file closed to writes, and nothing written
-# outside the working folder (the sandbox's own default). Both keys were checked against the real CLI (2.1.293) by hand: see docs/public/SECURITY.md.
+# outside the working folder (the sandbox's own default). Both keys were checked against the real CLI (2.1.293) by hand: see SECURITY.md.
 claude_sandbox_json() { # claude_sandbox_json <workdir> [extra paths to deny, one per line: the secret screen's]
   local wdir=$1 extra=${2:-} n nw
   local -a nm

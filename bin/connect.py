@@ -94,6 +94,8 @@ def cmd_connect(argv):
         if v:
             manifest.set_credential(c["key"], v, label=label)
             changed += 1
+    if not changed and not any(c["key"] in have for c in s["credentials"]):
+        raise ValueError(f"nothing was given for {who}; nothing was saved and it stays off")
     manifest.set_enabled(s["id"], True, label=label)
     say(f"Saved {changed} credential{'' if changed == 1 else 's'} for {who}, and switched it on. Values are not shown again.")
     more = "" if label == accounts.DEFAULT else f" --account {label}"

@@ -2843,6 +2843,20 @@ def schedules_view():
 
 # ---- starting a run ----------------------------------------------------------
 
+# The flags each duty takes in `args`, from the duty's own argument parser and
+# what the page sends (dashboard/assets/crew.js). --apply is never here: writing
+# is asked for with the `apply` field only. A duty not listed takes no flags.
+DUTY_FLAGS = {
+    "surveyor": {"--pr"}, "marshal": {"--pr"}, "lookout": {"--pr"}, "pilot": {"--pr"}, "quartermaster": {"--pr"},
+    "inspector": {"--pr", "--issue"}, "assayer": {"--pr", "--issue"}, "caulker": {"--pr", "--findings"},
+    "infra": {"--pr", "--diff"}, "trials": {"--issue"}, "purser": {"--issue"}, "shipwright": {"--issue", "--plan"},
+    "joiner": {"--path"}, "planner": {"--capacity", "--budget"}, "logkeeper": {"--panel"},
+    "panel": {"--panel", "--question", "--issue", "--target", "--idea", "--brief"},
+    "foreman": {"--from", "--one"}, "harbourmaster": {"--sync-only", "--max"},
+    "bosun": {"--stale", "--todo", "--again"},
+    "brief": {"--idea", "--issue", "--for", "--revise", "--id", "--project"},
+}
+
 def validate_run(project, duty, args):
     """Return argv for a run, or raise ValueError. Nothing reaches a shell."""
     projects = read_json(PROJECTS_FILE, {})
@@ -2864,6 +2878,10 @@ def validate_run(project, duty, args):
         if a.startswith("--"):
             if not SAFE_FLAG.match(a):
                 raise ValueError(f"bad flag: {a}")
+            if a == "--apply":
+                raise ValueError(f"the {duty} was given {a} in its arguments; writing is asked for with the apply switch only")
+            if a not in DUTY_FLAGS.get(duty, ()):
+                raise ValueError(f"the {duty} does not take {a}")
         else:
             if not SAFE_VALUE.match(a) or ".." in a or a.startswith("/"):
                 raise ValueError(f"bad value: {a}")

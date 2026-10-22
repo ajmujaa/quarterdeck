@@ -3135,6 +3135,21 @@ with _tf.TemporaryDirectory() as _cd:
         _logtxt = (d.LOGS / "connections.log").read_text() if (d.LOGS / "connections.log").exists() else ""
         check("connections endpoint: nothing changes without confirm, unknown keys are refused, the answer and the log never hold the value",
               _c1 == 400 and _c2 == 200 and _c3 == 400 and "log-me-not" not in _json.dumps(_b2) and "log-me-not" not in _logtxt and "credential" in _logtxt, (_c1, _c2, _c3, _b2, _logtxt))
+        _w1c, _w1 = d.connections_api({"action": "credential", "key": "SLACK_USER_TOKEN", "value": "wrong-prefix-value", "confirm": True})
+        _w1saved = "wrong-prefix-value" in _envp.read_text()
+        _w2c, _w2 = d.connections_api({"action": "credential", "key": "SLACK_USER_TOKEN", "value": "xoxp-" + "right-prefix-value", "confirm": True})
+        _w3c, _w3 = d.connections_api({"action": "credential", "key": "GOOGLE_OAUTH_CLIENT_SECRET", "value": "not-gocspx-free-text", "confirm": True})
+        _w4c, _w4 = d.connections_api({"action": "credential", "key": "SLACK_USER_TOKEN", "value": "", "confirm": True})
+        _logtxt2 = (d.LOGS / "connections.log").read_text()
+        check("#147 a value that does not start the way the manifest says still saves, and the answer carries a warning that never repeats it",
+              _w1c == 200 and _w1saved and _w1.get("present") is True and _w1.get("warning") == "That does not start with xoxp-. It was saved anyway; if the Test fails, check the token."
+              and "wrong-prefix-value" not in _json.dumps(_w1) and "wrong-prefix-value" not in _logtxt2, (_w1c, _w1))
+        check("#147 a value with the right prefix, a free-text 'looks' and a removal carry no warning",
+              _w2c == 200 and "warning" not in _w2 and _w3c == 200 and "warning" not in _w3 and _w4c == 200 and "warning" not in _w4, (_w2, _w3, _w4))
+        check("#147 only a clear 'Starts with X' counts: other wordings and an unknown key give no warning",
+              _mf.prefix_warning("SLACK_USER_TOKEN", "zzz", [{"credentials": [{"key": "SLACK_USER_TOKEN", "looks": "A token that often starts with xoxp-"}]}]) == ""
+              and _mf.prefix_warning("SLACK_USER_TOKEN", "zzz", [{"credentials": [{"key": "SLACK_USER_TOKEN", "looks": "Starts with xoxp- or xoxb-"}]}]) == ""
+              and _mf.prefix_warning("NOPE", "zzz") == "" and "toast(j.warning, false, true)" in (ROOT / "dashboard" / "index.html").read_text())
         d.LOGS = _od[0]
         _src = (ROOT / "bin" / "integrations" / "manifest.py").read_text()
         check("connections: the manifest module makes no network call and starts no process", not any(w in _src for w in ("urllib", "socket", "subprocess", "os.system")))

@@ -148,7 +148,7 @@ Flags for the panel duty:
 Flags for add:
   --repo <owner/name>   override the inferred GitHub repo
   --path <dir>          override the inferred checkout path
-  --duties a,b          duties to enable (default: review)
+  --duties a,b          duties to enable (default: surveyor)
 
 qtdeck new <name> [--in DIR] [--about "..."]
                         start something new: a folder with git and a README, nothing registered
@@ -162,11 +162,11 @@ qtdeck new <name> [--in DIR] [--about "..."]
 
 Onboarding any project is two commands:
   cd ~/Projects/Whatever && qtdeck add
-  qtdeck run whatever review
+  qtdeck run whatever surveyor
 
 Examples:
   qtdeck doctor
-  qtdeck add --duties review,triage
+  qtdeck add --duties surveyor,planner
   qtdeck run harvest-pipeline surveyor --pr 168
   qtdeck run harvest-pipeline surveyor --pr 168 --apply
   qtdeck run harvest-pipeline panel --panel design --target src/screens
@@ -399,7 +399,7 @@ case "$cmd" in
     # Nothing here knows about any particular project. Registering one is the
     # whole onboarding story: a block in projects.json, written from wherever
     # you happen to be standing.
-    name="" repo="" path="" duties="review"
+    name="" repo="" path="" duties="surveyor"
     while [ $# -gt 0 ]; do
       case "$1" in
         --repo)   repo="${2:-}"; shift ;;
@@ -410,6 +410,14 @@ case "$cmd" in
       esac
       shift
     done
+
+    [ -n "$duties" ] || die "add: --duties needs at least one duty (see: qtdeck duties)"
+    for d in ${duties//,/ }; do
+      duty_exists "$d" || die "add: unknown duty '$d' (see: qtdeck duties)"
+    done
+    if [ -n "$repo" ] && ! [[ "$repo" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
+      die "add: --repo must look like owner/name, not '$repo'"
+    fi
 
     [ -n "$path" ] || path="$(safe_git rev-parse --show-toplevel 2>/dev/null || true)"
     [ -n "$path" ] || die "not inside a git checkout — pass --path <dir>"

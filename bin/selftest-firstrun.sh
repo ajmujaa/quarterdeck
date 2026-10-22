@@ -120,4 +120,16 @@ ck "setup: checks the tools, keeps the data folder, and ends with the attach ste
 # ---- dashboard: the Demo hint ----
 ck "dashboard ends with the Demo hint" 'grep -qF "Switch Demo on to look around before you connect anything." "$REAL/bin/qtdeck"'
 
+# ---- add: the default duty exists, and a duty or repo that does not is refused before anything is written ----
+AD="$T/home/Projects/addme"; mkdir -p "$AD"
+( cd "$AD" && git init -q && git remote add origin https://github.com/o/addme.git && echo x > f && git add -A && git -c user.email=t@t -c user.name=t commit -qm one ) >/dev/null 2>&1
+( cd "$AD" && qd "$H" "$P" add --duties bogus,surveyor ) >"$T/ad1" 2>&1; rad1=$?
+( cd "$AD" && qd "$H" "$P" add --repo bad ) >"$T/ad2" 2>&1; rad2=$?
+ck "add refuses a duty that does not exist and a repo that is not owner/name, and registers nothing" \
+  '[ "$rad1" != 0 ] && [ "$rad2" != 0 ] && grep -q "unknown duty .bogus." "$T/ad1" && grep -q "owner/name" "$T/ad2" && ! grep -q addme "$H/.quarterdeck/config/projects.json"'
+( cd "$AD" && qd "$H" "$P" add ) >"$T/ad3" 2>&1; rad3=$?
+adduty=$(sed -n 's/^Then: qtdeck run addme //p' "$T/ad3")
+ck "add registers with a default duty that exists, and the next command it prints names a real duty" \
+  '[ "$rad3" = 0 ] && [ -n "$adduty" ] && [ -f "$P/duties/$adduty.sh" ] && grep -q "duties: $adduty" "$T/ad3"'
+
 echo; [ "$fails" = 0 ] && echo "  all checks passed" || { echo "  $fails check(s) failed"; exit 1; }

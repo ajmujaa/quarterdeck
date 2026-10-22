@@ -143,5 +143,29 @@ ck "run, plan, remove and mockup with a missing argument print one usage line, n
 ck "plan list and brief list say so when there is nothing to list" \
   'qd "$H" "$P" plan list addme >"$T/pl" 2>&1; qd "$H" "$P" brief list >"$T/bl" 2>&1; grep -q "no plans" "$T/pl" && grep -q "no briefs" "$T/bl"'
 ck "the cycle refusal names the command that switches it on" 'grep -q "qtdeck enable \$PROJECT cycle" "$REAL/bin/cycle"'
+# ---- a data folder that cannot be written: one plain line and a non-zero exit, never a traceback; remove does not say removed ----
+RO="$T/ro"; RUNRO=""; ROOK=1; mkdir -p "$RO/home"; chmod 755 "$T" "$RO"; chmod -R a+rX "$P" "$T/stub"
+if [ "$(id -u)" = 0 ]; then
+  if command -v setpriv >/dev/null 2>&1; then RUNRO="setpriv --reuid=65534 --regid=65534 --clear-groups"; chown 65534 "$RO/home"; else ROOK=0; fi
+else
+  ROOK=0       # the owner of a folder can chmod it back (qtdeck does at start), so read-only needs another user to own it
+fi
+qdro() { $RUNRO env -u QUARTERDECK_HOME -u QUARTERDECK_DIR -u QUARTERDECK_HOME_WHY -u PROJECTS_FILE -u QUARTERDECK_SECRETS_DIR \
+  HOME="$RO/home" QUARTERDECK_GH="$T/stub/gh" CLAUDE_BIN="$T/stub/claude" QUARTERDECK_DASHBOARD_PORT=1 PYTHONDONTWRITEBYTECODE=1 bash "$P/bin/qtdeck" "$@"; }
+if [ "$ROOK" = 1 ]; then
+  qdro home init >/dev/null 2>&1
+  printf '{"demo":{"repo":"o/demo","path":"~/x","duties":["surveyor"],"default_branch":"main","guardrails":[]}}\n' > "$RO/home/.quarterdeck/config/projects.json"
+  [ "$(id -u)" = 0 ] && chown -R root "$RO/home/.quarterdeck"; chmod -R a-w,a+rX "$RO/home/.quarterdeck"
+  for c in "enable demo planner" "repo demo a/b" "billing cap daily 5" "dashboard link" "remove demo"; do
+    qdro $c >"$T/ro.out" 2>&1; rc=$?
+    ck "read-only data folder, qtdeck $c: one plain line, non-zero exit, no traceback" \
+      '[ "$rc" != 0 ] && grep -qi "read-only\|could not save" "$T/ro.out" && ! grep -q "Traceback\|Error:" "$T/ro.out" && [ "$(wc -l < "$T/ro.out" | tr -d " ")" -le 2 ]'
+  done
+  ck "read-only data folder: remove did not say removed and the project is still registered" \
+    '! grep -q "^removed" "$T/ro.out" && jq -e ".demo" "$RO/home/.quarterdeck/config/projects.json" >/dev/null'
+  chmod -R u+w "$RO/home/.quarterdeck"
+else
+  echo "  skip  read-only data folder: needs to run as root with setpriv, so the folder belongs to someone else"
+fi
 
 echo; [ "$fails" = 0 ] && echo "  all checks passed" || { echo "  $fails check(s) failed"; exit 1; }

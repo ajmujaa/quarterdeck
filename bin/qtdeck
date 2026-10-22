@@ -454,8 +454,13 @@ case "$cmd" in
   remove)
     name="${1:-}"; [ -n "$name" ] || die "usage: qtdeck remove <project>"
     project_exists "$name" || die "'$name' is not registered"
-    t=$(mktemp); jq --arg n "$name" 'del(.[$n])' "$PROJECTS_FILE" > "$t" && mv "$t" "$PROJECTS_FILE"
-    echo "removed '$name'"
+    t=$(mktemp)
+    if jq --arg n "$name" 'del(.[$n])' "$PROJECTS_FILE" > "$t" 2>/dev/null && mv "$t" "$PROJECTS_FILE" 2>/dev/null; then
+      echo "removed '$name'"
+    else
+      rm -f "$t"
+      die "could not save the registry: nothing was removed (is your data folder read-only or the disk full?)"
+    fi
     ;;
 
   fix)
@@ -612,7 +617,7 @@ case "$cmd" in
       exit 0
     fi
     if [ "${1:-}" = link ]; then      # a fresh one-time link for a dashboard that is already running (or about to be): pairs one browser, good for five minutes
-      python3 "$QUARTERDECK_DIR/bin/dashboard.py" link
+      python3 "$QUARTERDECK_DIR/bin/dashboard.py" link || exit 1
       exit 0
     fi
     pid=$(cat "$pidfile" 2>/dev/null || true)

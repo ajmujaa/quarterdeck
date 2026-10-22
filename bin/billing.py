@@ -468,6 +468,9 @@ def main(argv):
     except ValueError as e:
         print(f"billing: {e}", file=sys.stderr)
         return 2
+    except OSError as e:
+        print("billing: " + common.why_not_saved(e), file=sys.stderr)
+        return 1
     print(__doc__, file=sys.stderr)
     return 2
 

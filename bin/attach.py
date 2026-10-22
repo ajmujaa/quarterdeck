@@ -37,6 +37,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import home as _home
+from integrations import common as _common
 import scan as _scan
 import packs as _packs
 import protect as _protect
@@ -586,6 +587,9 @@ def main(argv):
         except ValueError as e:
             print(f"  {e}")
             return 2
+        except OSError as e:
+            print("qtdeck: " + _common.why_not_saved(e), file=sys.stderr)
+            return 1
         word = "turned on" if on else "turned off"
         if r["added"] or r["removed"] or cyc:
             print(f"  {project}: {word} {', '.join(duties + (['cycles'] if cyc else []))}.")
@@ -604,6 +608,9 @@ def main(argv):
         except ValueError as e:
             print(f"  {e}")
             return 2
+        except OSError as e:
+            print("qtdeck: " + _common.why_not_saved(e), file=sys.stderr)
+            return 1
         print(f"  {argv[1]}: GitHub repo set to {argv[2]}")
         print(f"  next: qtdeck run {argv[1]} surveyor --pr <number>")
         return 0

@@ -30,7 +30,7 @@ jobs:
       # Linux only (ignored on macOS): the pilot and lookout tests start an app a browser must reach, which on Linux needs the owner's opt-in (SECURITY.md)
       QUARTERDECK_APP_NET: ${{ matrix.os == 'ubuntu-latest' && 'share' || '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 2           # a pull request is checked out as a merge commit: its first parent is the base, which the next step compares against
       # A pull request that changes only repository furniture (issue and pull request templates, the dependabot and conduct files, the licence) runs no tests.

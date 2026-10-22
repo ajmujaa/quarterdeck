@@ -125,6 +125,23 @@ const dmsg = await confirmText();
 await dlgClick("#confirm-yes");
 ok("Discard draft asks, then removes the draft", dmsg.startsWith("Discard this draft?") && await gone(".tk-draft", 15000));
 
+// saving a draft whose tickets are already on the list says so, and counts only the tickets that were really added
+const draftOf = async (request, titles, did) => {
+  fs.writeFileSync(path.join(T, "fake-script.json"), JSON.stringify([{text: "TICKETS_JSON: " + JSON.stringify({tickets: titles.map(t => ({title: t, body: "b", acceptance: ["c"]}))}) + "\nRESULT: DRAFTED " + titles.length + " tickets", sleep: 1, cost_usd: 0.05}]));
+  await fill("#tk-request", request); await page.locator("#tk-draft").click(); return here("#tk-file-" + did, 40000);
+};
+const toasted = async needle => { for (let i = 0; i < 30; i++) { if ((await page.locator("sl-alert").allInnerTexts()).some(t => t.includes(needle))) return true; await sleep(200); } return false; };
+const nTickets = () => page.locator("#tk-list .li").count();
+const n0 = await nTickets();
+ok("a draft of two tickets that are already on the list is offered", await draftOf("The same two again", ["Add a reset button", "Remember the count after a reload"], "d4"));
+await page.getByText("Save on this computer only", {exact: true}).click();
+ok("  saving it says plainly that nothing new was saved, not 'Saved 2 tickets'", await toasted("Nothing new was saved: both tickets were already on this computer."), (await page.locator("sl-alert").allInnerTexts()).join(" | "));
+ok("  and the list did not grow", (await nTickets()) === n0, await nTickets());
+ok("a draft with one old and one new ticket is offered", await draftOf("One old and one new", ["Add a reset button", "Play a sound on reset"], "d5"));
+await page.getByText("Save on this computer only", {exact: true}).click();
+ok("  saving it counts only the new one", await toasted("Saved 1 new ticket on this computer. 1 was already on the list."), (await page.locator("sl-alert").allInnerTexts()).join(" | "));
+ok("  and the list grew by one", await here("#tk-list .li:nth-child(" + (n0 + 1) + ")", 15000) && (await nTickets()) === n0 + 1, await nTickets());
+
 // ---- (b) create a private repo: two confirmations, and the not-signed-in message ----
 await openProject("pagetest2");
 fs.writeFileSync(path.join(T, "gh-signedout"), "");

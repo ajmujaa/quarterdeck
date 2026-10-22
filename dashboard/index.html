@@ -299,8 +299,10 @@ function confirmDlg(msg, o = {}){
     const yes = $("#confirm-yes"), no = $("#confirm-no");
     yes.textContent = o.ok || "Continue"; yes.variant = o.danger ? "danger" : "primary";
     let done = false;
-    const fin = v => { if(done) return; done = true; yes.removeEventListener("click", y); no.removeEventListener("click", n); d.removeEventListener("sl-after-hide", h); res(v); };
+    const fin = v => { if(done) return; done = true; yes.removeEventListener("click", y); no.removeEventListener("click", n); d.removeEventListener("sl-after-hide", h); d.removeEventListener("sl-request-close", rc); res(v); };
     const y = () => { fin(true); d.hide(); }, n = () => { fin(false); d.hide(); }, h = e => { if(e.target === d) fin(false); };
+    const t0 = Date.now(), rc = e => { if(e.target === d && e.detail && e.detail.source === "overlay" && Date.now() - t0 < 300) e.preventDefault(); };   // the second click of a double click lands on the overlay: it must not cancel
+    d.addEventListener("sl-request-close", rc);
     yes.addEventListener("click", y); no.addEventListener("click", n); d.addEventListener("sl-after-hide", h); d.show();
   });
 }
@@ -405,6 +407,8 @@ function fieldError(el, msg){
 }
 document.addEventListener("sl-input", e => { if(e.target.hasAttribute && e.target.hasAttribute("data-error")) fieldError(e.target, ""); });
 let lastPostError = "";
+const BUSY = new Set();      // a second click on a button whose action is still running is ignored: once("key", async () => ...)
+async function once(key, fn){ if(BUSY.has(key)) return; BUSY.add(key); try{ return await fn(); } finally{ BUSY.delete(key); } }
 async function post(path, body){
   if(path === "/api/demo") HR.hold = true;           // Demo is being switched: no per-project reads of the old world until the next state arrives (see loadHomeReady)
   const r = await fetch(path, {method:"POST",
@@ -1849,7 +1853,8 @@ async function tkDraft(){
   announce("The planner is drafting. This can take a minute and costs a few cents; nothing is filed yet.");
   render(); loadTickets(true);
 }
-async function tkFile(did, local){
+async function tkFile(did, local){ return once("tkfile:" + did, () => tkFileNow(did, local)); }
+async function tkFileNow(did, local){
   const p = sel, d = tkData(p), dr = d && d.drafts.find(x => x.id === did);
   if(!dr) return;
   const n = dr.tickets.length, toGithub = d.has_repo && !local;
@@ -2286,7 +2291,8 @@ async function missionPost(id, action, extra){
   delete missionCache[id]; try{ await tick(); }catch(e){}
   render(); return j;
 }
-async function dismissMission(id, undo){
+async function dismissMission(id, undo){ return once("mission:" + id, () => dismissMissionNow(id, undo)); }
+async function dismissMissionNow(id, undo){
   const j = await missionPost(id, undo ? "undo" : "dismiss");
   if(j) toast(undo ? "Brought back into the lists." : "Dismissed. It is kept in History, and you can undo it here.");
 }
@@ -3734,7 +3740,8 @@ async function proposeMissionPlan(id){
   const r = await post("/api/missions", {action:"propose_plan", id});
   if(r){ toast("plan proposed"); await tick(); openMission(id); }
 }
-async function approveMissionPlan(id, revision){
+async function approveMissionPlan(id, revision){ return once("mission:" + id, () => approveMissionPlanNow(id, revision)); }
+async function approveMissionPlanNow(id, revision){
   const r = await post("/api/missions", {action:"approve_plan", id, revision});
   if(r){ toast("plan approved"); await tick(); openMission(id); }
 }
@@ -4089,7 +4096,8 @@ async function nwWatch(id){
     closeDrawer(); openMissionPage("brief:" + id); return;
   }
 }
-async function attachAdd(){
+async function attachAdd(){ return once("attach", attachAddNow); }
+async function attachAddNow(){
   const path = $("#at-path").value.trim(), name = $("#at-name").value.trim();
   const j = await post("/api/attach", {path, name, apply: true, confirm: true, edits: attachEdits(), agents_md: !!$("#at-agents").checked});
   if(!j) return;

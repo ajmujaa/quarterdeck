@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Add-ons in the data folder: which files may be loaded, and `qtdeck addon new|list`.
 
-An add-on is one file, ext_<name>.py, with one function, install(core) (see docs/public/ADDONS.md). Besides bin/ext_*.py the dashboard
+An add-on is one file, ext_<name>.py, with one function, install(core) (see ADDONS.md). Besides bin/ext_*.py the dashboard
 imports <data folder>/addons/ext_*.py, but only when it is safe to trust what is there:
 
   * the folder is a real directory (not a link), owned by you, mode 0700;
@@ -146,7 +146,7 @@ def listing(home, env=None):
     return rows
 
 
-TEMPLATE = '''"""{label}: a local add-on. One function, install(core); the contract is in docs/public/ADDONS.md.
+TEMPLATE = '''"""{label}: a local add-on. One function, install(core); the contract is in ADDONS.md.
 
 It shows one alert on the Needs you list when the file state/{name}/alert.txt has a line in it. It reads and writes nothing else.
 """
@@ -246,7 +246,7 @@ def main(argv=None):
         for p in made:
             print(f"  wrote {p}")
         print(f"\n  next: edit {made[0].name}, run `python3 {made[1]}` to test it, then restart the dashboard (qtdeck dashboard).")
-        print("  Add-ons from this folder can be turned off with QUARTERDECK_ADDONS=off. Guide: docs/public/ADDONS.md")
+        print("  Add-ons from this folder can be turned off with QUARTERDECK_ADDONS=off. Guide: ADDONS.md")
         return 0
     if a == ["list"]:
         if off():

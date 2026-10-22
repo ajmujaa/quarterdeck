@@ -4132,6 +4132,9 @@ def connections_api(b):
                 integrations_manifest.add_account(sid, label)               # a credential for a new label makes the account, so it is never an orphan
             present = integrations_manifest.set_credential(str(b.get("key") or ""), b.get("value"), label=label)
             result = {"key": b.get("key"), "label": label, "present": present}
+            warning = integrations_manifest.prefix_warning(str(b.get("key") or ""), b.get("value"))      # advice only: it saved either way, and the value is never repeated
+            if warning:
+                result["warning"] = warning
         elif action == "enable" and b.get("test") is True:
             if demo_on():
                 return 400, {"error": "Demo mode: nothing is connected or tested."}

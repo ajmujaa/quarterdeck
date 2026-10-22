@@ -384,11 +384,11 @@ function verdictClass(v){
 }
 const routine = r => r.verdict === "DRY-RUN" && /(^|\s)0 finding/.test(r.detail || "");
 
-function toast(msg, bad){
+function toast(msg, bad, warn){
   if(customElements.get("sl-alert")){
     const a = document.createElement("sl-alert");
-    a.variant = bad ? "danger" : "success"; a.closable = !!bad; a.duration = bad ? 9000 : 3800;
-    a.innerHTML = `<sl-icon slot="icon" name="${bad ? "exclamation-octagon" : "check-circle"}"></sl-icon>${esc(msg)}`;
+    a.variant = bad ? "danger" : warn ? "warning" : "success"; a.closable = !!(bad || warn); a.duration = bad || warn ? 9000 : 3800;
+    a.innerHTML = `<sl-icon slot="icon" name="${bad ? "exclamation-octagon" : warn ? "exclamation-triangle" : "check-circle"}"></sl-icon>${esc(msg)}`;
     if(!bad){ a.setAttribute("aria-hidden", "true"); announce(msg); }     // a success is said once, politely (the live region); a problem stays an alert
     document.body.append(a); a.toast(); return;
   }
@@ -2598,6 +2598,7 @@ async function connSave(id, key, lab){
   const j = await post("/api/connections", {action: "credential", id, key, label: lab || "default", value: v, confirm: true});
   if(j){
     el.value = ""; toast("Saved. It will not be shown again.");
+    if(j.warning) toast(j.warning, false, true);            // a value that does not start the way the service says: saved anyway, and said so
     await loadConnections(true);
     const c = ((connData || {}).services || []).find(x => x.id === id), a = c && (c.accounts || []).find(x => connLab(x) === (lab || ""));
     if(a && a.signin && !a.missing.length && !a.signin.signed_in) connSignin(id, lab);       // the last value is in: start the Google sign-in at once
@@ -2610,14 +2611,15 @@ async function connSaveAll(id, lab){
   const els = a.credentials.map(k => ({k, el: document.getElementById(`cr-${id}-${k.key}${lab ? "-" + lab : ""}`)})).filter(x => x.el);
   const todo = els.filter(x => String(x.el.value || "").trim());
   if(!todo.length) return fieldError((els[0] || {}).el, "Enter a value first.");
-  let ok = 0;
+  let ok = 0; const warned = [];
   for(const {k, el} of todo){
     const j = await post("/api/connections", {action: "credential", id, key: k.key, label: lab || "default", value: String(el.value).trim(), confirm: true});
     if(!j) break;
-    el.value = ""; ok++;
+    el.value = ""; ok++; if(j.warning) warned.push(j.warning);
   }
   if(!ok) return;
   toast(ok > 1 ? `Saved ${ok} values. They will not be shown again.` : "Saved. It will not be shown again.");
+  warned.forEach(w => toast(w, false, true));
   await loadConnections(true);
   const c2 = ((connData || {}).services || []).find(x => x.id === id), a2 = c2 && (c2.accounts || []).find(x => connLab(x) === (lab || ""));
   if(a2 && a2.signin && !a2.missing.length && !a2.signin.signed_in) connSignin(id, lab);

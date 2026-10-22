@@ -72,7 +72,7 @@ cleanup() {
   safe_git -C "$SOURCE_REPO_DIR" worktree remove --force "$WT" >/dev/null 2>&1 || true
   rm -rf "$TMP"
 }
-trap cleanup EXIT
+trap 'cleanup; release_lock' EXIT
 
 meta=$(guard 60 "$GH" pr view "$PR" -R "$REPO" --json number,title,body,state,headRefOid,labels,isCrossRepository 2>>"$LOG_FILE") || die "cannot read $REPO#$PR"
 # A fork's head is a stranger's code, and the install below runs with the network on: it is never checked out here at all.

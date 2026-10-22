@@ -64,7 +64,7 @@ export QUARTERDECK_RUN_ID="$(tr '/' '_' <<<"$REPO")-board-$(date +%s)"
 working_on "board #$BOARD_NUM"
 say "quarterdeck: harbourmaster reading $REPO project #$BOARD_NUM"
 
-SNAP=$(mktemp); trap 'rm -f "$SNAP"' EXIT
+SNAP=$(mktemp); trap 'rm -f "$SNAP"; release_lock' EXIT
 NOTES_DOC="$QUARTERDECK_HOME/workspace/${PROJECT}-board-$(date +%Y-%m-%d).md"
 python3 "$QUARTERDECK_DIR/bin/board.py" snapshot "$BOARD_OWNER" "$BOARD_NUM" "$REPO" > "$SNAP" 2>>"$LOG_FILE" \
   || die "could not read the board (see $LOG_FILE)"

@@ -90,7 +90,7 @@ cleanup() {
   safe_git -C "$SOURCE_REPO_DIR" worktree remove --force "$WT" >/dev/null 2>&1 || true
   rm -rf "$TMP" ${PX_SCRATCH:+"$PX_SCRATCH"}
 }
-trap cleanup EXIT
+trap 'cleanup; release_lock' EXIT
 
 # A command group that is killed as a group when its time is up or when it is told to stop, so an app that
 # started helpers does not leave them behind. Run inline (not through a function) so $! is the group's own leader.

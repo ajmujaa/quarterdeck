@@ -295,6 +295,33 @@ try {
       return {onButton: !!top && (top === b || b.contains(top)), top: top ? top.localName : null, say: n.helpText, flagged: n.hasAttribute("data-error"), toasts: document.querySelectorAll("sl-alert[variant=danger]").length};
     });
     ok("Create it with no name says so at the Name field, and no toast sits over the button", cr.onButton && /name/i.test(cr.say) && cr.flagged && cr.toasts === 0, JSON.stringify(cr));
+    // an error toast must never cover the primary button at the foot of the drawer (Create it in the body, and a footer button in the drawer's footer slot), at 1280 and 375 px
+    for (const w of [1280, 375]) {
+      await page.setViewportSize({width: w, height: w === 375 ? 800 : 1000}); await sleep(500);
+      await page.evaluate(() => { const f = document.querySelector("#dfoot"); f.innerHTML = '<sl-button variant="neutral" id="t170-no">Close</sl-button><sl-button variant="primary" id="t170-yes">Save it</sl-button>'; f.hidden = false; f.slot = "footer"; });
+      await sleep(300);
+      await page.evaluate(() => { toast("The first problem, said plainly.", true); toast("A second problem, a little longer than the first, so the stack is more than one line high.", true); }); await sleep(700);
+      const ov = await page.evaluate(() => {
+        const rect = e => { const r = e.getBoundingClientRect(); return {l: r.left, t: r.top, r: r.right, b: r.bottom}; };
+        const hit = (a, b) => a.l < b.r && b.l < a.r && a.t < b.b && b.t < a.b;
+        const alerts = [...document.querySelectorAll(".sl-toast-stack sl-alert")].map(rect);
+        const create = [...document.querySelectorAll("#dbody sl-button")].find(x => x.textContent.trim() === "Create it");
+        create.scrollIntoView({block: "end"});
+        const targets = [create, document.querySelector("#t170-yes")];
+        const btns = targets.map(rect);
+        const covered = targets.map(b => { const r = b.getBoundingClientRect(), top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return !!top && !!top.closest(".sl-toast-stack"); });
+        const stack = document.querySelector(".sl-toast-stack");
+        const alerts2 = [...document.querySelectorAll(".sl-toast-stack sl-alert")].map(rect);
+        return {n: alerts.length, over: alerts2.some(a => btns.some(b => hit(a, b))) || covered.some(Boolean), covered, top: stack ? Math.round(stack.getBoundingClientRect().top) : null,
+          wide: document.documentElement.scrollWidth <= window.innerWidth + 1, live: document.querySelector("#toast").getAttribute("aria-live"), role: document.querySelector("#toast").getAttribute("role"),
+          inView: alerts2.every(a => a.t >= 0 && a.b <= window.innerHeight && a.l >= 0 && a.r <= window.innerWidth + 1)};
+      });
+      ok(`at ${w} px two error toasts sit at the top, inside the window, and cover neither Create it nor the footer's primary button; no sideways scroll`,
+        ov.n === 2 && !ov.over && ov.top !== null && ov.top < 40 && ov.inView && ov.wide, JSON.stringify(ov));
+      ok(`at ${w} px the live region keeps role=status and aria-live=polite`, ov.live === "polite" && ov.role === "status", JSON.stringify(ov));
+      await page.evaluate(() => { document.querySelectorAll(".sl-toast-stack sl-alert").forEach(a => a.hide && a.hide()); }); await sleep(500);
+    }
+    await page.setViewportSize({width: 1280, height: 1000});
     await page.evaluate(() => closeDrawer()); await sleep(500);
     await page.setViewportSize({width: 375, height: 800}); await page.evaluate(() => { toggleCalm(true); go("connections"); }); await sleep(1200);
     const pre = await page.evaluate(() => [...document.querySelectorAll(".as-preset")].map(b => Math.round(b.getBoundingClientRect().right)));

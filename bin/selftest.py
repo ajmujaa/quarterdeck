@@ -1481,6 +1481,10 @@ check("approving the wrong revision is refused",
 d.mission_act("approve_plan", {"id": m["id"], "revision": 1}, "owner")
 check("approving the current revision records it",
       d.load_missions()[0]["plan_approved_revision"] == 1)
+_ev1 = [e["kind"] for e in d.load_missions()[0]["events"]]
+d.mission_act("approve_plan", {"id": m["id"], "revision": 1}, "owner")
+check("approving the same revision again (a double click) is a no-op: still approved, no second history line",
+      d.load_missions()[0]["plan_approved_revision"] == 1 and [e["kind"] for e in d.load_missions()[0]["events"]] == _ev1)
 
 # A second, disposable mission, so exercising start_panel (which moves a
 # mission past "draft" for good) does not disturb m's own remaining checks.
@@ -2833,6 +2837,15 @@ with _tf.TemporaryDirectory() as _at:
     _attach.apply(_pr, _pf, _regf)
     _got = _json.loads(_regf.read_text())
     _rec = _json.loads((_scan.profile_dir() / "shopfront.attach.json").read_text())
+    _tmps = []
+    _real_replace = _os0.replace
+    _os0.replace = lambda src, dst, *x, **k: (_tmps.append(str(src)), _real_replace(src, dst, *x, **k))[1]
+    try:
+        _attach.write_registry({"a": {}}, Path(_at) / "reg" / "w.json"); _attach.write_registry({"a": {}}, Path(_at) / "reg" / "w.json")
+    finally:
+        _os0.replace = _real_replace
+    check("attach: the registry is written through a temp file of its own each time (two attaches at once must not share projects.tmp)",
+          len(_tmps) == 2 and _tmps[0] != _tmps[1] and not any(t.endswith("w.tmp") for t in _tmps) and not list((Path(_at) / "reg").glob("*.tmp")))
     check("attach: --apply registers the project, keeps the profile and a record of what was proposed and approved, and leaves the project alone",
           "shopfront" in _got and _got["shopfront"]["verify"] == "npm test" and _rec["approved"] == _rec["proposed"] and (_scan.profile_dir() / "shopfront.json").exists() and _digest(_proj) == _snap)
     try:
@@ -3000,6 +3013,10 @@ with _tf.TemporaryDirectory() as _cd:
         _envp = _cm.env_path()
         check("connections: once the credential is saved the feed is ready, and the status never carries the value",
               _st["state"] == "ready" and _st["credentials"][0]["present"] and _secret not in _json.dumps(_mf.status(_svc)), _st["state"])
+        _cm.record_status(next(x for x in _svc if x["id"] == "slack")["snapshots"][0], False, "needs credentials: create ~/.config/quarterdeck/integrations.env (see the README)")
+        _st2 = {r["id"]: r for r in _mf.status(_svc)}["slack"]
+        check("connections: a 'needs credentials' failure recorded before the values were saved does not outlive the save (the card is ready, with no error)",
+              _st2["state"] == "ready" and _st2["error"] == "", _st2)
         check("connections: the store is owner-only, and its folder too", oct(_envp.stat().st_mode & 0o777) == "0o600" and oct(_envp.parent.stat().st_mode & 0o777) == "0o700")
         _envp.write_text("# mine\nOTHER_THING=keep-me\n" + _envp.read_text())
         _mf.set_credential("SLACK_USER_TOKEN", "new-value-two", _svc)

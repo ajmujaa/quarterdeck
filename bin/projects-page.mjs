@@ -229,6 +229,16 @@ try {
   await shot("06-projects-calm");
   await page.evaluate(() => { toggleCalm(false); }); await sleep(400);
 
+  // ---- notes: the New note and Brain dump boxes stop at 1000 characters, and Edit on a note focuses its box without an error ----
+  if (MODE === "real") {
+    await page.evaluate(async () => { await post("/api/capture", {text: "a note to edit"}); await tick(); go("notes"); }); await here("#note-new", 15000);
+    ok("the New note and Brain dump boxes stop at 1000 characters, as the Edit box does", await page.evaluate(() => document.querySelector("#note-new").getAttribute("maxlength") === "1000" && /<sl-input id="cap-in"[^>]*maxlength="1000"/.test(homeNow())));
+    const errs0 = problems.console.length + problems.page.length;
+    await page.locator("sl-button, button", {hasText: /^\s*Edit\s*$/}).first().click(); await here("#note-edit", 5000); await sleep(600);
+    ok("Edit on a note puts the focus in its edit box and logs no error", await page.evaluate(() => { const e = document.querySelector("#note-edit"); return !!e && (document.activeElement === e || e.matches(":focus-within")); }) && problems.console.length + problems.page.length === errs0, JSON.stringify(problems));
+    await page.evaluate(() => noteEditStop());
+  }
+
   // ================= the Crew page: turn an agent off (issue 167) =================
   if (MODE === "real") {
     const dd = path.join(process.env.QD_T, "duties"), madeDir = !fs.existsSync(dd), madeFiles = [];     // the throwaway tree has no duties/: two empty scripts so the registry accepts them, removed after
@@ -250,16 +260,6 @@ try {
     ok("  Turn off removes the agent from the enabled list and keeps the project's other agent", (await page.locator('#view [data-disable="surveyor"]').count()) === 0 && !still && (await page.locator('#view [data-disable="panel"]').count()) === 1, still);
     for (const f of madeFiles) fs.rmSync(f, {force: true});
     if (madeDir) fs.rmSync(dd, {recursive: true, force: true});
-  }
-
-  // ---- notes: the New note and Brain dump boxes stop at 1000 characters, and Edit on a note focuses its box without an error ----
-  if (MODE === "real") {
-    await page.evaluate(async () => { await post("/api/capture", {text: "a note to edit"}); await tick(); go("notes"); }); await here("#note-new", 15000);
-    ok("the New note and Brain dump boxes stop at 1000 characters, as the Edit box does", await page.evaluate(() => document.querySelector("#note-new").getAttribute("maxlength") === "1000" && /<sl-input id="cap-in"[^>]*maxlength="1000"/.test(homeNow())));
-    const errs0 = problems.console.length + problems.page.length;
-    await page.locator("sl-button, button", {hasText: /^\s*Edit\s*$/}).first().click(); await here("#note-edit", 5000); await sleep(600);
-    ok("Edit on a note puts the focus in its edit box and logs no error", await page.evaluate(() => { const e = document.querySelector("#note-edit"); return !!e && (document.activeElement === e || e.matches(":focus-within")); }) && problems.console.length + problems.page.length === errs0, JSON.stringify(problems));
-    await page.evaluate(() => noteEditStop());
   }
 
   // ================= a phone, and the dark theme =================

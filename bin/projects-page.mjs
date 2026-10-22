@@ -253,6 +253,30 @@ try {
   await page.evaluate(() => { openProjects(); }); await sleep(500); await shot("11-projects-dark");
   await page.evaluate(n => openProject(n), A); await sleep(700); await shot("12-project-dark");
   await page.evaluate(() => setTheme("auto")); await sleep(200);
+  // ---- small things: link-style buttons are 24 px tall, Create it is never under a toast, the agent source examples wrap in Calm at 375 px ----
+  if (MODE === "real") {
+    const short = [];
+    for (const v of ["overview", "projects", "missions", "settings"]) {
+      await page.evaluate(x => go(x), v); await sleep(700);
+      short.push(...await page.evaluate(vv => [...document.querySelectorAll("#view .mlink, #view a.link, #view button.link")].filter(e => e.checkVisibility() && e.getBoundingClientRect().width > 0)
+        .map(e => ({v: vv, t: e.textContent.trim().slice(0, 24), h: Math.round(e.getBoundingClientRect().height)})).filter(x => x.h < 24), v));
+    }
+    ok("link-style buttons and links on Home, Projects, Missions and Settings are at least 24 px tall", short.length === 0, JSON.stringify(short.slice(0, 6)));
+    await page.evaluate(() => openAttach()); await here("#nw-name", 10000);
+    const create = page.locator("#dbody sl-button", {hasText: /^\s*Create it\s*$/});
+    await create.scrollIntoViewIfNeeded(); await create.click(); await sleep(600);
+    const cr = await page.evaluate(() => {
+      const b = [...document.querySelectorAll("#dbody sl-button")].find(x => x.textContent.trim() === "Create it"), r = b.getBoundingClientRect(), top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      const n = document.querySelector("#nw-name");
+      return {onButton: !!top && (top === b || b.contains(top)), top: top ? top.localName : null, say: n.helpText, flagged: n.hasAttribute("data-error"), toasts: document.querySelectorAll("sl-alert[variant=danger]").length};
+    });
+    ok("Create it with no name says so at the Name field, and no toast sits over the button", cr.onButton && /name/i.test(cr.say) && cr.flagged && cr.toasts === 0, JSON.stringify(cr));
+    await page.evaluate(() => closeDrawer()); await sleep(500);
+    await page.setViewportSize({width: 375, height: 800}); await page.evaluate(() => { toggleCalm(true); go("connections"); }); await sleep(1200);
+    const pre = await page.evaluate(() => [...document.querySelectorAll(".as-preset")].map(b => Math.round(b.getBoundingClientRect().right)));
+    ok("Calm at 375 px: the agent source example buttons wrap inside the screen", pre.length > 0 && pre.every(x => x <= 375), JSON.stringify(pre));
+    await page.evaluate(() => toggleCalm(false)); await page.setViewportSize({width: 1280, height: 1000}); await sleep(300);
+  }
   ok("no console error, no page error, no failed request", problems.console.length === 0 && problems.page.length === 0 && problems.requests.length === 0, JSON.stringify(problems));
 
   // ---- last: a second tab in the same browser pairs with a newer link, so this tab's key no longer matches (reads still work, writes are refused) ----

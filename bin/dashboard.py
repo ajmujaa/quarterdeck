@@ -20,6 +20,7 @@ exactly as it was: the model thinks, the harness acts.
 import array
 import atexit
 import hashlib
+import itertools
 import importlib.util
 import json
 import shlex
@@ -467,11 +468,18 @@ def read_json(path, default):
     return got
 
 
+_TMP_SEQ = itertools.count()
+
+
 def write_json(path, data):
     no_demo(f"write {path}")
-    tmp = Path(str(path) + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2))
-    tmp.replace(path)
+    tmp = Path(f"{path}.{os.getpid()}.{threading.get_ident()}.{next(_TMP_SEQ)}.tmp")   # one name per writer: two writes at once must not share a file
+    try:
+        tmp.write_text(json.dumps(data, indent=2))
+        tmp.replace(path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 STARTED = time.time()

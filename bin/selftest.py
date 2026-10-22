@@ -102,6 +102,30 @@ else:
     except ValueError as e:
         check("a registered project and enabled duty is accepted", False, e)
 
+    # #142: every flag the page can send (dashboard/assets/crew.js) is in the duty's allow-list, and --apply never is
+    _crew = (Path(__file__).resolve().parent.parent / "dashboard" / "assets" / "crew.js").read_text()
+    _blk = _crew.split("export const INFO = {", 1)[1].split("\nconst ORDER", 1)[0]
+    _sent = {}
+    for _m in __import__("re").finditer(r"^  (\w+): \{(.*?)(?=^  \w+: \{|\Z)", _blk, __import__("re").S | __import__("re").M):
+        _sent[_m.group(1)] = set(__import__("re").findall(r'(?:F\(|flag: )"(--[a-z-]+)"', _m.group(2)))
+    check("#142 every flag the page sends is in its duty's allow-list, and --apply is in none",
+          len(_sent) >= 20 and all(f <= d.DUTY_FLAGS.get(n, set()) for n, f in _sent.items()) and not any("--apply" in f for f in d.DUTY_FLAGS.values()),
+          {n: f - d.DUTY_FLAGS.get(n, set()) for n, f in _sent.items() if f - d.DUTY_FLAGS.get(n, set())})
+    def _why(*a):
+        try:
+            d.validate_run(*a)
+            return ""
+        except ValueError as e:
+            return str(e)
+    _ok_flag = sorted(d.DUTY_FLAGS.get(duty, set()))
+    _w1, _w2, _w3 = _why(project, duty, ["--apply"]), _why(project, duty, ["--nonesuch"]), _why(project, duty, ["--zzz-other", "x"])
+    check("#142 --apply inside args is refused (run and schedule share validate_run), naming the duty and the flag",
+          duty in _w1 and "--apply" in _w1, _w1)
+    check("#142 an unknown flag is refused, naming the duty and the flag, before anything starts",
+          duty in _w2 and "--nonesuch" in _w2 and duty in _w3 and "--zzz-other" in _w3, (_w2, _w3))
+    check("#142 each flag the duty takes is still accepted, and a flag only another duty takes (--pr for the purser) is not",
+          all(not _why(project, duty, [f] + (["1"] if f != "--one" else [])) for f in _ok_flag)
+          and "--pr" in d.DUTY_FLAGS["surveyor"] and "--pr" not in d.DUTY_FLAGS["purser"] and "--issue" not in d.DUTY_FLAGS["surveyor"], (duty, _ok_flag))
     check("a shell metacharacter in a value is refused",
           refused(project, duty, ["--path", "; rm -rf /"]))
     check("a path traversal is refused",

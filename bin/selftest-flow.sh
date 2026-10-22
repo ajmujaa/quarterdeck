@@ -284,8 +284,14 @@ def req(method, path, body=None, headers=None):
     data = json.dumps(body).encode() if body is not None else None
     h = dict(headers or {})
     if data is not None: h.update({"Content-Type": "application/json", "Content-Length": str(len(data))})
-    c.request(method, path, body=data, headers=h)
-    r = c.getresponse(); raw = r.read(); c.close()
+    for _try in (0, 1):  # one retry when the server drops the connection before answering
+        try:
+            c.request(method, path, body=data, headers=h)
+            r = c.getresponse(); raw = r.read(); c.close(); break
+        except (http.client.RemoteDisconnected, ConnectionResetError):
+            c.close(); c = http.client.HTTPConnection("127.0.0.1", PORT, timeout=60)
+            if _try: raise
+            time.sleep(0.5)
     try: j = json.loads(raw)
     except ValueError: j = {"raw": raw.decode("replace")}
     return r.status, j, r.getheader("Set-Cookie") or ""

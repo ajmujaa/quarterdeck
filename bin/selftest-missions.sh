@@ -97,8 +97,14 @@ def req(method, path, body=None, headers=None):
     data = json.dumps(body).encode() if body is not None else None
     h = dict(headers or {})
     if data is not None: h.update({"Content-Type": "application/json", "Content-Length": str(len(data))})
-    c.request(method, path, body=data, headers=h)
-    r = c.getresponse(); raw = r.read(); c.close()
+    for _try in (0, 1):  # one retry when the server drops the connection before answering
+        try:
+            c.request(method, path, body=data, headers=h)
+            r = c.getresponse(); raw = r.read(); c.close(); break
+        except (http.client.RemoteDisconnected, ConnectionResetError):
+            c.close(); c = http.client.HTTPConnection("127.0.0.1", PORT, timeout=60)
+            if _try: raise
+            time.sleep(0.5)
     try: j = json.loads(raw)
     except ValueError: j = {"raw": raw.decode("replace")}
     return r.status, j, r.getheader("Set-Cookie") or ""
@@ -362,8 +368,11 @@ chk("try again on a fix from an issue starts the fix pipeline for that issue (th
 time.sleep(1)
 st, j = act("cycle:cyc-tp-5-1700000000", "retry", confirm=True)
 chk("try again on a stopped cycle starts a cycle for that issue through the guarded start (the opt-in and the confirm rules apply)", st == 200 and j["started"] == "cycle tp --issue 5")
-st, j = act("fix:pnl1#2", "retry", confirm=True)
-chk("try again on a panel item queues that item for the panel's project, as Fix this does", st == 200 and "--panel pnl1 --item 2" in j["started"])
+for _w in range(6):  # an earlier start may still hold its lock for a moment
+    st, j = act("fix:pnl1#2", "retry", confirm=True)
+    if st != 409: break
+    time.sleep(1)
+chk("try again on a panel item queues that item for the panel's project, as Fix this does" + ("" if st == 200 else " (answer: %s %s)" % (st, str(j)[:200])), st == 200 and "--panel pnl1 --item 2" in j["started"])
 chk("every one of those is in the log, by action, project and id only", all(x in open(T + "/logs/missions.log").read() for x in ("retry project=tp mission=fix:issue#14", "retry project=tp mission=cycle:cyc-tp-5-1700000000", "mark_merged project=tp mission=fix:issue#19"))
     and "Fix number" not in open(T + "/logs/missions.log").read() and "budget" not in open(T + "/logs/missions.log").read())
 PY

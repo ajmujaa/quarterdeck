@@ -132,7 +132,7 @@ adduty=$(sed -n 's/^Then: qtdeck run addme //p' "$T/ad3")
 ck "add registers with a default duty that exists, and the next command it prints names a real duty" \
   '[ "$rad3" = 0 ] && [ -n "$adduty" ] && [ -f "$P/duties/$adduty.sh" ] && grep -q "duties: $adduty" "$T/ad3"'
 # ---- small command line gaps: logs -f, a bad number, one usage line, an empty list that says so ----
-qd "$H" "$P" logs -f >"$T/lg" 2>&1
+qd "$H" "$P" logs -f >"$T/lg" 2>&1 & lgp=$!; sleep 2; pkill -P $lgp 2>/dev/null; kill $lgp 2>/dev/null; wait $lgp 2>/dev/null
 ck "logs -f follows the default log, it is not read as a log called -f" '! grep -q -- "-f.log" "$T/lg"'
 qd "$H" "$P" runs abc >"$T/rn" 2>&1; rrn=$?
 qd "$H" "$P" spend --days abc >"$T/sp" 2>&1; rsp=$?

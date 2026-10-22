@@ -3987,7 +3987,7 @@ function yourDay(){
 }
 function homeNow(){
   const C = S.captures || {items: [], open: 0};
-  const dump = card(null, `<form class="cap-form" ${actOn("submit", "capSubmit", T.ev)}>${slInput({id: "cap-in", placeholder: "A thought or a task. Enter saves it.", label: "Brain dump", cls: "nolabel"})}
+  const dump = card(null, `<form class="cap-form" ${actOn("submit", "capSubmit", T.ev)}>${slInput({id: "cap-in", placeholder: "A thought or a task. Enter saves it.", label: "Brain dump", cls: "nolabel", attrs: 'maxlength="1000"'})}
         ${btn("Save", {variant: "primary", attrs: 'type="submit"'})}</form>
       ${C.items.slice(0, 5).map(c => `<div class="cap-item"><span>${esc(c.text)}</span><small>${ago(c.at)}</small>${btn("Done", {size: "small", click: act("capDone", c.id)})}</div>`).join("")}`,
     {kicker: "Brain dump", count: `${C.open} open`, actions: `<button class="mlink link" ${act("go", "notes")}>All notes</button>`, label: "Brain dump"});
@@ -4401,7 +4401,7 @@ function viewNotes(){
   </div>`;
   const list = rows.length ? rows.map(noteCard).join("")
     : emptyState({inline: true, title: C.total ? "No notes match." : "No notes yet.", body: C.total ? "Change the filters to see more." : "Write one in the box beside this list, or say: Helm, remember to call the dentist."});
-  const side = card(null, `<form class="cap-form" ${actOn("submit", "noteAdd", T.ev)}>${slInput({id: "note-new", label: "New note", cls: "nolabel", placeholder: "A thought or a task"})}${btn("Save", {variant: "primary", attrs: 'type="submit"'})}</form>
+  const side = card(null, `<form class="cap-form" ${actOn("submit", "noteAdd", T.ev)}>${slInput({id: "note-new", label: "New note", cls: "nolabel", placeholder: "A thought or a task", attrs: 'maxlength="1000"'})}${btn("Save", {variant: "primary", attrs: 'type="submit"'})}</form>
       <p class="sub" style="margin-top:var(--s3)">Saved in <code>${esc(C.path || "state/capture.jsonl")}</code> on this Mac. The file is only ever added to, and it is never sent anywhere. ${C.open || 0} open, ${C.total || 0} in all.</p>`, {kicker: "New note", label: "New note"})
     + card(null, `<div class="stack">${slInput({id: "note-q", type: "search", label: "Search notes", cls: "nolabel", size: "small", clearable: true, placeholder: "Search notes", value: noteUi.q, input: actOn("input", "noteFilter", "q", T.value)})}</div>`, {kicker: "Find", label: "Find notes", attrs: 'data-calm="hide"'});
   return `<div class="split"><div class="stack">${card(null, list, {kicker: "Notes", count: rows.length, label: "Notes",
@@ -4414,7 +4414,7 @@ async function noteAdd(e){
   if(t && await post("/api/capture", {text: t, project: sel})){ i.value = ""; toast("Saved"); tick(); }
   return false;
 }
-function noteEditStart(id){ const n = allNotes().find(x => x.id === id); if(!n) return; noteUi.editId = id; noteUi.editText = n.text; render(); const t = $("#note-edit"); if(t) t.focus(); }
+async function noteEditStart(id){ const n = allNotes().find(x => x.id === id); if(!n) return; noteUi.editId = id; noteUi.editText = n.text; render(); const t = $("#note-edit"); if(t){ await customElements.whenDefined("sl-textarea"); await t.updateComplete; t.focus(); } }   // the box may not be upgraded or drawn yet; focus() on it before then throws or does nothing
 function noteEditStop(){ noteUi.editId = null; render(); }
 async function noteEditSave(id){
   const t = ($("#note-edit") || {}).value || "";

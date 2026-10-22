@@ -215,6 +215,16 @@ try {
   await shot("06-projects-calm");
   await page.evaluate(() => { toggleCalm(false); }); await sleep(400);
 
+  // ---- notes: the New note and Brain dump boxes stop at 1000 characters, and Edit on a note focuses its box without an error ----
+  if (MODE === "real") {
+    await page.evaluate(async () => { await post("/api/capture", {text: "a note to edit"}); await tick(); go("notes"); }); await here("#note-new", 15000);
+    ok("the New note and Brain dump boxes stop at 1000 characters, as the Edit box does", await page.evaluate(() => document.querySelector("#note-new").getAttribute("maxlength") === "1000" && /<sl-input id="cap-in"[^>]*maxlength="1000"/.test(homeNow())));
+    const errs0 = problems.console.length + problems.page.length;
+    await page.locator("sl-button, button", {hasText: /^\s*Edit\s*$/}).first().click(); await here("#note-edit", 5000); await sleep(600);
+    ok("Edit on a note puts the focus in its edit box and logs no error", await page.evaluate(() => { const e = document.querySelector("#note-edit"); return !!e && (document.activeElement === e || e.matches(":focus-within")); }) && problems.console.length + problems.page.length === errs0, JSON.stringify(problems));
+    await page.evaluate(() => noteEditStop());
+  }
+
   // ================= a phone, and the dark theme =================
   await page.setViewportSize({width: 390, height: 844}); await sleep(500);
   const phone = {};

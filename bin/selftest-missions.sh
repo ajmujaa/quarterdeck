@@ -276,6 +276,32 @@ for label, path, body in (
     chk(label + " is a 400 with a message", st == 400 and isinstance(j.get("error"), str) and "Traceback" not in j["error"] and "object has no attribute" not in j["error"])
 PY
 pyck "$T/t3b.py"
+# ---- 3d. small refusals: a note that is too long, a folder that is a file, an id that does not exist, a credential that is not one line of text -----
+cat > "$T/t3d.py" <<'PY'
+exec(open(__import__("os").environ["T"] + "/qc.py").read())
+st, j = post("/api/capture", {"text": "b" * 1001})
+chk("a note over 1000 characters is refused, not cut", st == 400 and "1000" in j.get("error", ""))
+st, j = post("/api/capture", {"text": "a\u0000b\u0007c"})
+chk("control characters are removed from a note", st == 200 and j.get("text", j.get("note", {}).get("text")) == "abc")
+import tempfile
+home = tempfile.mkdtemp(); open(home + "/README.md", "w").write("x")
+with open(T + "/config/quarterdeck.env", "a") as f: f.write("\nQUARTERDECK_PROJECT_ROOTS=\"${QUARTERDECK_PROJECT_ROOTS:-" + home + "}\"\n")
+st, j = post("/api/newproject", {"name": "f1", "folder": home + "/README.md", "confirm": True})
+chk("a new project in a folder path that is a file says so with a 400", st == 400 and "file" in j.get("error", ""))
+st, j = get("/api/cycle/estimate?project=nope")
+chk("a cycle estimate for a project that does not exist is a 400", st == 400)
+st, j = post("/api/schedule", {"id": "zzzz", "delete": True})
+chk("deleting a schedule that does not exist is a 404", st == 404)
+st, j = post("/api/agent-sources", {"action": "remove", "id": "zork", "confirm": True})
+chk("removing an agent source that does not exist is a 404", st == 404)
+st, j = post("/api/agent-sources", {"action": "add", "name": "a\u0000b", "confirm": True})
+chk("an agent source name with a control character says so", st == 400 and "control" in j.get("error", ""))
+for v in ("xoxp-\u0000-1", 123):
+    st, j = post("/api/connections", {"action": "credential", "id": "slack", "key": "SLACK_USER_TOKEN", "value": v, "confirm": True})
+    chk("a credential value %r is refused" % (v,), st == 400)
+import shutil; shutil.rmtree(home, ignore_errors=True)
+PY
+pyck "$T/t3d.py"
 
 
 # ---- 4. each action does what it says and nothing more -----------------------------------------------------------------------------------------

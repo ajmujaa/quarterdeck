@@ -170,11 +170,11 @@ check("progress counts closed, open, and open issues that have an open PR",
 
 import tempfile as _tf
 _cd = Path(_tf.mkdtemp()); _cap = d.CAPTURE; d.CAPTURE = _cd / "capture.jsonl"
-_n1 = d.capture_add("  call the   dentist \n"); _n2 = d.capture_add("x" * 5000)
+_n1 = d.capture_add("  call the   dentist \n"); _n2 = d.capture_add("x" * 1000)
 d.capture_done(_n1["id"])
 _v = d.captures_view()
 _bad = []
-for _f in (lambda: d.capture_add("   "), lambda: d.capture_done("zzzzzzzz"), lambda: d.capture_done("deadbeef")):
+for _f in (lambda: d.capture_add("   "), lambda: d.capture_add("x" * 1001), lambda: d.capture_done("zzzzzzzz"), lambda: d.capture_done("deadbeef")):
     try: _f(); _bad.append("accepted")
     except ValueError: pass
 d.CAPTURE = _cap
@@ -211,7 +211,7 @@ check("notes: bad input is refused (id rules, empty text, nothing to change, reo
       all(_refused(f) for f in (lambda: d.capture_edit("zzzzzzzz", text="x"), lambda: d.capture_edit("deadbeef", text="x"), lambda: d.capture_edit("../../etc", text="x"),
                                 lambda: d.capture_edit(_a["id"], text="   "), lambda: d.capture_edit(_a["id"]), lambda: d.capture_reopen(_a["id"]),
                                 lambda: d.capture_reopen("deadbeef"), lambda: d.capture_edit(None, text="x")))
-      and len(d.capture_edit(_a["id"], text="y" * 5000)["text"]) == 1000)
+      and _refused(lambda: d.capture_edit(_a["id"], text="y" * 1001)) and len(d.capture_edit(_a["id"], text="y" * 1000)["text"]) == 1000)
 _m = d.capture_promote(_b["id"], "mission", "my-web-app")
 _ms = d.load_missions()
 check("notes: promoting to a mission makes a draft through the mission path and remembers it on the note",

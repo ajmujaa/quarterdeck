@@ -38,7 +38,7 @@ WORKDIR="${QUARTERDECK_WORKDIR:?}"
 LOG_FILE="$QUARTERDECK_HOME/logs/panel-$PROJECT.log"
 GH="${QUARTERDECK_GH:-gh}"   # a seam for the self-tests and for a stand-in; lib.sh puts the real gh first on PATH
 
-PANEL="" TARGET="" ISSUE="" TICKET="" IDEA="" FROM="" SEATS="" SEATS_GIVEN="" BRIEF_EXTRA="" RESUME=""
+IDEA_FILE="" PANEL="" TARGET="" ISSUE="" TICKET="" IDEA="" FROM="" SEATS="" SEATS_GIVEN="" BRIEF_EXTRA="" RESUME=""
 ROUNDS="${QUARTERDECK_PANEL_ROUNDS:-2}"
 PER_SEAT="${QUARTERDECK_PANEL_MAX:-10}"
 while [ $# -gt 0 ]; do
@@ -48,6 +48,7 @@ while [ $# -gt 0 ]; do
     --issue)  ISSUE="${2:-}"; need_num "--issue" "$ISSUE"; shift ;;
     --ticket) TICKET="${2:-}"; need_num "--ticket" "$TICKET"; shift ;;   # a LOCAL ticket (qtdeck ticket): the dev panel plans it with no GitHub
     --idea|--question) IDEA="${2:-}"; shift ;;
+    --idea-file) IDEA_FILE="${2:-}"; shift ;;   # the dashboard's own way: the idea text is in a private file it made, so no punctuation has to survive an argument
     --from)   FROM="${2:-}"; shift ;;
     --seats)  SEATS="$(tr ',' ' ' <<<"${2:-}")"; SEATS_GIVEN=1; shift ;;
     --brief)  BRIEF_EXTRA="${2:-}"; shift ;;
@@ -78,6 +79,16 @@ if [ -n "$RESUME" ]; then
           esac ;;
     *) die "panel: only a findings or plan panel can be resumed" ;;
   esac
+fi
+if [ -n "$IDEA_FILE" ]; then
+  # Only a file the harness made: inside state/ideas of this Quarterdeck, a plain file, not a link. Read as data, then removed.
+  idea_dir="$(cd "$(dirname "$IDEA_FILE")" 2>/dev/null && pwd -P)"
+  want_dir="$(cd "$QUARTERDECK_HOME/state/ideas" 2>/dev/null && pwd -P)"
+  [ -n "$want_dir" ] && [ "$idea_dir" = "$want_dir" ] && [[ "$(basename "$IDEA_FILE")" =~ ^idea-[0-9a-f]+\.txt$ ]] \
+    || die "panel: --idea-file must be a file the dashboard made"
+  [ -f "$IDEA_FILE" ] && [ ! -L "$IDEA_FILE" ] || die "panel: the idea file is missing"
+  IDEA="$(head -c 7000 "$IDEA_FILE")"; rm -f "$IDEA_FILE"
+  [ -n "$IDEA" ] || die "panel: the idea file is empty"
 fi
 [ -n "$PANEL" ] || die "panel: which panel? --panel design|dev|spec|qa"
 [ -z "$ISSUE" ] || [ -z "$TICKET" ] || die "panel: --issue and --ticket are two different jobs; give one"

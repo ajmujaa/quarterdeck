@@ -462,10 +462,37 @@ def stack_of(root, names, first, files, dirs, prof, js):
     return out
 
 
+# What marks a folder as a project of its own (a folder holding any of these is one project, whatever it contains).
+PROJECT_MARKERS = {"package.json", "pyproject.toml", "setup.py", "requirements.txt", "Pipfile", "go.mod", "Cargo.toml", "pom.xml", "build.gradle",
+                   "build.gradle.kts", "Gemfile", "composer.json", "Package.swift", "mix.exs", "pubspec.yaml", "deno.json", "CMakeLists.txt", "Makefile", "makefile"}
+
+
+def _is_project(folder):
+    """True when the folder is a repository (.git, a folder or a worktree's file) or holds one of PROJECT_MARKERS."""
+    try:
+        return os.path.lexists(os.path.join(folder, ".git")) or any(os.path.isfile(os.path.join(folder, m)) for m in PROJECT_MARKERS)
+    except OSError:
+        return False
+
+
+def projects_inside(root):
+    """Names of the immediate, visible subfolders of `root` that are projects, in name order; [] when `root` is itself a project."""
+    if _is_project(root):
+        return []
+    try:
+        subs = sorted(e.name for e in os.scandir(root) if e.is_dir(follow_symlinks=False) and not e.name.startswith(".") and e.name not in SKIP_DIRS)
+    except OSError:
+        return []
+    return [n for n in subs if _is_project(os.path.join(root, n))]
+
+
 def scan(path):
     root = Path(path).resolve()
     if not root.is_dir():
         raise ValueError(f"{path} is not a folder")
+    inside = projects_inside(root)
+    if len(inside) >= 2:                       # no project marker of its own, two or more projects below: a folder of projects, as the home folder is
+        raise ValueError(f"{path} is a whole folder of projects, not one project. Choose the project's own folder inside it (for example {', '.join(inside[:3])})")
     entries = walk(root)
     files = [p for p, d in entries if not d]
     dirs = [p for p, d in entries if d]

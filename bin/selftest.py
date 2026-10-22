@@ -2231,6 +2231,22 @@ _back = _call("GET", "/api/state")[1]
 check("demo off puts the real world back, with no demo marker", _off == (200, {"on": False}) and "demo" not in _back
       and {p["name"] for p in _back["projects"]} == _real_names)
 check("state/, logs/, workspace/ and config/projects.json are byte for byte as they were", _tree_print() == _before)
+# Issue 141: a write that fails (a full disk) on /api/schedule and /api/showcase is a 500 with one plain reason, not a closed connection.
+import errno as _errno141
+_real_wj141 = d.write_json
+def _full_wj141(path, data, *a, **k):
+    raise OSError(_errno141.ENOSPC, "No space left on device")
+d.write_json = _full_wj141
+try:
+    _s1 = _call("POST", "/api/schedule", {"project": "my-web-app", "duty": "panel", "args": [], "every": "1d"})
+    _s2 = _call("POST", "/api/schedule", {"toggle": True, "id": "x"})
+    _s3 = _call("POST", "/api/showcase", {"action": "create", "title": "A title"})
+finally:
+    d.write_json = _real_wj141
+check("a schedule that cannot be saved answers 500 with the plain reason", _s1[0] == 500 and _s1[1].get("error") == "the disk is full: nothing was saved", _s1)
+check("toggling a schedule on a full disk answers 500 too", _s2[0] == 500 and "disk is full" in _s2[1].get("error", ""), _s2)
+check("a showcase item that cannot be saved answers 500 with the plain reason", _s3[0] == 500 and _s3[1].get("error") == "the disk is full: nothing was saved", _s3)
+
 # Issue 167: turning an agent off. Schedules go with it, all or nothing; demo mode changes nothing.
 import attach as _att167
 _pj167 = _TEST_HOME / "config" / "projects.json"

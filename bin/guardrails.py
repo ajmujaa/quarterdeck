@@ -236,7 +236,8 @@ def main(argv):
         print("qtdeck: " + str(e), file=sys.stderr)
         return 2
     except OSError as e:
-        print("qtdeck: could not write the registry: " + type(e).__name__, file=sys.stderr)
+        from integrations import common as _common
+        print("qtdeck: " + _common.why_not_saved(e), file=sys.stderr)
         return 1
     return 0
 

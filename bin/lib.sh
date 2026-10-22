@@ -103,7 +103,7 @@ mktemp() {
 find "$QUARTERDECK_HOME/state/tmp" -mindepth 1 -maxdepth 1 -mtime +2 -exec rm -rf {} + 2>/dev/null || true
 
 RUNS_LEDGER="$QUARTERDECK_HOME/state/runs.json"
-[ -f "$RUNS_LEDGER" ] || echo '[]' > "$RUNS_LEDGER"
+[ -f "$RUNS_LEDGER" ] || { echo '[]' > "$RUNS_LEDGER"; } 2>/dev/null || rm -f "$RUNS_LEDGER" 2>/dev/null || true   # a disk that is full or read-only is reported by the command's own write, in one line, not by echo here
 
 log() { { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "${LOG_FILE:-$QUARTERDECK_HOME/logs/quarterdeck.log}"; } 2>/dev/null || true; }   # a log that cannot be written must not hide the real message
 # need_num <what> <value> — a number the duty will put into a gh query, a --jq filter or a path must be digits and nothing else.
@@ -509,6 +509,8 @@ acquire_lock() {
   repo_gate
   local lock="$QUARTERDECK_HOME/state/$1.lock"
   if ! mkdir "$lock" 2>/dev/null; then
+    # No lock folder at all (not one held by a live run) means the data folder cannot be written: say so, do not look like a run that was busy.
+    [ -d "$lock" ] || die "your data folder cannot be written to (it is read-only or the disk is full): nothing was started"
     local pid; pid=$(cat "$lock/pid" 2>/dev/null || true)
     # An empty pid may be a lock taken a moment ago whose owner has not written
     # it yet; breaking that gives two runs the same lock. Look again first.
@@ -518,7 +520,7 @@ acquire_lock() {
     fi
     rm -rf "$lock"; mkdir "$lock" 2>/dev/null || exit 0
   fi
-  echo $$ > "$lock/pid.$$" && mv "$lock/pid.$$" "$lock/pid"
+  { echo $$ > "$lock/pid.$$" && mv "$lock/pid.$$" "$lock/pid"; } 2>/dev/null || rm -f "$lock/pid.$$" 2>/dev/null || true   # no "echo: write error" on a full disk; the duty's own write says why
   QUARTERDECK_LOCK="$lock"; export QUARTERDECK_LOCK
   # A duty running inside a fix pipeline inherits QUARTERDECK_FIX_RUN without ever
   # being told a fix exists; stamped here, the same way, so the dashboard can

@@ -231,6 +231,19 @@ try {
   await page.evaluate(n => openProject(n), A); await sleep(700); await shot("12-project-dark");
   await page.evaluate(() => setTheme("auto")); await sleep(200);
   ok("no console error, no page error, no failed request", problems.console.length === 0 && problems.page.length === 0 && problems.requests.length === 0, JSON.stringify(problems));
+
+  // ---- last: a second tab in the same browser pairs with a newer link, so this tab's key no longer matches (reads still work, writes are refused) ----
+  if (MODE === "real" && process.env.QD_LINK2) {
+    const tabB = await ctx.newPage(); await tabB.goto("about:blank"); await tabB.goto(process.env.QD_LINK2);
+    await tabB.waitForFunction(() => document.querySelector("#view") && document.querySelector("#view").children.length > 0, null, {timeout: 20000}).catch(() => null);
+    const st = await page.evaluate(async () => {
+      const r = await post("/api/capture", {text: "written from a tab that was overtaken"});
+      const al = [...document.querySelectorAll("sl-alert")].map(a => a.textContent).join(" ");
+      return {r, shown: !document.getElementById("unpaired").hidden, why: document.getElementById("unpaired-why").textContent, toast: /forbidden/i.test(al), way: /qtdeck dashboard link/.test(document.getElementById("unpaired").textContent)};
+    });
+    ok("a write from a tab whose key was replaced by a newer link shows the disconnected screen, not a toast that says only forbidden", st.r === null && st.shown && /disconnected/.test(st.why) && !st.toast, JSON.stringify(st));
+    ok("  that screen shows the way back: the command for a new link", st.shown && st.way);
+  }
 } catch (e) {
   bad++; console.log("FAIL " + TAG + "the page test crashed | " + String(e && e.stack || e).split("\n").slice(0, 4).join(" / "));
   try { await page.screenshot({path: path.join(SHOTS, MODE + "-zz-stopped.png")}); } catch (e2) { /* none */ }

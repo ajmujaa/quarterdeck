@@ -32,6 +32,8 @@ page.on("pageerror", e => { if (watching) problems.page.push(String(e.message));
 page.on("requestfailed", r => { if (watching) problems.requests.push(r.url() + " " + (r.failure() || {}).errorText); });
 page.on("response", r => { if (watching && r.status() >= 400) problems.requests.push(r.url() + " " + r.status()); });
 const shot = async name => { try { await page.screenshot({path: path.join(SHOTS, name + ".png")}); } catch (e) { /* a picture is a bonus */ } };
+const fileCalls = [];                              // every POST /api/ticket/file: a double click on Save must send one
+page.on("request", r => { if (r.method() === "POST" && new URL(r.url()).pathname === "/api/ticket/file") fileCalls.push(r.postData() || ""); });
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const off = sel => page.locator(sel).first().evaluate(e => !!e.disabled);      // a Shoelace button's own state (Playwright's isDisabled reads only native controls)
 const text = async sel => (await page.locator(sel).first().innerText().catch(() => "")).replace(/\s+/g, " ").trim();
@@ -78,7 +80,8 @@ ok("then the draft arrives: two tickets with their acceptance checks, one primar
 ok("  that button is the primary one, Discard draft sits beside it, and the request box is cleared and enabled", (await page.locator("#tk-file-d1").getAttribute("variant")) === "primary" && await page.getByText("Discard draft", {exact: true}).count() === 1
   && (await page.locator("#tk-request textarea").inputValue()) === "");
 await shot("04-draft");
-await page.locator("#tk-file-d1").click();
+await page.locator("#tk-file-d1").dblclick();
+ok("a double click on Save sends one request, and no error toast follows it", await here("#tk-list .li", 15000) && (await sleep(800), fileCalls.length === 1) && !(await page.locator("sl-alert[variant=danger]").count()), fileCalls.length);
 ok("Save on this computer lists the tickets: id, title, status open, kept on this computer, and the draft is gone", await here("#tk-list .li", 15000) && await page.locator("#tk-list .li").count() === 2 && (await text("#tk-list")).includes("Add a reset button")
   && (await text("#tk-list")).includes("kept on this computer") && (await text("#tk-list")).includes("open") && await gone(".tk-draft"));
 await sleep(500);
@@ -124,6 +127,23 @@ await page.getByText("Discard draft", {exact: true}).click();
 const dmsg = await confirmText();
 await dlgClick("#confirm-yes");
 ok("Discard draft asks, then removes the draft", dmsg.startsWith("Discard this draft?") && await gone(".tk-draft", 15000));
+
+// saving a draft whose tickets are already on the list says so, and counts only the tickets that were really added
+const draftOf = async (request, titles, did) => {
+  fs.writeFileSync(path.join(T, "fake-script.json"), JSON.stringify([{text: "TICKETS_JSON: " + JSON.stringify({tickets: titles.map(t => ({title: t, body: "b", acceptance: ["c"]}))}) + "\nRESULT: DRAFTED " + titles.length + " tickets", sleep: 1, cost_usd: 0.05}]));
+  await fill("#tk-request", request); await page.locator("#tk-draft").click(); return here("#tk-file-" + did, 40000);
+};
+const toasted = async needle => { for (let i = 0; i < 30; i++) { if ((await page.locator("sl-alert").allInnerTexts()).some(t => t.includes(needle))) return true; await sleep(200); } return false; };
+const nTickets = () => page.locator("#tk-list .li").count();
+const n0 = await nTickets();
+ok("a draft of two tickets that are already on the list is offered", await draftOf("The same two again", ["Add a reset button", "Remember the count after a reload"], "d4"));
+await page.getByText("Save on this computer only", {exact: true}).click();
+ok("  saving it says plainly that nothing new was saved, not 'Saved 2 tickets'", await toasted("Nothing new was saved: both tickets were already on this computer."), (await page.locator("sl-alert").allInnerTexts()).join(" | "));
+ok("  and the list did not grow", (await nTickets()) === n0, await nTickets());
+ok("a draft with one old and one new ticket is offered", await draftOf("One old and one new", ["Add a reset button", "Play a sound on reset"], "d5"));
+await page.getByText("Save on this computer only", {exact: true}).click();
+ok("  saving it counts only the new one", await toasted("Saved 1 new ticket on this computer. 1 was already on the list."), (await page.locator("sl-alert").allInnerTexts()).join(" | "));
+ok("  and the list grew by one", await here("#tk-list .li:nth-child(" + (n0 + 1) + ")", 15000) && (await nTickets()) === n0 + 1, await nTickets());
 
 // ---- (b) create a private repo: two confirmations, and the not-signed-in message ----
 await openProject("pagetest2");

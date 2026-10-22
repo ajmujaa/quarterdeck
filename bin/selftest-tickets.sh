@@ -454,9 +454,11 @@ ck "  --ticket belongs to the dev panel only" '[ "$RC" != 0 ] && grep -q "dev pa
 
 st_duty shipwright --ticket 1 --plan "$PLANF"
 ck "shipwright --ticket 1, report only: checks run, nothing is committed, no branch holds a build, no gh" '[ "$RC" = 0 ] && grep -q "report only" <<<"$OUT" && [ "$(last_verdict)" = DRY-RUN ] && [ "$(git -C "$T/work" rev-list --count main..ticket/1-add-a-reset-button 2>/dev/null || echo 0)" = 0 ] && nogh && [ "$(refs_now)" = "$ORIGIN_BEFORE" ]'
+ck "  and its lock folder is gone (the exit that keeps the worktree must still release the lock)" '! ls "$T"/state/*.lock >/dev/null 2>&1'
 st_duty shipwright --ticket 1 --plan "$PLANF" --apply
 BR=ticket/1-add-a-reset-button
 ck "shipwright --ticket 1 --apply: one commit on the local branch ticket/1-<slug> in the project's own checkout" '[ "$RC" = 0 ] && [ "$(git -C "$T/work" rev-list --count main..$BR)" = 1 ] && git -C "$T/work" show $BR:app.py | grep -q TICKET-MARKER && [ "$(git -C "$T/work" log -1 --format=%s $BR)" = "build: Add a Reset button" ]'
+ck "  the --apply run released its lock folder too" '! ls "$T"/state/*.lock >/dev/null 2>&1'
 ck "  nothing is pushed: the bare origin has the same refs, and no branch of this name" '[ "$(refs_now)" = "$ORIGIN_BEFORE" ] && [ -z "$(git -C "$T/origin.git" branch --list "ticket/*")" ]'
 ck "  the gh stand-in recorded no call at all (no issue, no pr, no api, no auth)" 'nogh'
 ck "  the verify command ran before and after and its result is on the record, with the verdict BRANCH" '[ "$(last_verdict)" = BRANCH ] && grep -q "verify exit 0" <<<"$(last_detail)" && grep -q "ticket #1" <<<"$(last_detail)" && grep -q "baselining local checks" <<<"$OUT" && grep -q "re-running local checks" <<<"$OUT"'

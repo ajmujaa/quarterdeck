@@ -531,6 +531,9 @@ acquire_lock() {
   trap "rm -rf '$lock'" EXIT
 }
 
+# release_lock: drops the lock folder acquire_lock made. A duty that sets its own EXIT trap replaces acquire_lock's, so that trap must call this.
+release_lock() { [ -z "${QUARTERDECK_LOCK:-}" ] || rm -rf "$QUARTERDECK_LOCK"; return 0; }
+
 # with_file_lock <path> <command...> — serializes a read-modify-write on a
 # shared JSON file (the runs ledger, the filed-issues ledger, surveyor's
 # reviewed-PRs file). Several duties can now run at once on the same project,

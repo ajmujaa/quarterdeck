@@ -36,6 +36,8 @@ page.on("console", m => { if (m.type() === "error" && !/Failed to load resource.
 page.on("pageerror", e => problems.page.push(String(e.message)));
 page.on("requestfailed", r => { const why = (r.failure() || {}).errorText || ""; if (!/ERR_ABORTED/.test(why)) problems.requests.push(r.url() + " " + why); });
 page.on("response", r => { if (r.status() >= 400 && !(/\/api\/attach$/.test(r.url()) && r.status() === 400)) problems.requests.push(r.url() + " " + r.status()); });
+const attaches = [];                               // every POST /api/attach that applies: a double click on Attach this project must send one
+page.on("request", r => { if (r.method() === "POST" && new URL(r.url()).pathname === "/api/attach" && (r.postData() || "").includes('"apply":true')) attaches.push(r.postData()); });
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const shot = async name => { try { await page.evaluate(() => window.scrollTo(0, 0)); await page.screenshot({path: path.join(SHOTS, MODE + "-" + name + ".png")}); } catch (e) { /* a picture is a bonus */ } };
 const here = async (sel, ms = 15000) => { try { await page.waitForSelector(sel, {state: "visible", timeout: ms}); return true; } catch (e) { return false; } };
@@ -163,9 +165,10 @@ try {
     // switch one suggested duty on, then attach
     const sugg = sc.duties.find(d => !d[1]);
     await page.evaluate(n => { document.querySelector(`#at-out [data-ad="${n}"]`).checked = true; }, sugg[0]);
-    await page.evaluate(() => { document.querySelector("#at-ready sl-button[variant=primary]").click(); });
+    await page.evaluate(() => { const b = document.querySelector("#at-ready sl-button[variant=primary]"); b.click(); b.click(); });      // a double click
     ok("Attach registers the project and the panel moves to step 5, Ready, with the real checklist", await here("#at-next") && (await text("#dtitle")) === "Attached sample-react", await text("#dtitle"));
     await sleep(800);
+    ok("  a double click on it sent one attach, and no error toast sits beside the success", attaches.length === 1 && (await page.locator("sl-alert[variant=danger]").count()) === 0, attaches.length);
     const af = await page.evaluate(() => ({cur: [...document.querySelectorAll("#at-steps li")].filter(li => li.getAttribute("aria-current") === "step").map(li => li.textContent.trim()), rows: document.querySelectorAll("#dbody .rd-item").length,
       next: document.querySelector("#at-next").innerText, primary: [...document.querySelectorAll("#dbody sl-button[variant=primary]")].map(b => b.textContent.trim()), projects: S.projects.map(p => p.name), duties: (S.projects[0] || {}).duties}));
     ok("  step 5 is current, the checklist rows are there, and there is exactly one next action and one primary button", af.cur.join() === "Ready" && af.rows >= 5 && /^Next: \S/.test(af.next) && af.primary.length === 1 && noDash(af.next), JSON.stringify(af));

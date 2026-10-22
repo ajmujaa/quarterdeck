@@ -38,6 +38,7 @@ last() { ls -t "$T"/state/panels/*.json | head -1; }
 QUARTERDECK_PROJECT=tp QUARTERDECK_WORKDIR="$T/work" bash "$T/duties/panel.sh" --panel design --seats shipwright,inspector >/dev/null 2>&1
 P="$(last)"
 ck "a whole panel runs to a ruling"          '[ "$(jq -r .status "$P")" = done ] && [ "$(jq ".ruling | length" "$P")" = 1 ]'
+ck "  and its lock folder is released when it exits (its own exit trap must not drop the release)" '! ls "$T"/state/*.lock >/dev/null 2>&1'
 ck "the chair was told to scale the ruling to the subject"  'grep -q "Scale the ruling to what was asked" "$T/prompts"'
 ck "the chair was asked for kind and tier"   'grep -q "kind — what the item IS" "$T/prompts"'
 

@@ -136,7 +136,7 @@ done <<<"$OUTS"
 # ---- 2. the page ----
 page_run() { # page_run <mode>: the driver prints "ok ...", "FAIL ..." or "skip ..." lines; each is one check
   local out rc nf
-  out=$(QD_LINK="$(newlink)" QD_MODE="$1" QD_SHOTS="$T/shots" QD_T="$T" node "$REAL/bin/projects-page.mjs" 2>&1 | tee -a "${QD_PAGE_LOG:-/dev/null}"); rc=${PIPESTATUS[0]}
+  out=$(QD_LINK="$(newlink)" QD_LINK2="$(newlink)" QD_MODE="$1" QD_SHOTS="$T/shots" QD_T="$T" node "$REAL/bin/projects-page.mjs" 2>&1 | tee -a "${QD_PAGE_LOG:-/dev/null}"); rc=${PIPESTATUS[0]}
   printf '%s\n' "$out" | while IFS= read -r line; do
     case "$line" in
       "ok "*) printf '  ok    %s\n' "${line#ok }" ;;

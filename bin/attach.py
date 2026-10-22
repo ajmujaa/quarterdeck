@@ -28,6 +28,7 @@ The registry, the profile and the record all live in your data folder. Standard 
 """
 import json
 import os
+import tempfile
 import platform
 import re
 import shlex
@@ -326,14 +327,26 @@ def load_registry(p):
         return {}
 
 
+def _put_registry(reg, cur):
+    """Write the registry through a temp file of its own (two writers at once must not share one), 0600, then swap it in."""
+    fd, tmp = tempfile.mkstemp(dir=str(reg.parent), prefix=reg.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(json.dumps(cur, indent=2) + "\n")
+        os.replace(tmp, reg)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def write_registry(cur, reg=None):
     """The registry, atomically, 0600."""
     reg = Path(reg or registry_path())
     reg.parent.mkdir(parents=True, exist_ok=True)
-    tmp = reg.with_suffix(".tmp")
-    tmp.write_text(json.dumps(cur, indent=2) + "\n")
-    os.chmod(tmp, 0o600)
-    os.replace(tmp, reg)
+    _put_registry(reg, cur)
     return reg
 
 
@@ -348,10 +361,7 @@ def apply(prop, prof, reg=None, proposed=None, by="owner, with --apply", sv=None
         raise ValueError(f"'{name}' is already registered")
     cur[name] = prop["entry"]
     reg.parent.mkdir(parents=True, exist_ok=True)
-    tmp = reg.with_suffix(".tmp")
-    tmp.write_text(json.dumps(cur, indent=2) + "\n")
-    os.chmod(tmp, 0o600)
-    os.replace(tmp, reg)
+    _put_registry(reg, cur)
     _scan.save(prof, name)           # state/profiles/<name>.json: the older record, still read by existing code; the survey below is the one new code reads
     if sv is not None:
         _survey.save(name, dict(sv, name=name))
@@ -370,10 +380,7 @@ def set_repo(name, repo, reg=None):
     if not REPO_OK.fullmatch(repo or "") or ".." in repo:
         raise ValueError(f"'{repo[:60]}' is not a GitHub owner/name, like octocat/hello-world")
     cur[name]["repo"] = repo
-    tmp = reg.with_suffix(".tmp")
-    tmp.write_text(json.dumps(cur, indent=2) + "\n")
-    os.chmod(tmp, 0o600)
-    os.replace(tmp, reg)
+    _put_registry(reg, cur)
     return reg
 
 

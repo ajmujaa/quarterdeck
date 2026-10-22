@@ -1,6 +1,6 @@
 name: notify
 
-# Sends one message when a full CI run finishes (main, nightly, manual) or any run fails.
+# Sends one message when a CI run finishes: pull requests, main, nightly and manual runs.
 # Does nothing until the repository secrets below exist.
 #   Telegram: TELEGRAM_TOKEN and TELEGRAM_CHAT
 #   Slack:    SLACK_WEBHOOK
@@ -15,7 +15,6 @@ permissions: {}
 jobs:
   notify:
     runs-on: ubuntu-latest
-    if: github.event.workflow_run.event != 'pull_request' || github.event.workflow_run.conclusion == 'failure'
     steps:
       - name: Send message
         env:
@@ -24,12 +23,13 @@ jobs:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
           RESULT: ${{ github.event.workflow_run.conclusion }}
           BRANCH: ${{ github.event.workflow_run.head_branch }}
+          PR: ${{ github.event.workflow_run.pull_requests[0].number }}
           EVENT: ${{ github.event.workflow_run.event }}
           SHA: ${{ github.event.workflow_run.head_sha }}
           URL: ${{ github.event.workflow_run.html_url }}
         run: |
           case "$RESULT" in success) icon="✅" ;; *) icon="❌" ;; esac
-          msg="$icon quarterdeck ci $RESULT ($EVENT on $BRANCH, ${SHA:0:7})
+          msg="$icon quarterdeck ci $RESULT ($EVENT${PR:+ #$PR} on $BRANCH, ${SHA:0:7})
           $URL"
           if [ -n "$TELEGRAM_TOKEN" ] && [ -n "$TELEGRAM_CHAT" ]; then
             curl -fsS "https://api.telegram.org/bot$TELEGRAM_TOKEN/sendMessage" \

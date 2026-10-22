@@ -2758,13 +2758,14 @@ def mission_act(action, body, source):
         projects = read_json(PROJECTS_FILE, {})
         if "panel" not in (projects.get(m["project"]) or {}).get("duties", []):
             raise ValueError("this project has no panel duty to start from")
-        idea = m["objective"]
+        idea = m["objective"][:2000]
         if m.get("constraints"):
-            idea += f"\n\nConstraints: {m['constraints']}"
+            idea += f"\n\nConstraints: {m['constraints'][:2000]}"
         if m.get("success_criteria"):
-            idea += f"\n\nSuccess criteria: {m['success_criteria']}"
-        what = spawn_run(m["project"], "panel", ["--panel", "spec", "--idea", idea],
-                         apply_=True, source="mission", mission=m["id"])
+            idea += f"\n\nSuccess criteria: {m['success_criteria'][:2000]}"
+        # The text goes in a private file, not an argument: an objective with punctuation, or any constraints, is not a "safe token".
+        what = spawn_run(m["project"], "panel", ["--panel", "spec"],
+                         apply_=True, source="mission", mission=m["id"], idea_text=idea)
         m["status"] = "started"
         m["updated_at"] = iso(now_utc())
         m["events"].append(record_event("started", f"started a spec panel: {what}", source))
@@ -2870,9 +2871,28 @@ def validate_run(project, duty, args):
     return [str(ROOT / "bin" / "qtdeck"), "run", project, duty, *clean]
 
 
-def spawn_run(project, duty, args, apply_=False, source="dashboard", mission=None):
+IDEAS = STATE / "ideas"
+
+
+def write_idea_file(text):
+    """The idea text of a run, as data in a file only this user can read. Returns its path (made here, inside state/ideas)."""
+    import secrets
+    IDEAS.mkdir(parents=True, exist_ok=True)
+    os.chmod(IDEAS, 0o700)
+    path = IDEAS / f"idea-{secrets.token_hex(8)}.txt"
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(text[:6100])
+    return path
+
+
+def spawn_run(project, duty, args, apply_=False, source="dashboard", mission=None, idea_text=None):
     no_demo("start a run")
     argv = validate_run(project, duty, args)
+    idea_path = None
+    if idea_text is not None:
+        idea_path = write_idea_file(idea_text)
+        argv += ["--idea-file", str(idea_path)]
     if source in ("dashboard", "mission"):           # started by hand: a line of time, project and a short label in Quarterdeck's own state/ (for My rhythm), nothing else
         try:
             import attention.tasks as _tk
@@ -2896,8 +2916,20 @@ def spawn_run(project, duty, args, apply_=False, source="dashboard", mission=Non
     # never has to know about, picked up by record_run itself so every row it
     # writes is tagged, not just the one this call happens to make.
     env = {**os.environ, "QUARTERDECK_MISSION_RUN": mission} if mission else None
-    subprocess.Popen(argv, stdout=out, stderr=subprocess.STDOUT, env=env,
-                     stdin=subprocess.DEVNULL, cwd=str(ROOT), start_new_session=True)
+    try:
+        proc = subprocess.Popen(argv, stdout=out, stderr=subprocess.STDOUT, env=env,
+                                stdin=subprocess.DEVNULL, cwd=str(ROOT), start_new_session=True)
+    except Exception:
+        if idea_path:
+            idea_path.unlink(missing_ok=True)
+        raise
+    if idea_path:          # the duty removes it once read; this is the backstop for when the run ends without reading it
+        def _tidy(p=proc, f=idea_path):
+            try:
+                p.wait()
+            finally:
+                f.unlink(missing_ok=True)
+        threading.Thread(target=_tidy, daemon=True).start()
     return " ".join(argv[2:])
 
 
@@ -3983,6 +4015,11 @@ def connection_test(sid, label, timeout=180):
     why = line.split("failed:", 1)[1].strip() if "failed:" in line else ""
     if "_oauth.py" in why:                                       # the page has its own sign-in button: do not send anyone to a terminal
         why = "Not signed in with Google yet. Press Sign in with Google on this card." if sid in SIGNIN_TOOLS and sid != "meta" else "Not connected to Facebook yet. Press Connect with Facebook on this card."
+    if r.returncode != 0 and why.startswith("network error"):
+        # Every saved credential is there and the failure is the network, not a refusal (401/403 say something else): the token was fine as far as anyone knows.
+        have = integrations_manifest.env_keys(label)
+        if all(c["key"] in have for c in svc["credentials"] if not c["optional"]) and any(c["key"] in have for c in svc["credentials"]):
+            return {"ok": False, "message": "Token saved. The service could not be reached just now (network); it will retry on the next refresh."}
     return {"ok": r.returncode == 0, "message": "Refreshed." if r.returncode == 0 else (why[:200] or "the refresh failed")}
 
 
@@ -4855,7 +4892,8 @@ def project_verify_api(b):
 def project_duties_api(b):
     """Turn duties on or off, and allow or forbid full cycles: attach.set_duties, the function `qtdeck enable` and `qtdeck disable` use."""
     import attach as _attach
-    no_demo("change the crew")
+    if DEMO["world"] is not None:
+        return 400, {"error": "Demo mode: nothing is changed."}
     if b.get("confirm") is not True:
         return 400, {"error": "confirm is required: this changes which duties may run for the project"}
     project, add, remove, cycle = b.get("project"), b.get("add", []), b.get("remove", []), b.get("cycle")
@@ -4871,6 +4909,21 @@ def project_duties_api(b):
         return 400, {"error": str(e)}
     except OSError as e:
         return 500, {"error": integrations_common.why_not_saved(e)}
+    if r.get("removed"):
+        # Turning an agent off also removes its scheduled runs for this project (other projects' are left alone), as one action: if the
+        # schedules cannot be saved the duties are put back. A run already in progress is not stopped.
+        scheds = load_schedules()
+        keep = [x for x in scheds if not (x.get("project") == project and x.get("duty") in r["removed"])]
+        if len(keep) != len(scheds):
+            try:
+                write_json(SCHEDULES_FILE, keep)
+            except OSError as e:
+                try:
+                    _attach.set_duties(project, add=r["removed"])
+                except Exception as e2:
+                    log_error("restore duties", e2)
+                return 500, {"error": integrations_common.why_not_saved(e)}
+            r["schedules_removed"] = len(scheds) - len(keep)
     _ticket_log("duties", project)
     return 200, r
 

@@ -29,6 +29,7 @@ _os0.environ["QUARTERDECK_HOME"] = str(_TEST_HOME)
 spec = importlib.util.spec_from_file_location("dash", ROOT / "bin" / "dashboard.py")
 d = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(d)
+_REAL_SPAWN_RUN = d.spawn_run
 
 FAILS = []
 
@@ -1490,8 +1491,8 @@ check("approving the same revision again (a double click) is a no-op: still appr
 # mission past "draft" for good) does not disturb m's own remaining checks.
 _saved_spawn_run = d.spawn_run
 _spawn_calls = []
-d.spawn_run = lambda project, duty, args, apply_=False, source="dashboard", mission=None: (
-    _spawn_calls.append((project, duty, args, apply_, source, mission)) or "ok")
+d.spawn_run = lambda project, duty, args, apply_=False, source="dashboard", mission=None, idea_text=None: (
+    _spawn_calls.append((project, duty, args, apply_, source, mission, idea_text)) or "ok")
 m2 = d.mission_act("create", {"project": "my-web-app", "objective": "Ship the export button",
                               "constraints": "no new dependencies"}, "owner")
 check("starting a mission with no plan at all is refused", mact_refused("start_panel", {"id": m2["id"]}, "test") and not _spawn_calls)
@@ -1502,9 +1503,9 @@ d.mission_act("approve_plan", {"id": m2["id"], "revision": 1}, "owner")
 d.mission_act("start_panel", {"id": m2["id"]}, "owner")
 check("starting spawns a spec panel seeded with the objective and constraints",
       _spawn_calls and _spawn_calls[0][:2] == ("my-web-app", "panel")
-      and _spawn_calls[0][2][:3] == ["--panel", "spec", "--idea"]
-      and "Ship the export button" in _spawn_calls[0][2][3]
-      and "no new dependencies" in _spawn_calls[0][2][3],
+      and _spawn_calls[0][2] == ["--panel", "spec"]
+      and "Ship the export button" in _spawn_calls[0][6]
+      and "Constraints: no new dependencies" in _spawn_calls[0][6],
       _spawn_calls)
 check("starting is a real write, not a dry run", _spawn_calls[0][3] is True)
 check("the run is tagged with this exact mission, so the ledger can find it back",
@@ -1512,6 +1513,35 @@ check("the run is tagged with this exact mission, so the ledger can find it back
 check("a started mission is no longer a draft", d.load_missions()[-1]["status"] == "started")
 check("starting an already-started mission is refused", mact_refused("start_panel", {"id": m2["id"]}, "test"))
 d.spawn_run = _saved_spawn_run
+
+# Issue 164: the real spawn_run puts the idea in a private file and passes only its path; the text never reaches an argument or the log line.
+_idea = "Add export (CSV, 'quoted' and \"double\")?\nSecond line; $(not run) `nor this`"
+_popen_calls = []
+class _FakeProc:
+    def wait(self):
+        return 0
+_saved_popen = d.subprocess.Popen
+d.subprocess.Popen = lambda argv, **kw: (_popen_calls.append(argv), _FakeProc())[1]
+try:
+    _REAL_SPAWN_RUN("my-web-app", "panel", ["--panel", "spec"], True, "mission", None, idea_text=_idea)
+finally:
+    d.subprocess.Popen = _saved_popen
+_av = _popen_calls[0] if _popen_calls else []
+_ix = _av.index("--idea-file") if "--idea-file" in _av else -1
+_fp = Path(_av[_ix + 1]) if _ix >= 0 else Path("/nonexistent")
+import time as _t164
+for _ in range(50):
+    if not _fp.exists():
+        break
+    _t164.sleep(0.05)
+check("a run's idea text is passed as a file path made inside the data folder, never as an argument",
+      _ix >= 0 and str(_fp.parent) == str(d.STATE / "ideas") and not any("export" in a for a in _av), _av)
+check("the file is removed when the run ends", not _fp.exists())
+_lg = (d.LOGS / "panel-my-web-app.log").read_text()
+check("the run log line names the file, not the idea text", "--idea-file" in _lg and "export" not in _lg.split("--idea-file")[-1], _lg[-300:])
+_f2 = d.write_idea_file(_idea)
+check("the idea file is private (0600) and holds the text intact", (_f2.stat().st_mode & 0o777) == 0o600 and _f2.read_text() == _idea)
+_f2.unlink()
 
 d.mission_act("update", {"id": m["id"], "constraints": "changed my mind"}, "owner")
 check("editing an approved draft invalidates that approval",
@@ -2189,6 +2219,42 @@ finally:
 check("a schedule that cannot be saved answers 500 with the plain reason", _s1[0] == 500 and _s1[1].get("error") == "the disk is full: nothing was saved", _s1)
 check("toggling a schedule on a full disk answers 500 too", _s2[0] == 500 and "disk is full" in _s2[1].get("error", ""), _s2)
 check("a showcase item that cannot be saved answers 500 with the plain reason", _s3[0] == 500 and _s3[1].get("error") == "the disk is full: nothing was saved", _s3)
+
+# Issue 167: turning an agent off. Schedules go with it, all or nothing; demo mode changes nothing.
+import attach as _att167
+_pj167 = _TEST_HOME / "config" / "projects.json"
+_reg167 = {"p167": {"repo": "x/p", "path": str(_TEST_HOME), "summary": "s", "default_branch": "main", "duties": ["panel", "scribe"], "guardrails": [], "verify": ""},
+           "q167": {"repo": "x/q", "path": str(_TEST_HOME), "summary": "s", "default_branch": "main", "duties": ["panel", "scribe"], "guardrails": [], "verify": ""}}
+_saved167 = (_pj167.read_text() if _pj167.exists() else None, d.SCHEDULES_FILE.read_text() if d.SCHEDULES_FILE.exists() else None)
+_pj167.write_text(_dj.dumps(_reg167))
+def _row167(i, pr, du):
+    return {"id": i, "project": pr, "duty": du, "args": [], "apply": False, "every": "1d", "at": "", "paused": False, "created": "2026-01-01T00:00:00Z", "last_run": None}
+d.SCHEDULES_FILE.write_text(_dj.dumps([_row167("s1", "p167", "scribe"), _row167("s2", "p167", "panel"), _row167("s3", "q167", "scribe")]))
+d.demo_set(True)
+try:
+    _st, _j = d.project_duties_api({"project": "p167", "remove": ["scribe"], "confirm": True})
+finally:
+    d.demo_set(False)
+check("demo mode: turning an agent off changes nothing and says so", _st == 400 and "Demo mode" in _j["error"] and "scribe" in _dj.loads(_pj167.read_text())["p167"]["duties"] and len(_dj.loads(d.SCHEDULES_FILE.read_text())) == 3)
+_real_wj = d.write_json
+def _failing_wj(path, data, *a, **k):
+    if Path(path) == d.SCHEDULES_FILE:
+        raise OSError(28, "No space left on device")
+    return _real_wj(path, data, *a, **k)
+d.write_json = _failing_wj
+try:
+    _st, _j = d.project_duties_api({"project": "p167", "remove": ["scribe"], "confirm": True})
+finally:
+    d.write_json = _real_wj
+check("if the schedules cannot be saved the agent stays on (all or nothing) and the answer is a 500 with one reason",
+      _st == 500 and _j.get("error") and "scribe" in _dj.loads(_pj167.read_text())["p167"]["duties"] and len(_dj.loads(d.SCHEDULES_FILE.read_text())) == 3, (_st, _j))
+_st, _j = d.project_duties_api({"project": "p167", "remove": ["scribe"], "confirm": True})
+_ids = sorted(x["id"] for x in _dj.loads(d.SCHEDULES_FILE.read_text()))
+check("turning it off removes its schedules for this project only", _st == 200 and _ids == ["s2", "s3"] and _j["schedules_removed"] == 1
+      and "scribe" not in _dj.loads(_pj167.read_text())["p167"]["duties"] and "scribe" in _dj.loads(_pj167.read_text())["q167"]["duties"], (_st, _j, _ids))
+if _saved167[0] is not None: _pj167.write_text(_saved167[0])
+if _saved167[1] is not None: d.SCHEDULES_FILE.write_text(_saved167[1])
+else: d.SCHEDULES_FILE.unlink()
 
 _srv.shutdown()
 

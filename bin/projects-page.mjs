@@ -4,6 +4,7 @@
 //   node bin/projects-page.mjs probe     exit 0 when a browser can start here, 3 when none can
 import {createRequire} from "node:module";
 import path from "node:path";
+import fs from "node:fs";
 
 function load() {
   const req = createRequire(import.meta.url), tries = [];
@@ -236,6 +237,29 @@ try {
     await page.locator("sl-button, button", {hasText: /^\s*Edit\s*$/}).first().click(); await here("#note-edit", 5000); await sleep(600);
     ok("Edit on a note puts the focus in its edit box and logs no error", await page.evaluate(() => { const e = document.querySelector("#note-edit"); return !!e && (document.activeElement === e || e.matches(":focus-within")); }) && problems.console.length + problems.page.length === errs0, JSON.stringify(problems));
     await page.evaluate(() => noteEditStop());
+  }
+
+  // ================= the Crew page: turn an agent off (issue 167) =================
+  if (MODE === "real") {
+    const dd = path.join(process.env.QD_T, "duties"), madeDir = !fs.existsSync(dd), madeFiles = [];     // the throwaway tree has no duties/: two empty scripts so the registry accepts them, removed after
+    fs.mkdirSync(dd, {recursive: true});
+    for (const n of ["panel", "surveyor"]) { const f = path.join(dd, n + ".sh"); if (!fs.existsSync(f)) { fs.writeFileSync(f, "#!/bin/bash\n"); madeFiles.push(f); } }
+    await page.evaluate(async n => { await post("/api/project/duties", {project: n, add: ["surveyor"], confirm: true}); await tick(); openProject(n); dockGo("crew"); }, A);
+    await here('#view [data-disable="surveyor"]', 8000);
+    const off = page.locator('#view [data-disable="surveyor"]');
+    const lbl = await off.getAttribute("aria-label").catch(() => "");
+    ok("Crew: each enabled agent of the chosen project has a Turn off button whose name includes the agent and the project, and the agent it was not asked about has none", lbl === "Turn off the surveyor for " + A && (await page.locator('#view [data-disable="no-such"]').count()) === 0, lbl);
+    await off.click(); await sleep(500);
+    const dlg = await page.evaluate(() => ({open: !!document.querySelector("#confirm-dlg") && document.querySelector("#confirm-dlg").open, label: document.querySelector("#confirm-dlg").label, msg: document.querySelector("#confirm-msg").textContent, yes: document.querySelector("#confirm-yes").textContent}));
+    ok("  it asks first: the title names the agent and the project, the text says a run in progress finishes and its scheduled runs are removed", dlg.open && dlg.label === "Turn off surveyor for " + A + "?" && /A run in progress finishes\. Its scheduled runs are removed\./.test(dlg.msg) && dlg.yes === "Turn off", JSON.stringify(dlg));
+    await page.locator("#confirm-no").click(); await sleep(600);
+    ok("  Cancel changes nothing", (await page.locator('#view [data-disable="surveyor"]').count()) === 1);
+    await page.locator('#view [data-disable="surveyor"]').click(); await sleep(500);
+    await page.locator("#confirm-yes").click(); await sleep(1500);
+    const still = await page.evaluate(async n => (await (await fetch("/api/state")).json()).agents.some(a => a.project === n && a.duty === "surveyor"), A);
+    ok("  Turn off removes the agent from the enabled list and keeps the project's other agent", (await page.locator('#view [data-disable="surveyor"]').count()) === 0 && !still && (await page.locator('#view [data-disable="panel"]').count()) === 1, still);
+    for (const f of madeFiles) fs.rmSync(f, {force: true});
+    if (madeDir) fs.rmSync(dd, {recursive: true, force: true});
   }
 
   // ================= a phone, and the dark theme =================

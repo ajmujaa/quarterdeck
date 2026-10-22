@@ -4003,7 +4003,7 @@ def connection_test(sid, label, timeout=180):
         # Every saved credential is there and the failure is the network, not a refusal (401/403 say something else): the token was fine as far as anyone knows.
         have = integrations_manifest.env_keys(label)
         if all(c["key"] in have for c in svc["credentials"] if not c["optional"]) and any(c["key"] in have for c in svc["credentials"]):
-            return {"ok": False, "message": "Token saved. The service could not be reached just now (network); it will retry on the next refresh."}
+            return {"ok": False, "message": integrations_manifest.NETWORK_SAVED}
     return {"ok": r.returncode == 0, "message": "Refreshed." if r.returncode == 0 else (why[:200] or "the refresh failed")}
 
 

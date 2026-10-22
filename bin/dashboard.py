@@ -4440,10 +4440,11 @@ def ticket_file_api(b):
                 return 409, {"error": f"the planner is already working on {project}: wait for it to finish"}
             argv = _tk.argv_file(project, did, apply=True)
         else:
+            had = {t["id"] for t in _tk.load(project)["tickets"]}
             made = _tk.local_add(project, dr["tickets"])
             _tk.draft_remove(project, did)
             _ticket_log("file-local", project)
-            return 200, {"tickets": made, "local": True}
+            return 200, {"tickets": made, "local": True, "added": sum(1 for t in made if t["id"] not in had)}
     except ValueError as e:
         return 400, {"error": str(e)}
     at = iso(now_utc())

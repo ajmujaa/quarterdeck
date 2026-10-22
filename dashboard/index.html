@@ -1859,7 +1859,10 @@ async function tkFile(did, local){
   if(!j) return;
   TK.error = "";
   if(j.started){ TK.filing = {n, repo: d.repo}; TK.at = 0; announce(`Filing ${n} ${plural(n, "issue")} on ${d.repo}.`); render(); loadTickets(true); return; }
-  toast(`Saved ${n} ${plural(n, "ticket")} on this computer.`);
+  const added = typeof j.added === "number" ? j.added : n, had = n - added;      // tickets already on the list are not added twice
+  toast(added === 0 ? (n === 1 ? "Nothing new was saved: that ticket was already on this computer." : `Nothing new was saved: ${n === 2 ? "both" : "all " + n} tickets were already on this computer.`)
+    : had ? `Saved ${added} new ${plural(added, "ticket")} on this computer. ${had} ${had === 1 ? "was" : "were"} already on the list.`
+    : `Saved ${n} ${plural(n, "ticket")} on this computer.`);
   await loadTickets(true); focusSoon("#tk-list");
 }
 async function tkDiscard(did){

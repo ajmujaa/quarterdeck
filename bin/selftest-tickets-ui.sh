@@ -345,7 +345,7 @@ script({"match": "REQUIREMENTS_JSON", "text": 'REQUIREMENTS_JSON: {"summary":"Le
        {"text": 'ITEMS_JSON: [{"area":"app","severity":"major","title":"Make counter_reset return zero","claim":"it returns its argument","where":"app.py","why":"the ticket asks for zero","action":"return 0"}]\nRESULT: ITEMS 1', "cost_usd": 0.05})
 K.local_add("nocycle", [{"title": "Cycle me where I may not", "body": "b", "acceptance": ["c"]}])
 st, j = post("/api/cycle/start", {"project": "nocycle", "ticket": 1, "confirm": True})
-chk("a ticket cycle on a project without cycle: true is refused with the registry hint, and starts nothing", st == 400 and '"cycle": true' in j["error"] and not os.path.exists(T + "/state/cycles"))
+chk("a ticket cycle on a project without cycle: true is refused with the registry hint, and starts nothing", st == 400 and "qtdeck enable nocycle cycle" in j["error"] and not os.path.exists(T + "/state/cycles"))
 local = [t for t in tickets("norepo")["tickets"] if t["source"] == "local" and t["status"] == "open"]
 tid = local[0]["id"]
 chk("a ticket that is not there, a bad number and a GitHub-filed ticket are each a 400",

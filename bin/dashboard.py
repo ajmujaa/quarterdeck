@@ -2758,13 +2758,14 @@ def mission_act(action, body, source):
         projects = read_json(PROJECTS_FILE, {})
         if "panel" not in (projects.get(m["project"]) or {}).get("duties", []):
             raise ValueError("this project has no panel duty to start from")
-        idea = m["objective"]
+        idea = m["objective"][:2000]
         if m.get("constraints"):
-            idea += f"\n\nConstraints: {m['constraints']}"
+            idea += f"\n\nConstraints: {m['constraints'][:2000]}"
         if m.get("success_criteria"):
-            idea += f"\n\nSuccess criteria: {m['success_criteria']}"
-        what = spawn_run(m["project"], "panel", ["--panel", "spec", "--idea", idea],
-                         apply_=True, source="mission", mission=m["id"])
+            idea += f"\n\nSuccess criteria: {m['success_criteria'][:2000]}"
+        # The text goes in a private file, not an argument: an objective with punctuation, or any constraints, is not a "safe token".
+        what = spawn_run(m["project"], "panel", ["--panel", "spec"],
+                         apply_=True, source="mission", mission=m["id"], idea_text=idea)
         m["status"] = "started"
         m["updated_at"] = iso(now_utc())
         m["events"].append(record_event("started", f"started a spec panel: {what}", source))
@@ -2870,9 +2871,28 @@ def validate_run(project, duty, args):
     return [str(ROOT / "bin" / "qtdeck"), "run", project, duty, *clean]
 
 
-def spawn_run(project, duty, args, apply_=False, source="dashboard", mission=None):
+IDEAS = STATE / "ideas"
+
+
+def write_idea_file(text):
+    """The idea text of a run, as data in a file only this user can read. Returns its path (made here, inside state/ideas)."""
+    import secrets
+    IDEAS.mkdir(parents=True, exist_ok=True)
+    os.chmod(IDEAS, 0o700)
+    path = IDEAS / f"idea-{secrets.token_hex(8)}.txt"
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(text[:6100])
+    return path
+
+
+def spawn_run(project, duty, args, apply_=False, source="dashboard", mission=None, idea_text=None):
     no_demo("start a run")
     argv = validate_run(project, duty, args)
+    idea_path = None
+    if idea_text is not None:
+        idea_path = write_idea_file(idea_text)
+        argv += ["--idea-file", str(idea_path)]
     if source in ("dashboard", "mission"):           # started by hand: a line of time, project and a short label in Quarterdeck's own state/ (for My rhythm), nothing else
         try:
             import attention.tasks as _tk
@@ -2896,8 +2916,20 @@ def spawn_run(project, duty, args, apply_=False, source="dashboard", mission=Non
     # never has to know about, picked up by record_run itself so every row it
     # writes is tagged, not just the one this call happens to make.
     env = {**os.environ, "QUARTERDECK_MISSION_RUN": mission} if mission else None
-    subprocess.Popen(argv, stdout=out, stderr=subprocess.STDOUT, env=env,
-                     stdin=subprocess.DEVNULL, cwd=str(ROOT), start_new_session=True)
+    try:
+        proc = subprocess.Popen(argv, stdout=out, stderr=subprocess.STDOUT, env=env,
+                                stdin=subprocess.DEVNULL, cwd=str(ROOT), start_new_session=True)
+    except Exception:
+        if idea_path:
+            idea_path.unlink(missing_ok=True)
+        raise
+    if idea_path:          # the duty removes it once read; this is the backstop for when the run ends without reading it
+        def _tidy(p=proc, f=idea_path):
+            try:
+                p.wait()
+            finally:
+                f.unlink(missing_ok=True)
+        threading.Thread(target=_tidy, daemon=True).start()
     return " ".join(argv[2:])
 
 

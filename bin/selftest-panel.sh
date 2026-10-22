@@ -54,6 +54,24 @@ ck "an already-ruled panel is not resumed"   'grep -q "nothing to resume" <<<"$o
 out=$(QUARTERDECK_PROJECT=tp QUARTERDECK_WORKDIR="$T/work" bash "$T/duties/panel.sh" --resume "../x" 2>&1)
 ck "--resume takes only a panel id"          'grep -q "takes a panel id" <<<"$out"'
 
+# Issue 164: the idea comes from a private file the dashboard made, so punctuation, quotes, a question mark and a newline arrive intact as data.
+rm -f "$T"/state/panels/*.json; : > "$T/prompts"; mkdir -p "$T/state/ideas"
+IDEA_TXT=$'Add export (CSV, "quoted" and \'single\')?\n\nConstraints: no $(rm -rf x) or `ls`; keep it small\n\nSuccess criteria: it works; really'
+printf '%s' "$IDEA_TXT" > "$T/state/ideas/idea-abc123.txt"
+QUARTERDECK_PROJECT=tp QUARTERDECK_WORKDIR="$T/work" bash "$T/duties/panel.sh" --panel spec --idea-file "$T/state/ideas/idea-abc123.txt" --seats shipwright,inspector >/dev/null 2>&1
+ck "an idea file starts a spec panel and the seats receive the text intact"  'grep -qF -- "$IDEA_TXT" "$T/prompts"'
+ck "  the file is removed once read"                                           '[ ! -e "$T/state/ideas/idea-abc123.txt" ]'
+printf 'x' > "$T/other.txt"
+out=$(QUARTERDECK_PROJECT=tp QUARTERDECK_WORKDIR="$T/work" bash "$T/duties/panel.sh" --panel spec --idea-file "$T/other.txt" 2>&1)
+ck "a file outside state/ideas is refused"                                    'grep -q "file the dashboard made" <<<"$out" && [ -e "$T/other.txt" ]'
+printf 'x' > "$T/state/ideas/idea-def456.txt"; ln -s "$T/other.txt" "$T/state/ideas/idea-aaa111.txt"
+out=$(QUARTERDECK_PROJECT=tp QUARTERDECK_WORKDIR="$T/work" bash "$T/duties/panel.sh" --panel spec --idea-file "$T/state/ideas/idea-aaa111.txt" 2>&1)
+ck "a link is refused"                                                        'grep -q "idea file is missing" <<<"$out" && [ -e "$T/other.txt" ]'
+rm -f "$T/state/ideas/"*
+: > "$T/prompts"
+QUARTERDECK_PROJECT=tp QUARTERDECK_WORKDIR="$T/work" bash "$T/duties/panel.sh" --panel spec --idea "let people split a bill" --seats shipwright,inspector >/dev/null 2>&1
+ck "the --idea argument still works"                                          'grep -q "let people split a bill" "$T/prompts"'
+
 # Round 8 (M1): a line break inside one model-written field must not start a heading and a Where line of their own in the document, which
 # bin/protect.py would read as a second item unlocking its path. Every field is made one line before rendering (qd_flat_json).
 for brk in '\n' ' ' '\u000b'; do

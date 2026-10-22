@@ -4214,6 +4214,9 @@ def attach_api(b):
         ready = {"project": prop["name"], "items": items, "ready": False, "preview": not applied,
                  "next": _ready.next_action(prop["name"], prop["entry"], items, {"tickets": []}, str(path)) if applied else {"kind": "attach", "text": "Add this project, then run the verify command once to prove it.", "command": ""}}
         ready["docs_line"] = _attach.docs_line(sv).replace("<name>", prop["name"])
+        regname = _attach.registered_as(path)                 # this folder is already a registered project: say so, with what it already has
+        cur = (_attach.load_registry(_attach.registry_path()).get(regname) or {}) if regname else {}
+        already = {"name": regname, **{k: str(cur.get(k) or "") for k in ("verify", "build", "lint", "repo")}} if regname else None
     except ValueError as e:
         live_close("attach", "failed")
         return 400, {"error": str(e)}
@@ -4221,7 +4224,7 @@ def attach_api(b):
         live_close("attach", "failed")
         return 500, {"error": str(e)[:200]}
     live_close("attach", "done")
-    return 200, {"profile": prof, "survey": sv, "ready": ready, "proposal": prop, "applied": bool(b.get("apply")), "agents_md": agents, "duty_options": [{"name": x["name"], "role": x["role"]} for x in duty_list() if x["name"] in _attach.known_duties()], "guardrail_options": _attach.GUARDRAILS, "pack_status": {x["id"]: x["status"] for x in _packs_mod.load()}}
+    return 200, {"profile": prof, "survey": sv, "ready": ready, "proposal": prop, "applied": bool(b.get("apply")), "registered": already, "agents_md": agents, "duty_options": [{"name": x["name"], "role": x["role"]} for x in duty_list() if x["name"] in _attach.known_duties()], "guardrail_options": _attach.GUARDRAILS, "pack_status": {x["id"]: x["status"] for x in _packs_mod.load()}}
 
 
 # ---- tickets and the GitHub repo, on the page --------------------------------------------------------------------------------------------

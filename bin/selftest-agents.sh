@@ -56,7 +56,7 @@ ck "the scaffold's own test passes" 'python3 -I "$QH/addons/test_scout.py" | gre
 ck "addon new never overwrites, and refuses a bad name" 'echo "# mine" > "$QH/addons/ext_scout.py"; ! qd addon new scout 2>/dev/null && [ "$(cat "$QH/addons/ext_scout.py")" = "# mine" ] && ! qd addon new "../x" 2>/dev/null && ! qd addon new Bad-Name 2>/dev/null'
 qd addon new tail >/dev/null
 ck "addon new names a guide that exists in the public tree, and the generated file does too" \
-  'g=$(sed -n "s/.*Guide: //p" "$T/new.out" | tail -1); [ -n "$g" ] && [ -f "$REAL/$g" ] && ! grep -q "docs/public" "$QH/addons/ext_tail.py"'
+  'g=$(sed -n "s/.*Guide: //p" "$T/new.out" | tail -1); [ -n "$g" ] && { [ -f "$REAL/$g" ] || [ -f "$REAL/docs/public/$g" ]; } && ! grep -q "docs/public" "$QH/addons/ext_tail.py"'
 # Relay: the sample in ADDONS.md, exactly as published (a private checkout keeps it in docs/public/, the published repo at the root)
 ADDOC="$REAL/docs/public/ADDONS.md"; [ -f "$ADDOC" ] || ADDOC="$REAL/ADDONS.md"; AGDOC="$REAL/docs/public/AGENTS.md"; [ -f "$AGDOC" ] || AGDOC="$REAL/AGENTS.md"
 python3 - "$ADDOC" "$QH/addons/ext_relay.py" <<'PY'

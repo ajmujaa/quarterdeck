@@ -237,7 +237,7 @@ sl-select small.sw-grp{display:block;padding:var(--s2) var(--s4);font:500 12px/1
 .mobile-bottom{display:none}
 .toast{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
 .toast.on{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);width:auto;height:auto;clip:auto;z-index:960;background:var(--raised);border:1px solid var(--line-2);border-radius:10px;padding:12px 17px;font:13px var(--font-ui);max-width:min(640px,92vw)}
-.sl-toast-stack{position:fixed!important;top:auto!important;bottom:24px;inset-inline:0!important;margin:0 auto;width:min(520px,calc(100vw - 32px));z-index:950;display:flex;flex-direction:column;gap:8px}
+.sl-toast-stack{position:fixed!important;top:16px!important;bottom:auto!important;inset-inline:0!important;margin:0 auto;width:min(520px,calc(100vw - 32px));z-index:950;display:flex;flex-direction:column;gap:8px}
 .sl-toast-stack sl-alert{width:100%}
 .sl-toast-stack sl-alert::part(base){box-shadow:var(--sl-shadow-large)}
 .sl-toast-stack sl-alert::part(close-button__base){min-width:40px;min-height:40px}
@@ -731,7 +731,8 @@ body.brain-mode .page{padding:0;max-width:none;margin:0;display:flex;flex-direct
 body.brain-mode #lost{margin:var(--s2) 20px 0}
 body.brain-mode #view{flex:1;min-height:0;display:flex;flex-direction:column}
 body.brain-mode .rh{flex:1;min-height:0;overflow:auto;margin:var(--s3) var(--s4)}
-.brain-bar{container:bbar/inline-size;contain:layout}
+.brain-bar{container:bbar/inline-size}
+body.brain-mode .brain-bar{position:relative;z-index:20}          /* the More menu opens over the map, not under it */
 .bb-row{display:flex;align-items:center;gap:var(--s3);flex-wrap:nowrap;min-width:0}
 .bb-grp{display:flex;align-items:center;gap:var(--s2);flex:none;min-width:0}
 .bb-grp+.bb-grp{padding-left:var(--s3);border-left:1px solid var(--line-2)}
@@ -1025,3 +1026,7 @@ body{min-height:100dvh}
 .at-step h3:focus-visible{outline:2px solid var(--accent,currentColor);outline-offset:4px}
 .at-duty{padding:var(--s1) 0}
 .at-more{margin:var(--s3) 0}
+
+sl-button.wrap::part(base){white-space:normal;height:auto;line-height:1.3;padding-block:6px;text-align:left}
+sl-button.wrap::part(label){white-space:normal}
+.mlink.link,a.link,button.link{display:inline-flex;align-items:center;min-height:24px}      /* WCAG 2.2 target size */

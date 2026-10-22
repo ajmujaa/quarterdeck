@@ -96,7 +96,7 @@ WT="$QUARTERDECK_HOME/workspace/wt-${PROJECT}-${KEY}"
 BASE_REF="origin/$BASE"
 
 cleanup_wt() { safe_git -C "$SOURCE_REPO_DIR" worktree remove --force "$WT" >/dev/null 2>&1 || true; }
-trap 'cleanup_wt' EXIT
+trap 'cleanup_wt; rm -rf "${QUARTERDECK_LOCK:-}"' EXIT      # the lock is released here too: this trap replaces acquire_lock's
 
 if [ -n "$TICKET" ]; then
   working_on "ticket #$TICKET: $title"
@@ -246,7 +246,7 @@ rc=$?
 # The turn cap (QUARTERDECK_MAX_TURNS_SHIPWRIGHT): nothing is checked or committed; what the model had done stays in the worktree for a person.
 if [ $rc = 4 ]; then
   say "quarterdeck: NEEDS_HUMAN: ran out of turns — nothing committed; partial work kept in $WT"
-  trap - EXIT
+  trap 'rm -rf "${QUARTERDECK_LOCK:-}"' EXIT
   notify "quarterdeck/$PROJECT $REF" "ran out of turns"
   record_run "$PROJECT" shipwright NEEDS_HUMAN "$REF ran out of turns (cap ${QUARTERDECK_MAX_TURNS_SHIPWRIGHT:-${QUARTERDECK_MAX_TURNS:-}}); partial work kept in $WT, nothing committed"
   exit 0
@@ -320,7 +320,7 @@ if [ "$(jq length <<<"$REGRESSIONS")" != 0 ]; then
   jq -r '.[0].tail' <<<"$REGRESSIONS" | tail -12 | sed 's/^/      /' >&2
   say ""
   say "  worktree kept for inspection: $WT"
-  trap - EXIT
+  trap 'rm -rf "${QUARTERDECK_LOCK:-}"' EXIT
   record_run "$PROJECT" shipwright REFUSED "$REF: $(jq -r '[.[].name] | join(", ")' <<<"$REGRESSIONS") got worse"
   die "refused: nothing is committed when a local check regresses"
 fi
@@ -352,7 +352,7 @@ if [ "$APPLY" != 1 ]; then
   if [ -n "$TICKET" ]; then say "  (report only: re-run with --apply to commit it on the local branch $BRANCH)"
   else say "  (report only: re-run with --apply to push and open a PR)"; fi
   say "  worktree kept for inspection: $WT"
-  trap - EXIT   # leave it so the diff can be read
+  trap 'rm -rf "${QUARTERDECK_LOCK:-}"' EXIT   # leave it so the diff can be read
   record_run "$PROJECT" shipwright "DRY-RUN" "$REF $summary"
   exit 0
 fi

@@ -69,7 +69,7 @@ cleanup() {
   safe_git -C "$SOURCE_REPO_DIR" worktree remove --force "$WTH" >/dev/null 2>&1 || true
   rm -rf "$TMP"
 }
-trap cleanup EXIT
+trap 'cleanup; rm -rf "${QUARTERDECK_LOCK:-}"' EXIT
 blocked() { say "quarterdeck: BLOCKED — $1"; record_run "$PROJECT" assayer BLOCKED "#$ISSUE — $1"; exit 0; }
 [ -n "$TEST_FILE_CMD" ] && [[ "$TEST_FILE_CMD" == *"{file}"* ]] || blocked "no \"test_file\" in the registry for $PROJECT (how to run one test file, with {file} in it): without it the harness cannot tell whether a test fails first"
 

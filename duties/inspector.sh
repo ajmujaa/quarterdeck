@@ -91,7 +91,7 @@ say "quarterdeck: inspector on $REPO#$PR — $title"
 
 WT="$QUARTERDECK_HOME/workspace/wt-inspect-${PROJECT}-${PR}"
 cleanup_wt() { safe_git -C "$SOURCE_REPO_DIR" worktree remove --force "$WT" >/dev/null 2>&1 || true; }
-trap 'cleanup_wt' EXIT
+trap 'cleanup_wt; rm -rf "${QUARTERDECK_LOCK:-}"' EXIT
 
 # Build the pull request's own head, not the branch name — a fork's branch does
 # not exist locally, and refs/pull/N/head always does.

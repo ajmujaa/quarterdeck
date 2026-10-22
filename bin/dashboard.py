@@ -264,6 +264,20 @@ def project_roots():
     return out
 
 
+def _holds_repos(folder):
+    """True when two or more folders directly inside `folder` are git repositories: a place projects live, not a project."""
+    n = 0
+    try:
+        for c in folder.iterdir():
+            if not c.name.startswith(".") and c.is_dir() and (c / ".git").exists():
+                n += 1
+                if n >= 2:
+                    return True
+    except OSError:
+        pass
+    return False
+
+
 def check_project_folder(raw, what="a project", whole=True):
     """The real folder `raw` names, or ValueError saying where projects may live. It must sit under an allowed root and no part of
     the path below that root may be a dot folder (.ssh, .aws, .config ...). Symlinks are followed first, so a link cannot lead out.
@@ -282,6 +296,8 @@ def check_project_folder(raw, what="a project", whole=True):
         if any(part.startswith(".") for part in rel.parts):
             raise ValueError(f"{raw} is inside a hidden folder, which {what} may not be")
         if whole and (real == r or real == Path.home().resolve()):
+            raise ValueError(f"{raw} is a whole folder of projects, not one project. Choose the project's own folder inside it")
+        if whole and real.is_dir() and not (real / ".git").exists() and _holds_repos(real):
             raise ValueError(f"{raw} is a whole folder of projects, not one project. Choose the project's own folder inside it")
         if any(real == x or x in real.parents or (whole and real in x.parents) for x in (ROOT.resolve(), HOME.resolve())):
             raise ValueError(f"{raw} is, holds or sits inside Quarterdeck's own program or data folder, which {what} may not be")
@@ -2762,8 +2778,14 @@ def mission_act(action, body, source):
             idea += f"\n\nConstraints: {m['constraints']}"
         if m.get("success_criteria"):
             idea += f"\n\nSuccess criteria: {m['success_criteria']}"
-        what = spawn_run(m["project"], "panel", ["--panel", "spec", "--idea", idea],
-                         apply_=True, source="mission", mission=m["id"])
+        # The idea is free text (brackets, question marks, new lines), so it goes in a file the panel reads with --from, not in an argument the run check would refuse.
+        idea_file = STATE / "missions" / f"{m['id']}-idea.md"
+        idea_file.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(idea_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            fh.write(idea + "\n")
+        what = spawn_run(m["project"], "panel", ["--panel", "spec"], apply_=True, source="mission", mission=m["id"],
+                         trusted=["--from", str(idea_file)])
         m["status"] = "started"
         m["updated_at"] = iso(now_utc())
         m["events"].append(record_event("started", f"started a spec panel: {what}", source))
@@ -2869,7 +2891,7 @@ def validate_run(project, duty, args):
     return [str(ROOT / "bin" / "qtdeck"), "run", project, duty, *clean]
 
 
-def spawn_run(project, duty, args, apply_=False, source="dashboard", mission=None):
+def spawn_run(project, duty, args, apply_=False, source="dashboard", mission=None, trusted=()):
     no_demo("start a run")
     argv = validate_run(project, duty, args)
     if source in ("dashboard", "mission"):           # started by hand: a line of time, project and a short label in Quarterdeck's own state/ (for My rhythm), nothing else
@@ -2879,6 +2901,7 @@ def spawn_run(project, duty, args, apply_=False, source="dashboard", mission=Non
             _append_private(HAND_RUNS, json.dumps({"at": iso(now_utc()), "project": project, "label": _tk.clean(label)}) + "\n")
         except Exception:
             pass
+    argv += list(trusted)            # added by this program after the check, never taken from a request
     if apply_:
         argv.append("--apply")
     # No pre-check here: several of these duties now lock per target (an

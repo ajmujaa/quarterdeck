@@ -66,7 +66,7 @@ slug=$(tr '[:upper:]' '[:lower:]' <<<"$title" | sed -E 's/[^a-z0-9]+/-/g; s/^-+|
 BRANCH="test/${ISSUE}-${slug}"
 WT="$QUARTERDECK_HOME/workspace/wt-trials-${PROJECT}-${ISSUE}"
 cleanup_wt() { safe_git -C "$SOURCE_REPO_DIR" worktree remove --force "$WT" >/dev/null 2>&1 || true; }
-trap 'cleanup_wt' EXIT
+trap 'cleanup_wt; rm -rf "${QUARTERDECK_LOCK:-}"' EXIT
 
 working_on "issue #$ISSUE — a test for: $title"
 say "quarterdeck: trials on $REPO#$ISSUE — $title"
@@ -184,7 +184,7 @@ if [ "$new_rc" = 0 ]; then
   say ""
   say "  the new test passes on unfixed code, so it does not reproduce anything."
   say "  worktree kept for inspection: $WT"
-  trap - EXIT
+  trap 'rm -rf "${QUARTERDECK_LOCK:-}"' EXIT
   record_run "$PROJECT" trials "NOT-RED" "#$ISSUE — the test passed before any fix"
   exit 0
 fi
@@ -198,7 +198,7 @@ if [ "$APPLY" = 0 ]; then
   say ""
   say "quarterdeck: report only — pass --apply to push the branch and open the pull request"
   say "  worktree kept for inspection: $WT"
-  trap - EXIT
+  trap 'rm -rf "${QUARTERDECK_LOCK:-}"' EXIT
   record_run "$PROJECT" trials "DRY-RUN" "#$ISSUE — reproduced: $detail"
   exit 0
 fi

@@ -58,7 +58,7 @@ acquire_lock "logkeeper-$PROJECT-$PANEL"
 export QUARTERDECK_RUN_ID="$(tr '/' '_' <<<"$REPO")-logkeeper-$PANEL"
 WT="$QUARTERDECK_HOME/workspace/wt-logkeeper-${PROJECT}-${PANEL}"
 cleanup() { [ "${BASH_SUBSHELL:-0}" = 0 ] || return 0; safe_git -C "$SOURCE_REPO_DIR" worktree remove --force "$WT" >/dev/null 2>&1 || true; }
-trap cleanup EXIT
+trap 'cleanup; rm -rf "${QUARTERDECK_LOCK:-}"' EXIT
 
 guard 120 "${SAFE_GIT[@]}" -C "$SOURCE_REPO_DIR" fetch -q origin "$BASE" 2>>"$LOG_FILE" || log "fetch failed; using local $BASE"
 # Already recorded? A record names the panel it came from, so asking twice does not write twice.

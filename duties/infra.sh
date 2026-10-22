@@ -79,7 +79,7 @@ cleanup() {
   safe_git -C "$SOURCE_REPO_DIR" worktree remove --force "$WT" >/dev/null 2>&1 || true
   rm -rf "$TMP"
 }
-trap cleanup EXIT
+trap 'cleanup; rm -rf "${QUARTERDECK_LOCK:-}"' EXIT
 blocked() { say "quarterdeck: BLOCKED — $1"; record_run "$PROJECT" infra BLOCKED "$KEY — $1"; exit 0; }
 
 # ---- what is being read -----------------------------------------------------------------------------------------------

@@ -1486,8 +1486,8 @@ check("approving the current revision records it",
 # mission past "draft" for good) does not disturb m's own remaining checks.
 _saved_spawn_run = d.spawn_run
 _spawn_calls = []
-d.spawn_run = lambda project, duty, args, apply_=False, source="dashboard", mission=None: (
-    _spawn_calls.append((project, duty, args, apply_, source, mission)) or "ok")
+d.spawn_run = lambda project, duty, args, apply_=False, source="dashboard", mission=None, trusted=(): (
+    _spawn_calls.append((project, duty, args, apply_, source, mission, list(trusted))) or "ok")
 m2 = d.mission_act("create", {"project": "my-web-app", "objective": "Ship the export button",
                               "constraints": "no new dependencies"}, "owner")
 check("starting a mission with no plan at all is refused", mact_refused("start_panel", {"id": m2["id"]}, "test") and not _spawn_calls)
@@ -1496,11 +1496,11 @@ check("starting before the plan is approved is refused",
       mact_refused("start_panel", {"id": m2["id"]}, "test") and not _spawn_calls)
 d.mission_act("approve_plan", {"id": m2["id"], "revision": 1}, "owner")
 d.mission_act("start_panel", {"id": m2["id"]}, "owner")
-check("starting spawns a spec panel seeded with the objective and constraints",
+_idea9 = Path(_spawn_calls[0][6][1]).read_text() if _spawn_calls and len(_spawn_calls[0][6]) == 2 else ""
+check("starting spawns a spec panel seeded, from a file, with the objective and constraints (free text never travels as an argument)",
       _spawn_calls and _spawn_calls[0][:2] == ("my-web-app", "panel")
-      and _spawn_calls[0][2][:3] == ["--panel", "spec", "--idea"]
-      and "Ship the export button" in _spawn_calls[0][2][3]
-      and "no new dependencies" in _spawn_calls[0][2][3],
+      and _spawn_calls[0][2] == ["--panel", "spec"] and _spawn_calls[0][6][0] == "--from"
+      and "Ship the export button" in _idea9 and "no new dependencies" in _idea9 and oct(Path(_spawn_calls[0][6][1]).stat().st_mode & 0o777) == "0o600",
       _spawn_calls)
 check("starting is a real write, not a dry run", _spawn_calls[0][3] is True)
 check("the run is tagged with this exact mission, so the ledger can find it back",
@@ -4408,6 +4408,22 @@ check("Add a project: the Projects page has a visible Add a project button, and 
       'id="add-project"' in _ix and '"registered": already' in (ROOT / "bin" / "dashboard.py").read_text() and 'id="at-registered"' in _ix and 'id="at-open-registered"' in _ix)
 check("project page: a proven project still offers Prove it again, the needs card counts failing-check pull requests and names add-on items, and the Brain project takes its pull request's state",
       'id="rd-prove-again"' in _ix and "act(\"rdProve\")" in _ix and "failingPrs(sel)" in _ix and "addonNote" in _ix and 'par.state = "attn"' in _ix)
+_dpy = (ROOT / "bin" / "dashboard.py").read_text()
+check("round 7 page fixes: one identical request at a time, another tab's 403 reads as unpaired, notes stop at 1000, Edit waits for the field, a cap may have cents, All missions goes to the list, the More menu opens over the map, Turn off exists",
+      "POSTING.has(key)" in _ix and 'r.status === 403 && j.error === "forbidden"' in _ix and _ix.count('maxlength="1000"') >= 2 and "updateComplete" in _ix
+      and 'step="any"' in _ix and 'go("missions"); }' in _ix and "async function crewDisable(" in _ix and "crewDisable," in _ix
+      and "z-index:20" in (ROOT / "dashboard" / "assets" / "ui.css").read_text())
+check("round 7: a spec panel gets its idea from a file, not an argument that the run check refuses, and a folder that holds several repositories is not one project",
+      '"--from", str(idea_file)' in _dpy and "trusted=" in _dpy and d._holds_repos.__doc__)
+import tempfile as _tf9
+with _tf9.TemporaryDirectory() as _h9:
+    for _n9 in ("a", "b"):
+        (Path(_h9) / _n9 / ".git").mkdir(parents=True)
+    _one9 = Path(_h9) / "a"
+    check("a folder with two repositories inside is a place projects live; a single repository is not", d._holds_repos(Path(_h9)) and not d._holds_repos(_one9))
+_missing9 = [f.name for f in sorted((ROOT / "duties").glob("*.sh"))
+             if "acquire_lock" in f.read_text() and f.name != "marshal.sh" and _re0.search(r"^trap ", f.read_text(), _re0.M) and "QUARTERDECK_LOCK" not in f.read_text()]
+check("every duty that replaces the exit trap still releases its lock, so a finished run never leaves a lock behind", not _missing9, _missing9)
 check("overview: spend is summed from the ledger rows that name the project, today and over seven days (a row from nine days ago and a row with no project do not count)",
       _po["alpha"]["spend_today"] == 1.25 and _po["alpha"]["spend_week"] == 3.25 and _po["beta"]["spend_week"] == 0.5 and _po["gamma"]["spend_week"] == 0, (_po["alpha"], _po["beta"]))
 check("overview: mission counts use the page's states (a pull request waiting, a cycle awaiting review and a running fix are open; a superseded panel is not counted)",

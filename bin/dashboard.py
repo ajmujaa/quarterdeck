@@ -1507,7 +1507,7 @@ def _mission_state(kind, r):
     return "awaiting" if st in ("proposed", "approved") else "done"          # plan
 
 
-def project_overview(projects, agents, runs, inbox, fixes, cycles, panels, briefs, plans, spend_rows, since_today, since_week, stack_of=None, dismissed=None, now=None):
+def project_overview(projects, agents, runs, inbox, fixes, cycles, panels, briefs, plans, spend_rows, since_today, since_week, stack_of=None, dismissed=None, now=None, proof_of=None):
     """One small summary per registered project, for the Projects page. Pure: every figure is counted from the lists the state already holds,
     never estimated. needs/top come from the unacknowledged inbox items of that project (the list Needs you shows, add-on items have no project
     and are counted on the page); last run from the runs ledger; spend from the spend ledger rows that name the project; the mission counts
@@ -1521,6 +1521,9 @@ def project_overview(projects, agents, runs, inbox, fixes, cycles, panels, brief
         top = mine[0] if mine else None
         ran = [r for r in runs if r.get("project") == name and r.get("at")]
         last = max(ran, key=lambda r: r["at"]) if ran else None
+        pr = proof_of(name) if proof_of else None                           # Prove (the verify command, run once in the sandbox) counts as a run: it is not in the ledger
+        if isinstance(pr, dict) and pr.get("at") and (not last or pr["at"] > last["at"]):
+            last = {"at": pr["at"], "duty": "verify command (Prove)", "verdict": "PROVEN" if pr.get("exit") == 0 else "FAILED"}
         sp = [r for r in spend_rows if r.get("project") == name]
         rows = ([(f"fix:{r.get('panel')}#{r.get('item')}", _mission_state("fix", r), r.get("finished") or r.get("started")) for r in (fixes or {}).values() if r.get("project") == name]
                 + [(f"cycle:{r.get('id')}", _mission_state("cycle", r), r.get("finished") or r.get("started")) for r in cycles if r.get("project") == name]
@@ -3943,19 +3946,20 @@ def connection_test(sid, label, timeout=180):
         return {"ok": False, "message": "could not start the refresh"}
     line = (r.stdout.strip().splitlines() or [""])[-1]
     why = line.split("failed:", 1)[1].strip() if "failed:" in line else ""
-    if "google_oauth.py" in why:                                 # the page has its own sign-in button: do not send anyone to a terminal
-        why = "Not signed in with Google yet. Press Sign in with Google on this card."
+    if "_oauth.py" in why:                                       # the page has its own sign-in button: do not send anyone to a terminal
+        why = "Not signed in with Google yet. Press Sign in with Google on this card." if sid in SIGNIN_TOOLS and sid != "meta" else "Not connected to Facebook yet. Press Connect with Facebook on this card."
     return {"ok": r.returncode == 0, "message": "Refreshed." if r.returncode == 0 else (why[:200] or "the refresh failed")}
 
 
 # ---- Google sign-in from the Connections page -------------------------------------------------------------------------------
-# The sign-in runs in its own process (bin/integrations/google_oauth.py --no-browser), like a Test does, so the client secret and the token never enter
+# The sign-in runs in its own process (bin/integrations/google_oauth.py or meta_oauth.py, --no-browser), like a Test does, so the client secret and the token never enter
 # this one. It prints the Google address on its first line; the page shows it as a button. The process listens once on a random loopback port, checks
 # `state`, saves the refresh token (0600) and exits. Nothing about the address, code or token is kept or logged here.
 SIGNIN_WAIT = 240                      # seconds google_oauth.authorize waits for you; the process is killed a little after
 _SIGNIN = {}                           # (service, label) -> {"proc", "state", "url", "message", "at"}
 _SIGNIN_LOCK = threading.Lock()
-SIGNIN_URL = "https://accounts.google.com/o/oauth2/v2/auth?"
+SIGNIN_TOOLS = {"gmail": "google_oauth.py", "meta": "meta_oauth.py"}        # service -> the script that signs in
+SIGNIN_URLS = ("https://accounts.google.com/o/oauth2/v2/auth?", "https://www.facebook.com/v21.0/dialog/oauth?")
 
 
 def _signin_reader(key, proc):
@@ -3964,7 +3968,7 @@ def _signin_reader(key, proc):
     try:
         for line in proc.stdout:
             line = line.strip()
-            if line.startswith(SIGNIN_URL) and st["state"] == "starting":
+            if line.startswith(SIGNIN_URLS) and st["state"] == "starting":
                 with _SIGNIN_LOCK:
                     st["url"], st["state"] = line, "waiting"
         proc.wait(timeout=SIGNIN_WAIT + 30)
@@ -3994,15 +3998,14 @@ def _signin_reader(key, proc):
 
 def signin_start(sid, label, argv=None):
     """Start (or report) the Google sign-in of one account. `argv` is for tests only."""
-    import integrations.google_oauth as _go
-    if sid not in _go.SCOPES:
+    if sid not in SIGNIN_TOOLS:
         return 400, {"error": "this service has no sign-in step"}
     key = (sid, label)
     with _SIGNIN_LOCK:
         cur = _SIGNIN.get(key)
         if cur and cur["state"] in ("starting", "waiting"):
             return 200, signin_view(key)
-        cmd = argv or [sys.executable, "-u", str(ROOT / "bin" / "integrations" / "google_oauth.py"), sid, "--account", label, "--no-browser"]
+        cmd = argv or [sys.executable, "-u", str(ROOT / "bin" / "integrations" / SIGNIN_TOOLS[sid]), "meta" if sid == "meta" else sid, "--account", label, "--no-browser"]
         env = {k: v for k, v in os.environ.items() if k in ("PATH", "HOME", "LANG", "QUARTERDECK_HOME", "QUARTERDECK_DIR", "QUARTERDECK_SECRETS_DIR")}
         try:
             proc = subprocess.Popen(cmd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -4272,7 +4275,7 @@ def _ticket_error(project, kind):
         return ""
     detail = " ".join(str(row.get("detail") or "").split()) if row else ""
     if row and row.get("verdict") == "NOTHING_TO_DRAFT":
-        return "Everything in the draft is already on GitHub." if "tracker" in detail else "The planner found nothing to turn into a ticket from that request. Say more about what you want built."
+        return "Everything in the draft is already on GitHub." if "tracker" in detail else "The planner drafted no ticket. It may think this is already built, or too vague. Try again, or say what is missing and what done looks like."
     if row and row.get("verdict") == "REFUSED" and detail.startswith("ticket request"):
         return "Your request looks like it holds a password or a key, so nothing was sent. Take it out of the request and draft again."
     if row and row.get("verdict") == "REFUSED":
@@ -5822,7 +5825,8 @@ def _build_state():
                                for d in doc_list(list(projects), filed)], []),
         "live": _safe(lambda: live_view(agents, projects), {"items": [], "worktrees": [], "updated_at": None, "hook_installed": False, "install_command": "", "sources": []}),
         "overview": _safe(lambda: project_overview(projects, agents, runs, inbox, fixes, cycles, panels, briefs, plans, spend_rows(),
-                                                   local_midnight_utc(), local_midnight_utc(6), _stack_sentence, _safe(load_dismissed, {})), []),
+                                                   local_midnight_utc(), local_midnight_utc(6), _stack_sentence, _safe(load_dismissed, {}),
+                                                   proof_of=lambda n: read_json(STATE / "projects" / n / "verify.json", None)), []),
         "projects": [
             {"name": k, "repo": v.get("repo", ""), "summary": v.get("summary", ""),
              "duties": v.get("duties", []), "guardrails": v.get("guardrails", []),

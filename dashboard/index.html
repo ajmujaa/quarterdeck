@@ -1269,15 +1269,19 @@ function trajectoryCard(f){
 }
 // Needs you, as a short list: what is waiting for the owner (the same unacknowledged items the Needs you page lists, plus pull requests waiting for review), each row
 // naming its project or its add-on. `items` and `waiting` are already scoped by the page (all projects on the overview, one project on a project's page).
-function needsCard(items, waiting, limit = 5){
+function needsCard(items, waiting, limit = 5, more = {}){
   const next = S.schedules.filter(x => !x.paused && x.seconds_until != null && mine(x)).sort((a, b) => a.seconds_until - b.seconds_until)[0];
   const rows = items.slice(0, limit).map(x => callout(x.blocker === "config" ? "blocked" : "awaiting", mlink(attnMissionId(x), x.source, "title") + (x.addon ? " " + addonPill(x) : ""), esc(x.text),
       {meta: x.at ? (x.stale ? "Snapshot read " : "Run ") + ago(x.at) : "Current status", actions: btn(x.blocker === "config" ? "Inspect blocker" : "Inspect", {size: "small", variant: "primary", click: isPlace(x.view) ? act("selectPlace", x.view) : act("dockGo", "ledger")})}))
     .concat(waiting.slice(0, Math.max(0, limit - items.length)).map(r => callout("awaiting", mlink(fixMissionId(r), r.title, "title"), `${esc(r.project)} · pull request #${esc((r.pr || "").split("/").pop())} is open and waiting for your review.`,
       {actions: btn("Open the pull request", {size: "small", variant: "primary", href: r.pr})})));
-  const n = items.length + waiting.length;
+  const failing = (more.prs || []).slice(0, Math.max(0, limit - rows.length)).map(r => callout("blocked", `#${esc(r.number)} ${esc(r.title)}`, `${esc(r.project)} · ${esc((r.checks || {}).fail)} of its checks failed.`,
+      {actions: btn("Open the pull request", {size: "small", variant: "primary", href: r.url})}));
+  rows.push(...failing);
+  const n = items.length + waiting.length + (more.prs || []).length;
+  const addonNote = more.addons ? `<p class="hint">${more.addons} more ${more.addons === 1 ? "comes" : "come"} from an add-on, not from this project. They are in All of Needs you.</p>` : "";
   return card(null, (rows.join("") || `<p class="hint">Nothing needs you right now.${next ? ` Next scheduled: ${esc(next.project)} ${esc(next.duty)} ${calmOn() ? esc(untilAt(next)) : "in " + esc(countdown(next.seconds_until))}.` : ""}</p>`)
-    + `<p class="hint" style="margin-top:12px"><button class="mlink link" ${act("dockGo", "inbox")}>All of Needs you</button></p>`,
+    + addonNote + `<p class="hint" style="margin-top:12px"><button class="mlink link" ${act("dockGo", "inbox")}>All of Needs you</button></p>`,
     {kicker: "Needs you", kcls: n ? "await" : "", count: n, cls: "needs", label: "Needs you"});
 }
 // The harbor map: an optional Map | List toggle at the top of the Projects overview. The project cards are the list; the map is the same projects as berths, in an order. A berth opens the project.
@@ -1541,7 +1545,8 @@ const PJ_STATE = {blocked: ["Blocked", "bad", "blocked"], "needs you": ["Needs y
 const pjOf = name => ((S && S.overview) || []).find(o => o.name === name) || null;
 function projectCard(o, opts = {}){
   const st = PJ_STATE[o.state] || PJ_STATE.idle, short = (t, n) => t.length > n ? t.slice(0, n - 1).trimEnd() + "…" : t;
-  const needs = o.needs ? `<b>${o.needs}</b> ${plural(o.needs, "thing")}${o.top ? ": " + esc(short(String(o.top.text || ""), 110)) : ""}` : "Nothing needs you.";
+  const failing = (opts.prs || []).length, failNote = failing ? `<b>${failing}</b> pull request${failing === 1 ? "" : "s"} with failing checks` : "";
+  const needs = o.needs ? `<b>${o.needs}</b> ${plural(o.needs, "thing")}${o.top ? ": " + esc(short(String(o.top.text || ""), 110)) : ""}${failNote ? "; " + failNote : ""}` : failNote || "Nothing needs you.";
   const last = o.last_run ? `${esc(o.last_run.duty)}, ${pill(verdictClass(o.last_run.verdict), o.last_run.verdict)} ${esc(ago(o.last_run.at))}` : "No run recorded yet.";
   const dl = `<dl class="pj-facts"><div><dt>Needs you</dt><dd>${needs}</dd></div><div><dt>Last run</dt><dd>${last}</dd></div>
       <div><dt>Spend</dt><dd>${usd(o.spend_today)} today, ${usd(o.spend_week)} in 7 days</dd></div>
@@ -1669,9 +1674,14 @@ function guardrailsCard(project){
     <sl-details summary="What the crew receives" id="gr-eff"><pre class="gr-eff" tabindex="0">${esc(d.effective)}</pre></sl-details>`;
   return card(null, body, {kicker: "Guardrails", count: d.locked.length + d.custom.length, label: "Guardrails", cls: "guardrails"});
 }
+// Pull requests of this project with a failing check: what the Brain marks as needing you. They load once, when the project page opens (the Pull requests tab shares the list).
+function failingPrs(project){
+  if(prsFor !== project){ if(project) loadPrs(); return []; }
+  return ((prs && prs.prs) || []).filter(r => (r.checks || {}).fail > 0);
+}
 function projectPage(){
   const o = pjOf(sel), f = homeFacts();
-  return `<div class="stack pj-page">${o ? projectCard(o, {open: false}) : ""}${liveWorkCard(sel)}${needsCard(f.att.filter(x => !x.addon), f.waiting, 3)}${readyCard(sel)}${readyLink(sel)}${repoOptionsCard(sel)}${ticketsCard(sel)}
+  return `<div class="stack pj-page">${o ? projectCard(o, {open: false, prs: failingPrs(sel)}) : ""}${liveWorkCard(sel)}${needsCard(f.att.filter(x => !x.addon), f.waiting, 3, {prs: failingPrs(sel), addons: f.att.filter(x => x.addon).length})}${readyCard(sel)}${readyLink(sel)}${repoOptionsCard(sel)}${ticketsCard(sel)}
     <div id="guardrails-slot">${guardrailsCard(sel)}</div></div>`;
 }
 function viewProjects(){
@@ -2059,7 +2069,8 @@ function readyCard(project){
     + (proving && live ? live.liveBoxHtml("prove", {title: "Running the verify command", stopHtml: stopBtn, logLabel: "Output of the verify command so far"}) : "") : "";
   const err = RD.error && !busy ? callout("blocked", "That did not finish", esc(RD.error)) : "";
   const how = RD.how && !busy ? `<div class="note-line">Run this in a terminal: <code class="tk-sel">${esc(n.command)}</code></div>` : "";
-  const go = btn(esc(rdNextLabel(n)), {variant: "primary", click: act("rdNext"), disabled: busy, attrs: 'id="rd-next"'});
+  const go = btn(esc(rdNextLabel(n)), {variant: "primary", click: act("rdNext"), disabled: busy, attrs: 'id="rd-next"'})
+    + (d.ready ? btn("Prove it again", {size: "small", click: act("rdProve"), disabled: busy, attrs: 'id="rd-prove-again" aria-label="Run the verify command once more in the sandbox"'}) : "");
   return card("Is it ready?", `${head}${readyItemsHtml(d.items, d)}${run}${err}${how}<div class="btns rd-go">${go}</div><p class="sub" id="rd-next-line">Next: ${esc(n.text)}</p>${n.kind === "hook" ? `<div class="fr-fix"><code class="fr-cmd" tabindex="0">${esc(n.command)}</code></div>` : ""}`,
     {kicker: "Ready? · " + project, label: "Is it ready?", cls: "rd-card"});
 }
@@ -2431,7 +2442,7 @@ function connCreds(c, a){
 function connFacts(c, a){
   const last = a.last_at ? `Last refreshed ${esc(ago(a.last_at))}.` : c.local ? "" : "Not refreshed yet.";
   return `<p class="sub">${last}${c.minutes && !c.local ? ` Checks every ${c.minutes} minutes.` : ""}</p>
-      ${a.error ? `<sl-alert variant="danger" open style="margin-top:12px"><sl-icon slot="icon" name="exclamation-octagon"></sl-icon>${esc(a.signin && /google_oauth\.py/.test(a.error) ? "Not signed in with Google yet." : a.error)}</sl-alert>` : ""}
+      ${a.error ? `<sl-alert variant="danger" open style="margin-top:12px"><sl-icon slot="icon" name="exclamation-octagon"></sl-icon>${esc(a.signin && /_oauth\.py/.test(a.error) ? `Not ${a.signin.kind === "facebook" ? "connected to Facebook" : "signed in with Google"} yet.` : a.error)}</sl-alert>` : ""}
       ${a.state === "needs set-up" ? `<p class="sub">Still needs: ${esc(a.missing.join(", "))}.</p>` : ""}`;
 }
 const connCls = a => a.state === "ok" ? "good" : a.state === "failing" ? "bad" : a.state === "needs set-up" ? "warn" : "";
@@ -2442,14 +2453,15 @@ const connSignPoll = {};
 function connSigninBlock(c, a){
   if(!a.signin) return "";
   const lab = connLab(a), k = `${c.id}|${lab}`, s = connSign[k] || {state: "idle"}, who = esc(connWho(c, a));
-  if(s.state === "starting") return `<div class="conn-signin"><p class="sub">Starting the Google sign-in...</p></div>`;
-  if(s.state === "waiting") return `<div class="conn-signin"><p class="sub" role="status">Waiting for you in the browser. ${esc(s.seconds_left)} seconds left. Google asks for read-only access to your mail, nothing else. If Google says redirect_uri_mismatch, the client you made in Google Cloud is not of type Desktop app: create a new one of that type and save its two values here.</p>
-    <div class="btns">${btn("Continue with Google", {variant: "primary", href: s.url, attrs: `aria-label="Continue with Google for ${who}"`})}${btn("Cancel", {size: "small", click: act("connSignCancel", c.id, lab)})}</div></div>`;
+  const fb = a.signin.kind === "facebook", brand = fb ? "Facebook" : "Google", verb = fb ? "Connect with Facebook" : "Sign in with Google";
+  if(s.state === "starting") return `<div class="conn-signin"><p class="sub">Starting the ${brand} sign-in...</p></div>`;
+  if(s.state === "waiting") return `<div class="conn-signin"><p class="sub" role="status">Waiting for you in the browser. ${esc(s.seconds_left)} seconds left. ${fb ? "Facebook asks which Page to share and for read-only access to it. If it says the redirect address is not allowed, add http://localhost:53172/ under Valid OAuth Redirect URIs in your Meta app." : "Google asks for read-only access to your mail, nothing else. If Google says redirect_uri_mismatch, the client you made in Google Cloud is not of type Desktop app: create a new one of that type and save its two values here."}</p>
+    <div class="btns">${btn(`Continue with ${brand}`, {variant: "primary", href: s.url, attrs: `aria-label="Continue with ${brand} for ${who}"`})}${btn("Cancel", {size: "small", click: act("connSignCancel", c.id, lab)})}</div></div>`;
   if(s.state === "failed" || s.state === "cancelled") return `<div class="conn-signin"><sl-alert variant="${s.state === "failed" ? "danger" : "neutral"}" open><sl-icon slot="icon" name="exclamation-octagon"></sl-icon>${esc(s.message)}</sl-alert>
-    <div class="btns">${btn("Try again", {variant: "primary", click: act("connSignin", c.id, lab), attrs: `aria-label="Try the Google sign-in again for ${who}"`})}</div></div>`;
-  if(a.signin.signed_in) return `<div class="conn-signin"><p class="sub">Signed in with Google.</p><div class="btns">${btn("Sign in again", {size: "small", click: act("connSignin", c.id, lab), attrs: `aria-label="Sign in again for ${who}"`})}</div></div>`;
-  if(a.missing.length) return `<div class="conn-signin"><p class="sub">Save the Google values above. Quarterdeck then opens the Google sign-in for you.</p></div>`;
-  return `<div class="conn-signin"><p class="sub">The values are saved. One step left: sign in with Google.</p><div class="btns">${btn("Sign in with Google", {variant: "primary", click: act("connSignin", c.id, lab), attrs: `aria-label="Sign in with Google for ${who}"`})}</div></div>`;
+    <div class="btns">${btn("Try again", {variant: "primary", click: act("connSignin", c.id, lab), attrs: `aria-label="Try the ${brand} sign-in again for ${who}"`})}</div></div>`;
+  if(a.signin.signed_in) return `<div class="conn-signin"><p class="sub">${fb ? "Connected to Facebook." : "Signed in with Google."}</p><div class="btns">${btn("Sign in again", {size: "small", click: act("connSignin", c.id, lab), attrs: `aria-label="Sign in again for ${who}"`})}</div></div>`;
+  if(a.missing.length) return `<div class="conn-signin"><p class="sub">Save the ${fb ? "App ID and App secret" : "Google values"} above. Quarterdeck then opens the ${brand} sign-in for you.</p></div>`;
+  return `<div class="conn-signin"><p class="sub">The values are saved. One step left: ${fb ? "connect with Facebook" : "sign in with Google"}.</p><div class="btns">${btn(verb, {variant: "primary", click: act("connSignin", c.id, lab), attrs: `aria-label="${verb} for ${who}"`})}</div></div>`;
 }
 async function connSignin(id, lab){
   const k = `${id}|${lab || ""}`;
@@ -3140,7 +3152,7 @@ async function loadPrs(fresh){
     prs = await (await fetch("/api/prs?project=" + encodeURIComponent(sel) + (fresh ? "&fresh=1" : ""))).json();
   }catch(e){ prs = {error: "could not reach GitHub"}; }
   prsFor = sel; prsBusy = false;
-  if(view === "prs") render();
+  if(view === "prs" || view === "projects") render();
 }
 function crewPill(label, r){
   if(!r) return `<span class="pill" title="not yet">${label} not yet</span>`;
@@ -5181,6 +5193,8 @@ function brainGraph(){
               r.draft ? "draft" : (r.by_quarterdeck ? "opened by Quarterdeck" : "")].filter(Boolean),
       actions: [{label: "Open pull request", url: r.url}, {label: "PRs in Quarterdeck", go: "prs", project: r.project}]});
   }
+  const byId = new Map(nodes.map(n => [n.id, n]));
+  for(const n of nodes) if(n.kind === "pull request" && n.state === "attn"){ const par = byId.get(n.parent); if(par && par.state === "idle") par.state = "attn"; }      // the project says what its pull request says
   for(const a of running){
     if(a.fixrun && fixruns.has(a.fixrun)) continue;
     add("a:" + (a.lock || a.project + a.duty), `${a.duty} on ${a.project}`, "ops", "agent running", {
@@ -5588,7 +5602,7 @@ const ACTIONS = {
   startCycle, startMissionPanel, stopRun, talkSubmit, thinkToggle, tlClick, tlHover, tlSet, toggleCalm, toggleDemo, toggleLedger,
   toggleMissionForm, toggleMobileMenu, toggleOld, toggleReplay, toggleSched, toggleSel, toggleShowcaseForm, unpublishShowcase, unqueue, workOn,
   grEdit, grNew, grAdd, grRemove, grMove, grSave, openProject, openProjects, addonNeeds, homeDay, finToggle, trajToggle, tkRequest, tkDraft, tkFile, tkDiscard, tkRepoName, tkRepoSave, tkRepoCreate, tkMission,
-  rdShow, rdToggle, rdNext, rdDraft, rdApply, rdTurnOn, rdCycle, rdProveStop, rdUseVerify,
+  rdShow, rdToggle, rdNext, rdProve, rdDraft, rdApply, rdTurnOn, rdCycle, rdProveStop, rdUseVerify,
   ...EXT.actions,                                   // an add-on's own (assets/ext-*.js), by name
 };
 

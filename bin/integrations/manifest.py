@@ -157,6 +157,8 @@ def status(services=None, cfg=None, have=None, recorded=None):
                      "credentials": [{**c, "present": c["key"] in have_l, "stored": kind if c["key"] in have_l else None} for c in s["credentials"]]}
             if s["id"] in google_oauth.SCOPES:                     # the page offers "Sign in with Google" for these, and says whether it was done
                 entry["signin"] = {"kind": "google", "signed_in": google_oauth.token_file(s["id"], label).is_file()}
+            elif s["id"] == "meta":                                # Connect with Facebook: done when the Page token is saved
+                entry["signin"] = {"kind": "facebook", "signed_in": "META_PAGE_TOKEN" in have_l}
             entries.append(entry)
         d = entries[0]
         rows.append({**{k: s[k] for k in ("id", "label", "what", "minutes", "local", "settings", "reads", "not_reads", "scopes", "revoke", "tested", "links")},

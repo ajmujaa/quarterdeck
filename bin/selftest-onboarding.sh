@@ -380,7 +380,7 @@ for name in sorted(n[:-4] for n in os.listdir(FX) if n.startswith("bad-")):
 chk("  fails: the allowed function in any other file (a script, another page)", scan_with({"dashboard/assets/x.js": OK_FN}) != [] and scan_with({"bin/x.sh": "#!/bin/bash\n" + OK_FN}) != [] and scan_with({"dashboard/other.html": OK_FN}) != [])
 chk("  fails: the allowed function when it has grown past a few lines (the allowance is for a small function)", scan_with({"dashboard/index.html": "function copyCommand(t){\n" + "  var a = 1;\n" * 200 + OK_FN.split("{", 1)[1]}) != [])
 chk("  the other rules are untouched: the old built-from-pieces form still fails on its own", scan_with({"bin/a.py": sample("bad-old-rule")}) != [])
-chk("  the allowance is documented in SECURITY.md", "copyCommand" in open(R + "/SECURITY.md").read() and "writes one command to the clipboard and reads nothing" in open(R + "/SECURITY.md").read())
+chk("  the allowance is documented in SECURITY.md", "copyCommand" in open(R + ("/docs/public/SECURITY.md" if os.path.exists(R + "/docs/public/SECURITY.md") else "/SECURITY.md")).read() and "writes one command to the clipboard and reads nothing" in open(R + ("/docs/public/SECURITY.md" if os.path.exists(R + "/docs/public/SECURITY.md") else "/SECURITY.md")).read())
 PY
 pyck "$T/scan-check.py"
 

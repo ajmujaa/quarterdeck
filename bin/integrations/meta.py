@@ -15,7 +15,7 @@ def _get(token, path, **params):
         return common.request("GET", API + path, headers={"Authorization": "Bearer " + token}, params=params)
     except common.IntegrationError as e:
         if e.status in (400, 401):
-            raise common.IntegrationError("token expired or invalid: create a new long-lived Page token", e.status)
+            raise common.IntegrationError("token expired or invalid (Facebook rejected it: it ran out, its app was deleted, or it is not a Page token): press Connect with Facebook on this card, or run python3 bin/integrations/meta_oauth.py meta", e.status)
         raise
 
 
@@ -36,8 +36,9 @@ def _count(d, key):
 
 
 def fetch(env, cfg):
-    token = common.need(env, "META_PAGE_TOKEN")
-    page = common.need(env, "META_PAGE_ID")
+    token, page = env.get("META_PAGE_TOKEN", ""), env.get("META_PAGE_ID", "")
+    if not token or not page:
+        raise common.IntegrationError("needs credentials: not signed in yet: run python3 bin/integrations/meta_oauth.py meta")
     posts = _get(token, f"{page}/posts", limit=8, fields=(
         "id,message,created_time,permalink_url,shares,"
         "reactions.summary(total_count).limit(0),comments.summary(total_count).limit(0)")).get("data", [])

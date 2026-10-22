@@ -4661,6 +4661,9 @@ check("Add a project: the Projects page has a visible Add a project button, and 
       'id="add-project"' in _ix and '"registered": already' in (ROOT / "bin" / "dashboard.py").read_text() and 'id="at-registered"' in _ix and 'id="at-open-registered"' in _ix)
 check("project page: a proven project still offers Prove it again, the needs card counts failing-check pull requests and names add-on items, and the Brain project takes its pull request's state",
       'id="rd-prove-again"' in _ix and "act(\"rdProve\")" in _ix and "failingPrs(sel)" in _ix and "addonNote" in _ix and 'par.state = "attn"' in _ix)
+_missing9 = [f.name for f in sorted((ROOT / "duties").glob("*.sh"))
+             if "acquire_lock" in f.read_text() and f.name != "marshal.sh" and _re0.search(r"^trap ", f.read_text(), _re0.M) and "release_lock" not in f.read_text() and "QUARTERDECK_LOCK" not in f.read_text()]
+check("every duty that replaces the exit trap still releases its lock, so a finished run never leaves a lock behind", not _missing9, _missing9)
 check("overview: spend is summed from the ledger rows that name the project, today and over seven days (a row from nine days ago and a row with no project do not count)",
       _po["alpha"]["spend_today"] == 1.25 and _po["alpha"]["spend_week"] == 3.25 and _po["beta"]["spend_week"] == 0.5 and _po["gamma"]["spend_week"] == 0, (_po["alpha"], _po["beta"]))
 check("overview: mission counts use the page's states (a pull request waiting, a cycle awaiting review and a running fix are open; a superseded panel is not counted)",

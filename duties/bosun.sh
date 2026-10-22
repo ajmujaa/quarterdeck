@@ -70,7 +70,7 @@ cleanup() {
   safe_git -C "$SOURCE_REPO_DIR" worktree remove --force "$WT" >/dev/null 2>&1 || true
   rm -rf "$TMP"
 }
-trap cleanup EXIT
+trap 'cleanup; release_lock' EXIT
 
 # At most once a day.
 OUTDIR="$QUARTERDECK_HOME/state/bosun"

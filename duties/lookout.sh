@@ -89,7 +89,7 @@ cleanup() {
   safe_git -C "$SOURCE_REPO_DIR" worktree remove --force "$WTB" >/dev/null 2>&1 || true
   rm -rf "$TMP" ${PX_SCRATCH:+"$PX_SCRATCH"}
 }
-trap cleanup EXIT
+trap 'cleanup; release_lock' EXIT
 
 # The app and everything it starts are killed as a group when time is up or the run ends. Run inline so $! is the leader.
 RUN_GROUP='setpgrp(0,0); my $t = shift @ARGV; my $pid = fork();

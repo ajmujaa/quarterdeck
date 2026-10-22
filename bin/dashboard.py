@@ -3914,7 +3914,7 @@ def settings_api(b):
         elif action == "cap":
             usd = b.get("usd")
             if usd is not None and _billing._usd(usd) is None:
-                return 400, {"error": "a cap is a number of dollars, or null for none"}
+                return 400, {"error": "A cap is an amount in dollars, cents allowed, below one million. Leave it empty for no cap."}
             cfg = _billing.load()
             if b.get("scope") == "daily":
                 cfg["caps"]["daily_usd"] = _billing._usd(usd) if usd is not None else None

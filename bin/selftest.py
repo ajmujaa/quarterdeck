@@ -2983,6 +2983,10 @@ with _tf.TemporaryDirectory() as _cd:
         _envp = _cm.env_path()
         check("connections: once the credential is saved the feed is ready, and the status never carries the value",
               _st["state"] == "ready" and _st["credentials"][0]["present"] and _secret not in _json.dumps(_mf.status(_svc)), _st["state"])
+        _cm.record_status(next(x for x in _svc if x["id"] == "slack")["snapshots"][0], False, "needs credentials: create ~/.config/quarterdeck/integrations.env (see the README)")
+        _st2 = {r["id"]: r for r in _mf.status(_svc)}["slack"]
+        check("connections: a 'needs credentials' failure recorded before the values were saved does not outlive the save (the card is ready, with no error)",
+              _st2["state"] == "ready" and _st2["error"] == "", _st2)
         check("connections: the store is owner-only, and its folder too", oct(_envp.stat().st_mode & 0o777) == "0o600" and oct(_envp.parent.stat().st_mode & 0o777) == "0o700")
         _envp.write_text("# mine\nOTHER_THING=keep-me\n" + _envp.read_text())
         _mf.set_credential("SLACK_USER_TOKEN", "new-value-two", _svc)

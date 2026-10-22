@@ -201,6 +201,19 @@ try {
   await rail("Projects"); await sleep(400);
   ok("  and the Projects rail button opens the place again with the select back", await visible("#proj-switch") && (await snap()).hash.startsWith("#/projects/"));
 
+  // ---- Settings: a daily cap with cents is sent and saved, and a refused cap is explained in plain words ----
+  if (MODE === "real") {
+    const caps = []; page.on("request", r => { if (r.method() === "POST" && new URL(r.url()).pathname === "/api/settings" && (r.postData() || "").includes('"cap"')) caps.push(r.postData()); });
+    await page.evaluate(() => go("settings")); await here("#set-capday", 15000);
+    const capIn = page.locator("#set-capday input");
+    await capIn.fill("12.5"); await capIn.press("Enter"); await sleep(800);
+    ok("a daily cap with cents (12.5) is sent, and the page says Saved", caps.length === 1 && caps[0].includes("12.5") && (await page.locator("sl-alert").allInnerTexts()).some(t => t.includes("Saved.")), JSON.stringify(caps));
+    await capIn.fill("1000000000"); await capIn.press("Enter"); await sleep(800);
+    const alerts = (await page.locator("sl-alert").allInnerTexts()).join(" | ");
+    ok("  a cap that is too large is explained in plain words, with no 'null' in them", /amount in dollars/.test(alerts) && !/null/.test(alerts), alerts);
+    problems.requests = problems.requests.filter(x => !/\/api\/settings 400$/.test(x)); problems.console = problems.console.filter(x => !/status of 400/.test(x));      // that one refusal was the point
+  }
+
   // ================= Calm =================
   await page.evaluate(() => dockGo("overview")); await sleep(300);
   await page.evaluate(() => toggleCalm(true)); await sleep(700);

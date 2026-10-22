@@ -2076,6 +2076,9 @@ try:
     _real_words = {w for p in _real_state["projects"] for w in (p["name"], p["repo"], p["summary"]) if len(w) > 3 and "quarterdeck" not in w.lower()}
     _blob = _dj.dumps([_st, _call("GET", "/api/prs")[1]])
     check("nothing from the real projects (names, repos, summaries; the tool's own name aside) appears in the demo world", not [w for w in _real_words if w in _blob], [w for w in _real_words if w in _blob])
+    _dm = [_call("POST", p, {"path": "/x", "confirm": True}) for p in ("/api/attach", "/api/newproject", "/api/settings")]
+    check("demo mode: attach, new project and settings answer 'Demo mode: nothing is changed.', not 'not found'",
+          all(s == 400 and j.get("error") == "Demo mode: nothing is changed." for s, j in _dm), _dm)
     # the guards must actually bite, or a clean trip list proves nothing
     _canary = []
     for _try in (lambda: open(ROOT / "state" / "canary", "w"), lambda: Path(ROOT / "state" / "runs.json").read_text(), lambda: _dsp.Popen(["true"]),
@@ -3766,7 +3769,7 @@ try:
     d.running_locks = lambda: {"cycle-on-3": {}}; _dup = _refused("on", 3, True); d.running_locks = lambda: {}
     d.spent_today = lambda rows=None: 10.0; _cap = _refused("on", 3, True); d.spent_today = lambda rows=None: 1.0
     check("start cycle: refused when the project has not opted in (a string 'true' is not true), the issue is not a positive integer, confirm is not exactly true, a cycle for it already runs, or the day's budget is spent; nothing is spawned for any of them",
-          all(_r1) and "opted in" in _r1[0] and "opted in" in _r1[1] and "unknown" in _r1[2] and _r1[3] == _r1[4] == _r1[5] == "bad issue" and "confirm" in _r1[6] and "confirm" in _r1[7]
+          all(_r1) and "opted in" in _r1[0] and "qtdeck enable off cycle" in _r1[0] and "opted in" in _r1[1] and "unknown" in _r1[2] and _r1[3] == _r1[4] == _r1[5] == "bad issue" and "confirm" in _r1[6] and "confirm" in _r1[7]
           and _dup and "already running" in _dup and _cap and "budget" in _cap and not _calls, (_r1, _dup, _cap, _calls))
     _ok = _ts("on", 3, True)
     check("start cycle: a good request runs bin/qtdeck cycle <project> --issue <n> --apply as an argv list, detached, logging under logs/, and answers with the record's id or none yet",
@@ -3789,7 +3792,7 @@ _cyc = _pg2[_pg2.index("let cycleDlg"):_pg2.index("function missionEmpty()")]
 check("the Start a full cycle dialog states the cost, the ceiling, today's budget left, a plain list of what it does and that it never merges; only its Start button posts, no poll or render can; no raw hex",
       all(w in _cyc for w in ("Expected cost", "Ceiling", "Budget left today", "What it will do", "never merges", "writes a branch and a pull request", "confirm: true", "e.note", "if(atPlace) return"))
       and _pg2.count('post("/api/cycle/start"') == 1 and 'data-on-click="startCycle"' in _pg2 and "startCycle(" not in _pg2.split("async function tick()")[1].split("function renderLost")[0]
-      and "startCycle(" not in _pg2.split("function render(){")[1].split("function showPrivacy")[0] and "has not opted in to full cycles" in _cyc and '"cycle": true' in _cyc
+      and "startCycle(" not in _pg2.split("function render(){")[1].split("function showPrivacy")[0] and "has not opted in to full cycles" in _cyc and "qtdeck enable" in _cyc and "projects.json" not in _cyc
       and not _re.search(r"#[0-9a-fA-F]{3,6}\b", _cyc + _ui[_ui.index("/* Start a full cycle"):_ui.index("/* search everywhere")]))
 
 # ---- one Brain workspace, one project selector, help on every connection (the rules in dashboard/UI.md) ----

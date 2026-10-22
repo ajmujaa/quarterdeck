@@ -725,7 +725,7 @@ part8_scribe() {
   # --apply: a NEW local branch, nothing else touched
   docs_reply "$(doc_json)" "RESULT: DRAFTED 2"
   $QD docs sample-scribe >/dev/null 2>&1
-  OUT=$($QD docs sample-scribe --apply 2>&1); RC=$?
+  OUT=$($QD docs sample-scribe --apply 2>&1); RC=$?; APPLY_OUT="$OUT"
   local BR="docs/sample-scribe-$(date +%Y%m%d)"
   ck "--apply on a project with no repo makes the local branch $BR holding exactly README.md and docs/ARCHITECTURE.md, as one commit on main" '[ "$RC" = 0 ] && [ "$(files_in "$S" "$BR")" = "README.md docs/ARCHITECTURE.md " ] && [ "$(git -C "$S" rev-list --count main..$BR)" = 1 ] && grep -q "new local branch $BR" <<<"$OUT" && [ "$(git -C "$S" show $BR:README.md)" = "$(printf "%s" "$DOC_README")" ]'
   ck "  the default branch is untouched and clean: main is where it was, still checked out, no file appeared, and no worktree is left" '[ "$(git -C "$S" rev-parse main)" = "$head0" ] && [ "$(git -C "$S" rev-parse --abbrev-ref HEAD)" = main ] && [ -z "$(git -C "$S" status --porcelain)" ] && [ ! -e "$S/README.md" ] && [ -z "$(find "$T/workspace" -maxdepth 1 -name "wt-sample-scribe-docs*" 2>/dev/null)" ] && [ "$(git -C "$S" worktree list | wc -l | tr -d " ")" = 1 ]'
@@ -734,6 +734,14 @@ part8_scribe() {
   ck "  no project command was run: the branch did not need node_modules, and the checks never started (no scratch folder, no sandbox line)" '! grep -q "baselining\|sandbox:" <<<"$OUT" && [ ! -d "$S/node_modules" ]'
   OUT=$($QD docs sample-scribe --apply 2>&1); RC=$?
   ck "--apply again, with no draft, says so and changes nothing" '[ "$RC" != 0 ] && grep -q "no draft" <<<"$OUT" && [ "$(branches_of "$S")" = "$BR main " ]'
+  ck "  a project with no repo is told to connect one (qtdeck repo) to open a pull request later" 'grep -qF "connect a repo with  qtdeck repo sample-scribe" <<<"$APPLY_OUT"'
+  # a repo in the registry but no origin remote in the checkout: say what is missing, not "connect a repo"
+  setreg '.["sample-scribe"].repo = "o/sample-scribe"'
+  docs_reply "$(doc_json)" "RESULT: DRAFTED 2"; $QD docs sample-scribe >/dev/null 2>&1
+  git -C "$S" branch -q -D "$BR"
+  OUT=$($QD docs sample-scribe --apply 2>&1); RC=$?
+  ck "  a registered repo whose checkout has no origin remote says the checkout has no origin remote, and does not say to connect a repo" '[ "$RC" = 0 ] && grep -q "no .origin. remote" <<<"$OUT" && grep -q "o/sample-scribe" <<<"$OUT" && ! grep -q "connect a repo" <<<"$OUT"'
+  setreg 'del(.["sample-scribe"].repo)'
   # a file that appears between the draft and the apply is never overwritten
   docs_reply "$(doc_json)" "RESULT: DRAFTED 2"
   $QD docs sample-scribe >/dev/null 2>&1

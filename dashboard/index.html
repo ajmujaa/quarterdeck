@@ -2166,10 +2166,10 @@ let cycleDlg = {project: "", issue: "", ticket: null, ticketTitle: "", est: null
 const cycleOptedIn = () => (S.projects || []).filter(p => p.cycle);
 function cycleCard(quiet){
   const p = (S.projects || []).find(x => x.name === sel), ok = cycleOptedIn();
-  const optIn = `add <code>"cycle": true</code> to its entry in <code>config/projects.json</code>`;
+  const optIn = `run <code>qtdeck enable ${p ? esc(p.name) : "&lt;project&gt;"} cycle</code>`;
   if(atPlace) return "";
   if(p && !p.cycle) return quiet ? "" : `<div class="note-line">${esc(p.name)} has not opted in to full cycles. To allow them, ${optIn}.</div>`;
-  if(!p && !ok.length) return quiet ? "" : `<div class="note-line">No project has opted in to full cycles. To allow them, ${optIn.replace("its entry", "a project's entry")}.</div>`;
+  if(!p && !ok.length) return quiet ? "" : `<div class="note-line">No project has opted in to full cycles. To allow them, ${optIn}.</div>`;
   const who = p ? p.name : "";
   return card(null, `<p class="hint">Takes one issue through the whole chain: requirements, a plan, the build, tests written from the requirements alone, the reviewers, and fixes to what they find. It opens a pull request and stops. You read it and merge it.</p>
     <div class="btns" style="margin-top:var(--s3)">${btn("Start a full cycle", {variant: "primary", click: act("openCycleDialog", who)})}</div>`,

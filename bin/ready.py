@@ -19,6 +19,7 @@ import os
 import re
 import shlex
 import sys
+import textwrap
 import time
 from pathlib import Path
 
@@ -385,7 +386,7 @@ def marks(stream=None):
 
 
 def first_sentence(text, n):
-    """As many whole sentences of a detail as fit in n characters; cut at a word with "..." when not even the first does."""
+    """As many whole sentences of a detail as fit in n characters; when not even the first does, the whole first sentence (the caller wraps it)."""
     t = _clip(text, 600)
     if len(t) <= n:
         return t
@@ -396,7 +397,7 @@ def first_sentence(text, n):
         if len(cand) > n:
             break
         out = cand
-    return out or t[:n - 4].rsplit(" ", 1)[0] + " ..."
+    return out or (parts[0] + ("." if len(parts) > 1 and not parts[0].endswith(".") else ""))
 
 
 def item_lines(items, details=False, width=118):
@@ -404,7 +405,11 @@ def item_lines(items, details=False, width=118):
     out = []
     for i in items:
         text = _plain_dashes(_clip(i["detail"], 400) if details else first_sentence(i["detail"], width - 22))
-        out.append(f"  {m[i['state']]} {i['label']:<15} {text}")
+        head = f"  {m[i['state']]} {i['label']:<15} "
+        # a sentence longer than the line is wrapped under its own text, never cut off
+        wrapped = [text] if details else (textwrap.wrap(text, max(30, width - len(head))) or [""])
+        out.append(head + wrapped[0])
+        out.extend(" " * len(head) + w for w in wrapped[1:])
         if details:
             if i.get("action"):
                 out.append(f"      {_plain_dashes(i['action'])}")

@@ -142,6 +142,16 @@ ck "run, plan, remove and mockup with a missing argument print one usage line, n
   'good=1; for c in run plan remove mockup; do qd "$H" "$P" $c >"$T/u" 2>&1; rc=$?; [ "$rc" != 0 ] && [ "$(wc -l < "$T/u" | tr -d " ")" -le 2 ] && grep -q "usage: qtdeck $c" "$T/u" || good=0; done; [ "$good" = 1 ]'
 ck "plan list and brief list say so when there is nothing to list" \
   'qd "$H" "$P" plan list addme >"$T/pl" 2>&1; qd "$H" "$P" brief list >"$T/bl" 2>&1; grep -q "no plans" "$T/pl" && grep -q "no briefs" "$T/bl"'
+# one unknown word is one usage line and exit 2, for the commands that used to ignore or accept it; the documented flags still work
+for c in "dashboard --bogus" "doctor --nonsense" "status extra" "setup --bogus"; do
+  qd "$H" "$P" $c >"$T/uw" 2>&1; rc=$?
+  ck "qtdeck $c prints one usage line and exits 2" '[ "$rc" = 2 ] && [ "$(wc -l < "$T/uw" | tr -d " ")" = 1 ] && grep -q "^usage: qtdeck ${c%% *}" "$T/uw"'
+done
+qd "$H" "$P" status >"$T/uw" 2>&1; ruw=$?
+ck "qtdeck status with no argument still works" '[ "$ruw" = 0 ] && grep -q "Quarterdeck" "$T/uw"'
+qd "$H" "$P" ready addme >"$T/rdy" 2>&1
+ck "qtdeck ready wraps a long sentence under its own text; no line is cut off with dots" \
+  '! grep -q "\.\.\.$" "$T/rdy" && grep -A1 "Cycles" "$T/rdy" | grep -q "are off\|not both on\|switched on" && awk "length > 120 { bad = 1 } END { exit bad }" "$T/rdy"'
 ck "the cycle refusal names the command that switches it on" 'grep -q "qtdeck enable \$PROJECT cycle" "$REAL/bin/cycle"'
 # ---- a data folder that cannot be written: one plain line and a non-zero exit, never a traceback; remove does not say removed ----
 RO="$T/ro"; RUNRO=""; ROOK=1; mkdir -p "$RO/home"; chmod 755 "$T" "$RO"; chmod -R a+rX "$P" "$T/stub"

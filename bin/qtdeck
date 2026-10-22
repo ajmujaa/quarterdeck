@@ -205,8 +205,12 @@ local_ticket_run() {
   esac
 }
 
+# usage_exit <text>: one usage line on stderr and exit 2 (a word the command does not know is never ignored)
+usage_exit() { echo "usage: $*" >&2; exit 2; }
+
 case "$cmd" in
   status)
+    [ $# = 0 ] || usage_exit "qtdeck status"
     echo "── Quarterdeck ──"
     echo
     printf '  %-12s %-28s %s\n' PROJECT REPO DUTIES
@@ -234,6 +238,7 @@ case "$cmd" in
     ;;
 
   doctor)
+    [ $# = 0 ] || { [ $# = 1 ] && [ "$1" = --full ]; } || usage_exit "qtdeck doctor [--full]"
     # The wiring only, in seconds: tools, sign-ins, data folder, dashboard, sandbox, providers, billing. Every test is `qtdeck check`
     # (or `doctor --full`, which runs it after this).
     probs=()
@@ -604,6 +609,12 @@ case "$cmd" in
     ;;
 
   dashboard)
+    case "${1:-}" in
+      "") ;;
+      --no-open|stop|link) [ $# = 1 ] || usage_exit "qtdeck dashboard [--no-open|stop|link|sessions revoke]" ;;
+      sessions) { [ $# = 2 ] && [ "$2" = revoke ]; } || usage_exit "qtdeck dashboard [--no-open|stop|link|sessions revoke]" ;;
+      *) usage_exit "qtdeck dashboard [--no-open|stop|link|sessions revoke]" ;;
+    esac
     port="${QUARTERDECK_DASHBOARD_PORT:-7878}"
     pidfile="$QUARTERDECK_HOME/state/dashboard.pid"
     if [ "${1:-}" = stop ]; then

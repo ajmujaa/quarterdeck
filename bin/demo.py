@@ -505,7 +505,7 @@ class World:
     def cycle_start(self, project, issue, confirm, ticket=None):
         """The Start a full cycle button, in Demo mode: an invented record appears in the list and nothing runs. An issue, or a LOCAL ticket (exactly one)."""
         if project not in self.cycle_projects():
-            return 400, {"error": f"'{project}' has not opted in to full cycles: add \"cycle\": true to its registry entry"}
+            return 400, {"error": f"'{project}' has not opted in to full cycles: switch it on with: qtdeck enable {project} cycle"}
         if ticket is not None and issue is not None:
             return 400, {"error": "start a cycle from an issue or from a ticket, not both"}
         if ticket is not None:
@@ -1370,7 +1370,7 @@ class World:
             return 400, {"error": "Demo mode: nothing is drafted, filed or created."}
         if path in ("/api/ready/prove", "/api/docs/draft", "/api/docs/apply", "/api/project/duties"):
             return 400, {"error": "Demo mode: nothing is run, drafted or changed."}
-        if path in ("/api/project/guardrails", "/api/mission/action"):
+        if path in ("/api/project/guardrails", "/api/mission/action", "/api/attach", "/api/newproject", "/api/settings"):
             return 400, {"error": "Demo mode: nothing is changed."}
         if path == "/api/work":
             project, issue, action = b.get("project"), b.get("issue"), b.get("action")

@@ -589,6 +589,9 @@ assert r.returncode == 0 and "work account" in r.stdout and "--account work" in 
 assert "GOOGLE_OAUTH_CLIENT_ID@work=" in env_text() and mode(common.env_path()) == 0o600
 r = go("gmail", "--account", "work", inp="\n\n")
 assert r.returncode == 0 and "Saved 0 credentials" in r.stdout and "cid-piped-1" in env_text(), "a blank line keeps the saved value"
+r = go("slack", inp="")
+assert r.returncode == 2 and "nothing was given" in r.stderr and "Saved" not in r.stdout, (r.returncode, r.stdout, r.stderr)
+assert not common.load_config().get("sources", {}).get("slack", {}).get("enabled"), "nothing given: the service stays off"
 r = go("list")
 assert r.returncode == 0 and "gmail" in r.stdout and "work" in r.stdout and "cid-piped-1" not in r.stdout, r.stdout
 for args in (("gmail", "--token", "abc"), ("gmail", "abc"), ("gmail", "--client-secret=abc"), ("gmail", "GOOGLE_OAUTH_CLIENT_SECRET=abc")):

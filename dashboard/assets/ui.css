@@ -382,7 +382,7 @@ button:disabled{cursor:not-allowed}
 .chip .dot{width:8px;height:8px}
 .chip small{font:400 12px var(--font-mono);color:var(--dim)}
 /* Harbor map: an ordered row of equal berths (no positions or lanes exist); the list is the default and the only view on phones */
-.fleet-tools{display:flex;justify-content:flex-end;margin:0}
+.fleet-tools{display:flex;justify-content:space-between;align-items:center;gap:var(--s3);margin:0}
 .berths{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:var(--s3);margin:var(--s3) 0 0}
 .berth{display:flex;flex-direction:column;align-items:center;gap:var(--s2);padding:var(--s3);border:1px solid var(--line);border-radius:var(--r-sm);background:var(--card);color:var(--ink);font:500 12.5px var(--font-ui);cursor:pointer;min-height:44px;text-align:center}
 .berth:hover{border-color:var(--line-2);background:var(--raised)}
@@ -391,7 +391,7 @@ button:disabled{cursor:not-allowed}
 .berth-name{display:inline-flex;align-items:center;gap:var(--s2);max-width:100%;overflow-wrap:anywhere}
 .berth .dot{width:8px;height:8px}
 .berth small{font:400 12px var(--font-mono);color:var(--dim)}
-@media (max-width:760px){.fleet-tools,.berths{display:none}}
+@media (max-width:760px){.fleet-tools sl-button-group,.berths{display:none}}
 .home-count{margin:var(--s4) 0 0}.home-count .mlink{font-weight:500;font-size:14px}
 #proj-switch[hidden]{display:none}
 /* Projects: one card per project, four facts each, in a grid that becomes one column on a phone */

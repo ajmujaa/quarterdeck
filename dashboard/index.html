@@ -1301,7 +1301,7 @@ function fleetStrip(f){
   const berths = `<section class="berths" aria-label="Projects, map">${harbor.berthOrder(items).map(i =>
     `<button class="berth ${i.st}" ${open(i.name)}>${hull}<span class="berth-name"><span class="dot ${i.st}"></span>${esc(i.name)}</span><small>${esc(i.label)}</small></button>`).join("")}</section>`;
   const seg = (k, t) => btn(t, {size: "small", variant: fleetView === k ? "primary" : "", attrs: `aria-pressed="${fleetView === k}"`, click: act("setFleetView", k)});
-  return `<div class="fleet-wrap ${map ? "is-map" : ""}"><div class="fleet-tools"><sl-button-group label="Fleet view">${seg("map", "Map")}${seg("list", "List")}</sl-button-group></div>${map ? berths : ""}</div>`;
+  return `<div class="fleet-wrap ${map ? "is-map" : ""}"><div class="fleet-tools">${btn("Add a project", {size: "small", click: act("openAttach"), attrs: 'id="add-project" aria-label="Add a project: scan a folder and attach it"'})}<sl-button-group label="Fleet view">${seg("map", "Map")}${seg("list", "List")}</sl-button-group></div>${map ? berths : ""}</div>`;
 }
 let fleetView = "list", harbor = null;
 try{ if(localStorage.getItem("quarterdeck.fleetView") === "map") fleetView = "map"; }catch(e){}
@@ -3918,7 +3918,9 @@ async function attachLook(){
   const cmdLine = (label, v, none) => `<li><b>${label}</b> ${v ? `<code>${esc(v)}</code>` : esc(none)}</li>`;
   const missing = Object.keys((j.survey && j.survey.docs && j.survey.docs.missing) || {});
   const docCmd = w => `<div class="fr-fix"><code class="fr-cmd">qtdeck docs ${esc(j.proposal.name)} ${w}</code>${btn("Copy", {size: "small", click: act("copyCommand", `qtdeck docs ${j.proposal.name} ${w}`), attrs: `aria-label="Copy the command that drafts the ${w === "readme" ? "README" : "architecture overview"}"`})}</div>`;
-  out.innerHTML = `<section class="at-step" aria-labelledby="at-h2"><h3 id="at-h2" tabindex="-1">Step 2 of 5 · Scan</h3>
+  const reg = j.registered;
+  const regNote = reg ? `<section class="at-step" id="at-registered"><div class="callout"><b>Already attached as ${esc(reg.name)}.</b> Its verify command is ${reg.verify ? `<code>${esc(reg.verify)}</code>` : "not set"}${reg.build ? `, build <code>${esc(reg.build)}</code>` : ""}${reg.lint ? `, lint <code>${esc(reg.lint)}</code>` : ""}. The scan below is only what a fresh attach would propose, from the files. Nothing changes.</div></section>` : "";
+  out.innerHTML = regNote + `<section class="at-step" aria-labelledby="at-h2"><h3 id="at-h2" tabindex="-1">Step 2 of 5 · Scan</h3>
     <p id="at-stack"><b>${esc(p.stack && p.stack.summary || "")}</b></p>
     <ul>${cmdLine("Verify", e.verify, "none found; the Shipwright stays off until you give one")}${cmdLine("Build", e.build, "none found")}${cmdLine("Lint", e.lint, "none found")}</ul>
     <p class="hint">Found in ${esc(p.name)}:</p><ul>`
@@ -3955,10 +3957,10 @@ async function attachLook(){
     <section class="at-step" id="at-ready" aria-labelledby="at-h5"><h3 id="at-h5" tabindex="-1">Step 5 of 5 · Ready</h3>
       <p class="hint">Nothing is run. This is the checklist as it would be right after you attach. The verify command is proven once, later, only when you click.</p>
       ${j.ready ? readyItemsHtml(j.ready.items, null) : ""}
-      <div class="btns">${btn("Attach this project", {variant: "primary", click: act("attachAdd")})}</div></section>`;
+      <div class="btns">${reg ? btn("Open " + esc(reg.name), {variant: "primary", click: act("selectProject", reg.name), attrs: 'id="at-open-registered"'}) : btn("Attach this project", {variant: "primary", click: act("attachAdd")})}</div></section>`;
   atSteps(4);
   announce("Scanned. Steps 2 to 5 are below: what was found, missing docs, the crew and the checklist.");
-  const h = $("#at-h2"); if(h && h.scrollIntoView) h.scrollIntoView({block: "start"}); if(h) h.focus({preventScroll: true});
+  const h = $("#at-h2"), top = $("#at-registered") || h; if(top && top.scrollIntoView) top.scrollIntoView({block: "start"}); if(h) h.focus({preventScroll: true});      // an "already attached" note comes first
 }
 function attachEdits(){
   const on = a => [...document.querySelectorAll(`#at-out [${a}]`)].filter(c => c.checked).map(c => c.getAttribute(a));

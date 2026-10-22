@@ -4404,6 +4404,8 @@ _po2 = {o["name"]: o for o in d.project_overview({"alpha": {}, "gamma": {}}, [],
 check("overview: a Prove run counts as the last run when it is newer than the ledger's, and loses when it is older",
       _po2["gamma"]["last_run"] == {"at": "2999-01-01T00:00:00Z", "duty": "verify command (Prove)", "verdict": "PROVEN"} and _po2["alpha"]["last_run"]["duty"] == "shipwright", (_po2["gamma"], _po2["alpha"]))
 _ix = (ROOT / "dashboard" / "index.html").read_text()
+check("Add a project: the Projects page has a visible Add a project button, and a scan of a folder that is already attached says so, with its commands, and offers to open it",
+      'id="add-project"' in _ix and '"registered": already' in (ROOT / "bin" / "dashboard.py").read_text() and 'id="at-registered"' in _ix and 'id="at-open-registered"' in _ix)
 check("project page: a proven project still offers Prove it again, the needs card counts failing-check pull requests and names add-on items, and the Brain project takes its pull request's state",
       'id="rd-prove-again"' in _ix and "act(\"rdProve\")" in _ix and "failingPrs(sel)" in _ix and "addonNote" in _ix and 'par.state = "attn"' in _ix)
 check("overview: spend is summed from the ledger rows that name the project, today and over seven days (a row from nine days ago and a row with no project do not count)",

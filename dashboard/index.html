@@ -2701,7 +2701,7 @@ function billingCard(b){
         help: b.key_present ? `Stored in ${store}. It is never shown again.` : "Not stored."})}
       <div class="btns">${btn("Save", {size: "small", attrs: 'type="submit"'})}${b.key_present ? btn("Remove", {size: "small", click: act("setKeyRemove")}) : ""}</div></form>
     <form class="conn-cred" ${actOn("submit", "seq", ["setCapSave"], ["preventDefault"])}>
-      ${slInput({id: "set-capday", label: "Daily cap for the API key, in dollars", type: "number", value: cap, placeholder: "No cap", help: `Billed to the key today: ${usd(b.api_spent_today || 0)}. Empty means no daily cap.`})}
+      ${slInput({id: "set-capday", label: "Daily cap for the API key, in dollars", type: "number", value: cap, placeholder: "No cap", attrs: 'step="any" min="0"', help: `Billed to the key today: ${usd(b.api_spent_today || 0)}. Empty means no daily cap.`})}
       <div class="btns">${btn("Save cap", {size: "small", attrs: 'type="submit"'})}</div></form>
     ${duties}`;
 }
@@ -2724,7 +2724,7 @@ async function setBilling(duty, mode){
 }
 async function setCapSave(){
   const el = document.getElementById("set-capday"), v = el ? String(el.value || "").trim() : "";
-  if(v !== "" && !(Number(v) >= 0)) return fieldError(el, "A number of dollars, or empty for no cap.");
+  if(v !== "" && !(Number(v) >= 0)) return fieldError(el, "Enter an amount in dollars, like 12.50, or leave it empty for no cap.");
   const j = await post("/api/settings", {action: "cap", scope: "daily", usd: v === "" ? null : Number(v), confirm: true});
   if(j){ toast("Saved."); loadSettings(true); }
 }

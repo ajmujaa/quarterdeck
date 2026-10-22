@@ -145,7 +145,9 @@ def clean_source(raw):
         if not isinstance(raw, dict):
             raise SourceError("A source is an object.")
         name = raw.get("name")
-        if not isinstance(name, str) or not name.strip() or len(name.strip()) > NAME_SRC_MAX or re.search(r"[\x00-\x1f\x7f]", name):
+        if isinstance(name, str) and re.search(r"[\x00-\x1f\x7f]", name):
+            raise SourceError("The name may not hold control characters.")
+        if not isinstance(name, str) or not name.strip() or len(name.strip()) > NAME_SRC_MAX:
             raise SourceError(f"The name is a short label of up to {NAME_SRC_MAX} characters.")
         sid = raw.get("id")
         if not isinstance(sid, str) or not accounts.valid(sid) or sid == accounts.DEFAULT:

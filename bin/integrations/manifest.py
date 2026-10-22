@@ -208,8 +208,12 @@ def set_credential(key, value, services=None, label=accounts.DEFAULT):
     label = accounts.norm(label)
     if key not in known_keys(services):
         raise ValueError("that is not a credential any service asks for")
+    if value is not None and not isinstance(value, str):
+        raise ValueError("a credential is text")
     value = str(value or "").strip()
-    if "\n" in value or "\r" in value or len(value) > 4000:
+    if re.search(r"[\x00-\x1f\x7f]", value):
+        raise ValueError("a credential is one line of text without control characters")
+    if len(value) > 4000:
         raise ValueError("a credential is one line of at most 4000 characters")
     stored = stored_name(key, label)
     if value and common.store_kind() == "keychain" and not keychain.fits(stored, value):

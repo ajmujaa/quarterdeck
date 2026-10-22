@@ -3237,8 +3237,12 @@ NOTE_ID = re.compile(r"[0-9a-f]{8}")
 NOTE_CHARS = 1000
 
 
-def _note_text(text):
-    return " ".join(str(text or "").split())[:NOTE_CHARS]
+def _note_text(text, strict=False):
+    """One line of text: control characters go and runs of white space become one space. With strict, a note over the limit is refused, not cut."""
+    out = " ".join(re.sub(r"[\x00-\x08\x0e-\x1b\x7f]", "", str(text or "")).split())
+    if strict and len(out) > NOTE_CHARS:
+        raise ValueError(f"a note is at most {NOTE_CHARS} characters")
+    return out[:NOTE_CHARS]
 
 
 def _note_project(project):
@@ -3251,7 +3255,7 @@ def _note_project(project):
 
 
 def capture_add(text, project=""):
-    text = _note_text(text)
+    text = _note_text(text, strict=True)
     if not text:
         raise ValueError("nothing to capture")
     rec = {"id": secrets.token_hex(4), "at": iso(now_utc()), "text": text}
@@ -3286,7 +3290,7 @@ def capture_edit(cid, text=None, project=None):
     _note(cid)
     rec = {"id": cid, "at": iso(now_utc())}
     if text is not None:
-        rec["text"] = _note_text(text)
+        rec["text"] = _note_text(text, strict=True)
         if not rec["text"]:
             raise ValueError("a note cannot be empty")
     if project is not None:
@@ -4048,7 +4052,9 @@ def agent_sources_api(b):
             agentsources.kick()
             result = {"id": src["id"], "name": src["name"]}
         elif action == "remove":
-            result = {"removed": agentsources.remove(str(b.get("id") or ""))}
+            if not agentsources.remove(str(b.get("id") or "")):
+                return 404, {"error": "no such source"}
+            result = {"removed": True}
         else:
             return 400, {"error": "action must be add or remove"}
     except ValueError as e:
@@ -4131,6 +4137,8 @@ def newproject_api(b):
         return 400, {"error": "confirm is required: this creates a folder on this computer"}
     try:
         parent = check_project_folder(str(b.get("folder") or "").strip() or Path.home() / "Projects", "a new project", whole=False)
+        if parent.exists() and not parent.is_dir():
+            raise ValueError(f"{b.get('folder')} is a file, not a folder")
         if str(b.get("name") or "").strip():
             check_project_folder(str(parent / str(b.get("name")).strip()), "a new project")
         dest = _np.create(str(b.get("name") or "").strip(), str(parent), b.get("about"))
@@ -6116,6 +6124,8 @@ class Handler(BaseHTTPRequestHandler):
 
         if u.path == "/api/cycle/estimate":
             pr = (q.get("project") or [""])[0]
+            if pr not in read_json(PROJECTS_FILE, {}):
+                return self._send(400, json.dumps({"error": "unknown project"}))
             return self._send(200, json.dumps({"project": pr, "opted_in": (read_json(PROJECTS_FILE, {}).get(pr) or {}).get("cycle") is True, **cycle_estimate(pr)}))
         if u.path == "/api/intent":
             return self._send(200, json.dumps(intent_view()))
@@ -6680,6 +6690,8 @@ class Handler(BaseHTTPRequestHandler):
             scheds = load_schedules()
             sid = b.get("id")
             if b.get("delete"):
+                if not any(s.get("id") == sid for s in scheds):
+                    return self._send(404, json.dumps({"error": "no such schedule"}))
                 scheds = [s for s in scheds if s.get("id") != sid]
                 write_json(SCHEDULES_FILE, scheds)
                 return self._send(200, json.dumps({"deleted": sid}))

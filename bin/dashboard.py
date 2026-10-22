@@ -469,6 +469,25 @@ def read_json(path, default):
 
 
 _TMP_SEQ = itertools.count()
+def _nested_deeper_than(v, limit):
+    """True when lists and objects inside v are nested more than limit deep. Walks with a list, not recursion."""
+    stack = [(v, 1)]
+    while stack:
+        x, d = stack.pop()
+        if isinstance(x, (dict, list)):
+            if d > limit:
+                return True
+            stack.extend((y, d + 1) for y in (x.values() if isinstance(x, dict) else x))
+    return False
+
+
+def text_in(v, name):
+    """A text field of a request, stripped; missing is empty, and anything but text (a number, a list, a boolean) is refused with a plain message."""
+    if v is None:
+        return ""
+    if not isinstance(v, str):
+        raise ValueError(f"{name} must be text")
+    return v.strip()
 
 
 def write_json(path, data):
@@ -1707,15 +1726,15 @@ def showcase_act(action, body, source):
     items = load_showcase()
 
     if action == "create":
-        title = (body.get("title") or "").strip()
+        title = text_in(body.get("title"), "title")
         if not title or len(title) > 200:
             raise ValueError("title must be 1-200 characters")
         rec = {
             "id": "s-" + secrets.token_hex(6), "title": title,
-            "summary": (body.get("summary") or "").strip()[:1000],
-            "before": (body.get("before") or "").strip()[:600],
-            "after": (body.get("after") or "").strip()[:600],
-            "role": (body.get("role") or "").strip()[:600],
+            "summary": text_in(body.get("summary"), "summary")[:1000],
+            "before": text_in(body.get("before"), "before")[:600],
+            "after": text_in(body.get("after"), "after")[:600],
+            "role": text_in(body.get("role"), "role")[:600],
             "synthetic": bool(body.get("synthetic")),
             "mission_id": body.get("mission_id") if isinstance(body.get("mission_id"), str) else None,
             "status": "draft", "published_at": None,
@@ -1733,11 +1752,11 @@ def showcase_act(action, body, source):
     if action == "update":
         if s["status"] != "draft":
             raise ValueError("unpublish before editing")
-        if "title" in body and not (body.get("title") or "").strip():
+        if "title" in body and not text_in(body.get("title"), "title"):
             raise ValueError("title must be 1-200 characters")
         for field, limit in (("title", 200), ("summary", 1000), ("before", 600), ("after", 600), ("role", 600)):
             if field in body:
-                s[field] = (body.get(field) or "").strip()[:limit]
+                s[field] = text_in(body.get(field), field)[:limit]
         if "synthetic" in body:
             s["synthetic"] = bool(body.get("synthetic"))
         s["updated_at"] = iso(now_utc())
@@ -2664,13 +2683,13 @@ def mission_act(action, body, source):
         project = body.get("project")
         if not isinstance(project, str) or project not in projects:
             raise ValueError("unknown project")
-        objective = (body.get("objective") or "").strip()
+        objective = text_in(body.get("objective"), "objective")
         if not objective or len(objective) > 2000:
             raise ValueError("objective must be 1-2000 characters")
         rec = {
             "id": "m-" + secrets.token_hex(6), "project": project, "objective": objective,
-            "constraints": (body.get("constraints") or "").strip()[:2000],
-            "success_criteria": (body.get("success_criteria") or "").strip()[:2000],
+            "constraints": text_in(body.get("constraints"), "constraints")[:2000],
+            "success_criteria": text_in(body.get("success_criteria"), "success_criteria")[:2000],
             "status": "draft", "created_at": iso(now_utc()), "updated_at": iso(now_utc()),
             "links": {"panels": [], "runs": [], "fixes": [], "issues": [], "prs": [], "documents": []},
             "plan": None, "plan_revision": 0, "plan_approved_revision": None, "plan_approved_at": None,
@@ -2687,11 +2706,11 @@ def mission_act(action, body, source):
     if action == "update":
         if m["status"] != "draft":
             raise ValueError("only a draft can be edited")
-        if "objective" in body and not (body.get("objective") or "").strip():
+        if "objective" in body and not text_in(body.get("objective"), "objective"):
             raise ValueError("objective must be 1-2000 characters")
         for field in ("objective", "constraints", "success_criteria"):
             if field in body:
-                m[field] = (body.get(field) or "").strip()[:2000]
+                m[field] = text_in(body.get(field), field)[:2000]
         if m.get("plan_approved_revision") is not None:
             m["plan_approved_revision"] = None
             m["events"].append(record_event("approval-invalidated", "an edit invalidated the approved plan", source))
@@ -6012,10 +6031,12 @@ class Handler(BaseHTTPRequestHandler):
             return {}
         try:
             v = json.loads(raw)
-        except ValueError:
+        except (ValueError, RecursionError):
             raise BodyError(400, "the request body is not JSON")
         if not isinstance(v, dict):
             raise BodyError(400, "the request body must be a JSON object")
+        if _nested_deeper_than(v, 64):                                         # Python 3.12 parses very deep JSON; str() or dumps of it later would not survive
+            raise BodyError(400, "the request body is nested too deeply")
         return v
 
     def do_HEAD(self):
@@ -6166,7 +6187,10 @@ class Handler(BaseHTTPRequestHandler):
             f = LOGS / f"{name}.log"
             if not f.is_file():
                 return self._send(200, json.dumps({"lines": []}))
-            n = min(int((q.get("n") or ["200"])[0] or 200), 2000)
+            try:
+                n = max(1, min(int((q.get("n") or ["200"])[0] or 200), 2000))
+            except ValueError:
+                return self._send(400, json.dumps({"error": "n must be a number"}))
             return self._send(200, json.dumps({"lines": f.read_text(errors="replace").splitlines()[-n:]}))
 
         if u.path == "/api/project-agents":
@@ -6643,7 +6667,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if u.path == "/api/fixqueue":
             project = b.get("project", "")
-            if project not in read_json(PROJECTS_FILE, {}):
+            if not isinstance(project, str) or project not in read_json(PROJECTS_FILE, {}):
                 return self._send(400, json.dumps({"error": "unknown project"}))
             action = b.get("action")
             with QLOCK:
@@ -6667,7 +6691,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if u.path == "/api/stop":
             lock = b.get("lock", "")
-            if not SAFE_LOCK.match(lock or ""):
+            if not isinstance(lock, str) or not SAFE_LOCK.match(lock):
                 return self._send(400, json.dumps({"error": "bad lock"}))
             d = STATE / f"{lock}.lock"
             try:
@@ -6709,7 +6733,10 @@ class Handler(BaseHTTPRequestHandler):
                 validate_run(b.get("project"), b.get("duty"), b.get("args") or [])
             except ValueError as e:
                 return self._send(400, json.dumps({"error": str(e)}))
-            every, at = (b.get("every") or "").strip(), (b.get("at") or "").strip()
+            try:
+                every, at = text_in(b.get("every"), "every"), text_in(b.get("at"), "at")
+            except ValueError as e:
+                return self._send(400, json.dumps({"error": str(e)}))
             if at and not AT.match(at):
                 return self._send(400, json.dumps({"error": "time must be HH:MM"}))
             if not at and not EVERY.match(every):

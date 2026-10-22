@@ -246,6 +246,36 @@ st, j = post("/api/speak", {"text": "hello"})
 chk("/api/speak with no voice set up is a 503 that names the model it needs, not a pointer to the README", st == 503 and "kokoro" in j.get("error", "").lower() and "README" not in j["error"])
 PY
 pyck "$T/t3c.py"
+# ---- 3b. a body or a value of the wrong kind is a 400 with a message, never a dropped connection or a 500 -------------------------------------
+cat > "$T/t3b.py" <<'PY'
+exec(open(__import__("os").environ["T"] + "/qc.py").read())
+def raw(method, path, data=None):
+    c = http.client.HTTPConnection("127.0.0.1", PORT, timeout=30)
+    h = {"Cookie": S["cookie"], "X-Quarterdeck-Token": S["token"], "Origin": ORIGIN}
+    if data is not None: h.update({"Content-Type": "application/json", "Content-Length": str(len(data))})
+    try:
+        c.request(method, path, body=data, headers=h); r = c.getresponse(); r.read(); return r.status
+    except (ConnectionError, http.client.HTTPException) as e:
+        return type(e).__name__
+    finally:
+        c.close()
+os.makedirs(T + "/logs", exist_ok=True); open(T + "/logs/x.log", "w").write("one\ntwo\n")
+chk("JSON nested very deeply is a 400, not a dropped connection", raw("POST", "/api/capture", b'{"text":' + b"[" * 5000 + b"]" * 5000 + b"}") == 400)
+chk("/api/log with n that is not a number is a 400", raw("GET", "/api/log?name=x&n=abc") == 400)
+chk("/api/log with a negative n answers", raw("GET", "/api/log?name=x&n=-5") == 200)
+for label, path, body in (
+        ("a number as mission constraints", "/api/missions", {"action": "create", "project": "tp", "objective": "x", "constraints": 123}),
+        ("a list as the mission objective", "/api/missions", {"action": "create", "project": "tp", "objective": ["x"]}),
+        ("a number as a showcase title", "/api/showcase", {"action": "create", "title": 123}),
+        ("a boolean as a showcase summary", "/api/showcase", {"action": "create", "title": "t", "summary": True}),
+        ("a number as the schedule interval", "/api/schedule", {"project": "tp", "duty": "planner", "every": 123}),
+        ("a number as the schedule time", "/api/schedule", {"project": "tp", "duty": "planner", "at": 123}),
+        ("a number as the lock to stop", "/api/stop", {"lock": 123}),
+        ("a list as the fix queue project", "/api/fixqueue", {"project": [], "action": "pause"})):
+    st, j = post(path, body)
+    chk(label + " is a 400 with a message", st == 400 and isinstance(j.get("error"), str) and "Traceback" not in j["error"] and "object has no attribute" not in j["error"])
+PY
+pyck "$T/t3b.py"
 
 
 # ---- 4. each action does what it says and nothing more -----------------------------------------------------------------------------------------

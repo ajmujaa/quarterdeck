@@ -6,7 +6,7 @@ The full guide. The short version is the [README](README.md).
 
 Quarterdeck runs on your own machine. It gives you one dashboard for all your projects, a built-in crew of agents that take work from an issue to a reviewed pull request, and a map of everything in one view called the Brain. Nothing leaves your computer except the requests you ask for.
 
-> Status: early. Built and used daily on macOS; Linux is next. Expect rough edges, and read what is tested and what is not before you trust it with anything you care about.
+> Status: early. Built and used daily on macOS. The Linux sandbox is run in CI only. Expect rough edges, and read what is tested and what is not before you trust it with anything you care about.
 
 ## Quick start
 
@@ -101,7 +101,7 @@ bin/qtdeck attach ~/Projects/my-app            # shows what it found and propose
 bin/qtdeck attach ~/Projects/my-app --apply    # registers it
 ```
 
-The summary names the languages, the duties it proposes and the command that proves a change works (pytest, npm test, go test and others are found). When none is found, set it with `--verify "<command>"`. `--verbose` shows the whole scan and every path the crew may not change. A folder with no GitHub remote gets one with `bin/qtdeck repo my-app <owner/name>`; `bin/qtdeck repo my-app` lists the other ways, and local tickets work meanwhile (see the next section).
+The summary names the languages, the duties it proposes and the command that proves a change works (pytest, npm test, go test and others are found). When none is found, set it with `--verify "<command>"`. `--verbose` shows the whole scan and the reason for each duty it proposes or leaves out. A folder with no GitHub remote gets one with `bin/qtdeck repo my-app <owner/name>`; `bin/qtdeck repo my-app` lists the other ways, and local tickets work meanwhile (see the next section).
 
 **What attach does.** Attaching is onboarding, in five steps, and nothing is written outside your data folder until you say so:
 
@@ -113,7 +113,7 @@ The summary names the languages, the duties it proposes and the command that pro
 
 Attach also names the stack from the files alone, for example "React 18 with Vite, tests by Vitest, lint by ESLint, package manager npm" (Node, Python, Go and Rust projects are read the same way). It proposes a build and a lint command next to the verify command, using the project's own package manager, and gives a reason for each. Every duty has a one-line reason for being on or off. The duties that fit the stack show as "also fit this stack (off)" on the command line and as a separate group in the dashboard; nothing in that group is on until you tick it (`--verbose` and the dashboard give the reason for each). Change the commands with `--build` and `--lint`, or in the dashboard. The build command is the one the Shipwright's checks already run; lint and type check are kept for your review and the crew's notes, and nothing runs them by itself.
 
-Adding a project accepts folders under your home directory only, never a hidden folder. `QUARTERDECK_PROJECT_ROOTS` in `config/quarterdeck.env` allows others. Attach only folders you trust: the crew reads their files and the harness runs their test and build commands (with a minimal environment, no secrets, and inside the operating-system sandbox: sandbox-exec on macOS, bubblewrap on Linux).
+In the dashboard, adding a project accepts folders under your home directory only, never a hidden folder. The command line `qtdeck attach` takes any folder you name. `QUARTERDECK_PROJECT_ROOTS` in `config/quarterdeck.env` allows others. Attach only folders you trust: the crew reads their files and the harness runs their test and build commands (with a minimal environment, no secrets, and inside the operating-system sandbox: sandbox-exec on macOS, bubblewrap on Linux).
 
 Then run an agent on it. Nothing is written until you add `--apply`:
 
@@ -246,7 +246,7 @@ Not verified: this was built and tested against a stand-in `claude`, not the rea
 
 ### Packs
 
-A pack is a short note about one stack that the crew reads before it works on a matching project. `qtdeck packs list` shows the packs found. The six infrastructure packs (aws, vercel-supabase, azure, google-cloud, cloudflare, fly) are labelled **experimental**: they were tested on small examples only, and every infra report says so in its footer. Read such a report as a second opinion, not a verdict. The tag shows in `qtdeck packs list`, in Settings and when you attach a project. The python and typescript-node packs carry no tag.
+A pack is a short note about one stack that the crew reads before it works on a matching project. The packs are the folders in `packs/`. The six infrastructure packs (aws, vercel-supabase, azure, google-cloud, cloudflare, fly) are labelled **experimental**: they were tested on small examples only, and every infra report says so in its footer. Read such a report as a second opinion, not a verdict. The tag shows in Settings and when you attach a project. The python and typescript-node packs carry no tag.
 
 ### Using fewer tokens
 

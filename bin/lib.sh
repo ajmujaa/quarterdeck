@@ -651,7 +651,7 @@ private_read_rules() { # the same list as Read(...) deny rules, comma separated;
 # claude_sandbox_json <workdir> — the sandbox settings for a call that may run shell commands: the private list above, plus the secret
 # file names inside the working folder, no escape hatch for an unsandboxed command, no silent run without a sandbox (failIfUnavailable:
 # the CLI otherwise runs the shell unconfined where it cannot build one), the worktree's own .git file closed to writes, and nothing written
-# outside the working folder (the sandbox's own default). Both keys were checked against the real CLI (2.1.293) by hand: see docs/public/SECURITY.md.
+# outside the working folder (the sandbox's own default). Both keys were checked against the real CLI (2.1.293) by hand: see SECURITY.md.
 claude_sandbox_json() { # claude_sandbox_json <workdir> [extra paths to deny, one per line: the secret screen's]
   local wdir=$1 extra=${2:-} n nw
   local -a nm

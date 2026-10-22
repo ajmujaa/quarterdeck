@@ -380,10 +380,10 @@ case "$cmd" in
     ;;
 
   fleet)
-    # show your own agents in the Fleet view: register a source, then report one line per event (bin/fleetreport.py; docs/public/AGENTS.md)
+    # show your own agents in the Fleet view: register a source, then report one line per event (bin/fleetreport.py; AGENTS.md)
     exec python3 "$QUARTERDECK_DIR/bin/fleetreport.py" "$@" ;;
   addon)
-    # add-ons in your data folder: scaffold one, list what loaded and what was skipped (bin/addons.py; docs/public/ADDONS.md)
+    # add-ons in your data folder: scaffold one, list what loaded and what was skipped (bin/addons.py; ADDONS.md)
     exec python3 "$QUARTERDECK_DIR/bin/addons.py" "$@" ;;
 
   attach)

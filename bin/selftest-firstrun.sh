@@ -4,7 +4,7 @@
 # for gh and claude; nothing real is read or written.
 set -uo pipefail
 REAL="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
+T="$(mktemp -d)"; trap 'umount "$T/fulldisk" 2>/dev/null; rm -rf "$T"' EXIT
 fails=0
 ck() { if eval "$2"; then printf '  ok    %s\n' "$1"; else printf '  FAIL  %s\n' "$1"; fails=$((fails+1)); fi; }
 
@@ -155,17 +155,42 @@ qdro() { $RUNRO env -u QUARTERDECK_HOME -u QUARTERDECK_DIR -u QUARTERDECK_HOME_W
 if [ "$ROOK" = 1 ]; then
   qdro home init >/dev/null 2>&1
   printf '{"demo":{"repo":"o/demo","path":"~/x","duties":["surveyor"],"default_branch":"main","guardrails":[]}}\n' > "$RO/home/.quarterdeck/config/projects.json"
+  mkdir -p "$RO/home/x" && ( cd "$RO/home/x" && git init -q && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m one ) >/dev/null 2>&1; chown -R 65534 "$RO/home/x"
+  rm -f "$RO/home/.quarterdeck/state/runs.json"      # the ledger is made on the first command; a folder that cannot be written must not show echo's own error for it
   [ "$(id -u)" = 0 ] && chown -R root "$RO/home/.quarterdeck"; chmod -R a-w,a+rX "$RO/home/.quarterdeck"
   for c in "enable demo planner" "repo demo a/b" "billing cap daily 5" "dashboard link" "remove demo"; do
     qdro $c >"$T/ro.out" 2>&1; rc=$?
     ck "read-only data folder, qtdeck $c: one plain line, non-zero exit, no traceback" \
       '[ "$rc" != 0 ] && grep -qi "read-only\|could not save" "$T/ro.out" && ! grep -q "Traceback\|Error:" "$T/ro.out" && [ "$(wc -l < "$T/ro.out" | tr -d " ")" -le 2 ]'
   done
+  for c in "guardrail demo add Never_touch_x" "ticket new demo add_a_button"; do
+    qdro $c >"$T/ro.out" 2>&1; rc=$?
+    ck "read-only data folder, qtdeck $c: one plain reason, non-zero exit, no echo or Python error" \
+      '[ "$rc" != 0 ] && grep -qi "read-only" "$T/ro.out" && ! grep -qi "write error\|Traceback\|OSError\|cannot be used" "$T/ro.out" && [ "$(wc -l < "$T/ro.out" | tr -d " ")" -le 2 ]'
+  done
   ck "read-only data folder: remove did not say removed and the project is still registered" \
     '! grep -q "^removed" "$T/ro.out" && jq -e ".demo" "$RO/home/.quarterdeck/config/projects.json" >/dev/null'
   chmod -R u+w "$RO/home/.quarterdeck"
 else
   echo "  skip  read-only data folder: needs to run as root with setpriv, so the folder belongs to someone else"
+fi
+
+# ---- a disk that is really full (a small tmpfs, root only): each command says "the disk is full" once, never echo's write error or a wrong reason ----
+FD="$T/fulldisk"; mkdir -p "$FD"
+if [ "$(id -u)" = 0 ] && mount -t tmpfs -o size=64k tmpfs "$FD" 2>/dev/null; then
+  mkdir -p "$FD/h/config" "$FD/h/state" "$FD/h/logs" "$FD/h/workspace" "$T/fdgit"; touch "$FD/h/.quarterdeck-home"
+  ( cd "$T/fdgit" && git init -q && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m one && git remote add origin https://github.com/o/demo.git ) >/dev/null 2>&1
+  printf '{"demo":{"repo":"o/demo","path":"%s","duties":["planner"],"default_branch":"main","guardrails":[]}}\n' "$T/fdgit" > "$FD/h/config/projects.json"
+  dd if=/dev/zero of="$FD/fill" bs=1k count=200 >/dev/null 2>&1
+  qdfull() { env -u QUARTERDECK_DIR QUARTERDECK_HOME="$FD/h" HOME="$T/home" QUARTERDECK_GH="$T/stub/gh" CLAUDE_BIN="$T/stub/claude" QUARTERDECK_DASHBOARD_PORT=1 PYTHONDONTWRITEBYTECODE=1 bash "$P/bin/qtdeck" "$@"; }
+  for c in "guardrail demo add Never_touch_x" "ticket new demo add_a_button"; do
+    qdfull $c >"$T/fd.out" 2>&1; rc=$?
+    ck "full disk, qtdeck $c: says the disk is full, exits non-zero, no echo error and no wrong reason" \
+      '[ "$rc" != 0 ] && grep -q "disk is full" "$T/fd.out" && ! grep -qi "write error\|Traceback\|OSError\|cannot be used" "$T/fd.out" && [ "$(wc -l < "$T/fd.out" | tr -d " ")" -le 2 ]'
+  done
+  umount "$FD" 2>/dev/null
+else
+  echo "  skip  full disk: needs root and a tmpfs mount"
 fi
 
 echo; [ "$fails" = 0 ] && echo "  all checks passed" || { echo "  $fails check(s) failed"; exit 1; }

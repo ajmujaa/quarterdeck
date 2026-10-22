@@ -6676,6 +6676,8 @@ class Handler(BaseHTTPRequestHandler):
                 rec = showcase_act(b.get("action"), b, "dashboard")
             except ValueError as e:
                 return self._send(400, json.dumps({"error": str(e)}))
+            except OSError as e:
+                return self._send(500, json.dumps({"error": integrations_common.why_not_saved(e)}))
             return self._send(200, json.dumps(rec))
 
         if u.path == "/api/fixqueue":
@@ -6736,13 +6738,19 @@ class Handler(BaseHTTPRequestHandler):
                 if not any(s.get("id") == sid for s in scheds):
                     return self._send(404, json.dumps({"error": "no such schedule"}))
                 scheds = [s for s in scheds if s.get("id") != sid]
-                write_json(SCHEDULES_FILE, scheds)
+                try:
+                    write_json(SCHEDULES_FILE, scheds)
+                except OSError as e:
+                    return self._send(500, json.dumps({"error": integrations_common.why_not_saved(e)}))
                 return self._send(200, json.dumps({"deleted": sid}))
             if b.get("toggle"):
                 for s in scheds:
                     if s.get("id") == sid:
                         s["paused"] = not s.get("paused")
-                write_json(SCHEDULES_FILE, scheds)
+                try:
+                    write_json(SCHEDULES_FILE, scheds)
+                except OSError as e:
+                    return self._send(500, json.dumps({"error": integrations_common.why_not_saved(e)}))
                 return self._send(200, json.dumps({"toggled": sid}))
             try:
                 validate_run(b.get("project"), b.get("duty"), b.get("args") or [])
@@ -6767,7 +6775,10 @@ class Handler(BaseHTTPRequestHandler):
                 "last_run": None,
             }
             scheds.append(s)
-            write_json(SCHEDULES_FILE, scheds)
+            try:
+                write_json(SCHEDULES_FILE, scheds)
+            except OSError as e:
+                return self._send(500, json.dumps({"error": integrations_common.why_not_saved(e)}))
             return self._send(200, json.dumps(s))
 
         return self._send(404, json.dumps({"error": "not found"}))

@@ -147,7 +147,15 @@ if [ -n "$REQUEST$FILE_DRAFT" ]; then
   fi
 
   if [ "$REQUEST" = - ]; then REQUEST=$(head -c 9000); fi
-  printf '%s' "$REQUEST" | python3 "$TK" check-request > "$TMP/request" || die "planner: that request cannot be used (plain text, at most 2000 characters)"
+  REQUEST_CLEAN=$(printf '%s' "$REQUEST" | python3 "$TK" check-request) || die "planner: that request cannot be used (plain text, at most 2000 characters)"
+  # A failed write is its own reason, not a bad request: one plain line.
+  werr=$({ printf '%s' "$REQUEST_CLEAN" > "$TMP/request"; } 2>&1) || {
+    case "$werr" in
+      *"No space"*) die "planner: the disk is full: nothing was saved" ;;
+      *"ead-only"*|*"ermission denied"*) die "planner: your data folder is read-only: nothing was saved" ;;
+      *) die "planner: could not save the request: the file could not be written" ;;
+    esac
+  }
   # The request goes to the model and is kept with its draft, so a key or a password in it stops here, before either (the tickets the model drafts are scanned again when they are filed).
   if ! python3 "$QUARTERDECK_DIR/bin/outscan.py" "$TMP/request" >/dev/null 2>&1; then
     say "quarterdeck: refused: your request looks like it holds a password or a key. Nothing was sent to the model and nothing was kept. Say it again without the secret."

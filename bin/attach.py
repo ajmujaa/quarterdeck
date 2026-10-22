@@ -39,6 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import home as _home
 from integrations import common as _common
 import scan as _scan
+import projectroots as _projroots
 import packs as _packs
 import protect as _protect
 import safegit as _safegit
@@ -640,6 +641,7 @@ def main(argv):
         print(__doc__)
         return 2
     try:
+        _projroots.check_project_folder(path)       # the same rule and message as the dashboard: under your home folder or QUARTERDECK_PROJECT_ROOTS, never hidden
         prof = _scan.scan(path)
         prop = propose(prof, name)
         if verify is not None:

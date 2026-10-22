@@ -16,7 +16,7 @@ ST_PROVIDER=fake
 source "$(dirname "${BASH_SOURCE[0]}")/selftest-lib.sh"
 st_skip_if_nested_sandbox selftest-tickets
 st_init planner purser panel shipwright
-cp "$REAL"/bin/{tickets.py,repo.py,attach.py,scan.py,packs.py,qtdeck,cycle,survey.py,ready.py,docs.py,prove} "$T/bin/"
+cp "$REAL"/bin/{tickets.py,repo.py,attach.py,projectroots.py,scan.py,packs.py,qtdeck,cycle,survey.py,ready.py,docs.py,prove} "$T/bin/"
 cp -R "$REAL/packs" "$T/packs"
 mkdir -p "$T/home" && export HOME="$T/home" XDG_CONFIG_HOME="$T/home/.config"
 export QUARTERDECK_HOME="$T" REAL; touch "$T/.quarterdeck-home"
@@ -315,8 +315,8 @@ OUT2=$($QD status 2>&1)
 ck "qtdeck status says the same sentence and points at qtdeck repo tp" 'grep -qF "$S1" <<<"$OUT2" && grep -qF "qtdeck repo tp" <<<"$OUT2"'
 OUT3=$($QD run tp shipwright --issue 3 2>&1); RC=$?
 ck "qtdeck run on a project with no repo prints the sentence and the pointer, exits non-zero" '[ "$RC" != 0 ] && grep -qF "$S1" <<<"$OUT3" && grep -qF "qtdeck repo tp" <<<"$OUT3"'
-AT="$T/home/attached"; mkgit "$AT"
-OUT4=$($QD attach "$AT" --name attached --apply 2>&1)
+AT="$T.att/attached"; mkgit "$AT"; trap 'rm -rf "$T" "$T.att"' EXIT     # beside the data folder, not inside it (a project inside the data folder is refused)
+OUT4=$(QUARTERDECK_PROJECT_ROOTS="$T.att" $QD attach "$AT" --name attached --apply 2>&1)
 ck "qtdeck attach --apply on a folder with no remote prints the sentence and the pointer, and still names the command that connects a repo (round 2: it is no longer a first next: line, since the checklist ends with the one next step)" 'grep -qF "attached has no GitHub repo, so the crew cannot open pull requests yet; local tickets still work." <<<"$OUT4" && grep -qF "qtdeck repo attached" <<<"$OUT4" && grep -qF "qtdeck repo attached <owner/name>" <<<"$OUT4" && [ "$(grep -c "^  next: " <<<"$OUT4")" = 1 ]'
 OUT5=$($QD repo tp octo/tp 2>&1); RC=$?
 ck "qtdeck repo <project> <owner/name> still sets the repo exactly as before" '[ "$RC" = 0 ] && [ "$(jq -r .tp.repo "$T/config/projects.json")" = octo/tp ] && grep -q "GitHub repo set to octo/tp" <<<"$OUT5"'

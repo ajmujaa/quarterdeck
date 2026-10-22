@@ -424,6 +424,7 @@ case "$cmd" in
     path="${path/#$HOME/~}"
     abs="${path/#\~/$HOME}"
     [ -d "$abs/.git" ] || die "$abs is not a git checkout"
+    python3 "$QUARTERDECK_DIR/bin/projectroots.py" check "$abs" >&2 || exit 2     # the dashboard's rule: under your home folder or QUARTERDECK_PROJECT_ROOTS, never hidden
 
     if [ -z "$repo" ]; then
       url="$(safe_git -C "$abs" remote get-url origin 2>/dev/null || true)"

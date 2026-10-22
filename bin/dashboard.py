@@ -469,6 +469,8 @@ def read_json(path, default):
 
 
 _TMP_SEQ = itertools.count()
+
+
 def _nested_deeper_than(v, limit):
     """True when lists and objects inside v are nested more than limit deep. Walks with a list, not recursion."""
     stack = [(v, 1)]

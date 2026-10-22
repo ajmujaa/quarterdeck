@@ -400,6 +400,12 @@ def first_sentence(text, n):
     return out or (parts[0] + ("." if len(parts) > 1 and not parts[0].endswith(".") else ""))
 
 
+def _hang(head, text, width):
+    """text wrapped under its own start, never one long line."""
+    w = textwrap.wrap(text, max(30, width - len(head))) or [""]
+    return [head + w[0]] + [" " * len(head) + x for x in w[1:]]
+
+
 def item_lines(items, details=False, width=118):
     m = marks()
     out = []
@@ -407,16 +413,16 @@ def item_lines(items, details=False, width=118):
         text = _plain_dashes(_clip(i["detail"], 400) if details else first_sentence(i["detail"], width - 22))
         head = f"  {m[i['state']]} {i['label']:<15} "
         # a sentence longer than the line is wrapped under its own text, never cut off
-        wrapped = [text] if details else (textwrap.wrap(text, max(30, width - len(head))) or [""])
+        wrapped = textwrap.wrap(text, max(30, width - len(head))) or [""]
         out.append(head + wrapped[0])
         out.extend(" " * len(head) + w for w in wrapped[1:])
         if details:
             if i.get("action"):
                 out.append(f"      {_plain_dashes(i['action'])}")
             for r in i.get("on", []):
-                out.append(f"      on   {r['duty']}: {_plain_dashes(r['why'])}")
+                out.extend(_hang("      on   ", f"{r['duty']}: {_plain_dashes(r['why'])}", width))
             for r in i.get("suggested", []):
-                out.append(f"      off  {r['duty']}: {_plain_dashes(r['why'])}   ({r['command']})")
+                out.extend(_hang("      off  ", f"{r['duty']}: {_plain_dashes(r['why'])}   ({r['command']})", width))
     return out
 
 

@@ -152,6 +152,9 @@ ck "qtdeck status with no argument still works" '[ "$ruw" = 0 ] && grep -q "Quar
 qd "$H" "$P" ready addme >"$T/rdy" 2>&1
 ck "qtdeck ready wraps a long sentence under its own text; no line is cut off with dots" \
   '! grep -q "\.\.\.$" "$T/rdy" && grep -A1 "Cycles" "$T/rdy" | grep -q "are off\|not both on\|switched on" && awk "length > 120 { bad = 1 } END { exit bad }" "$T/rdy"'
+qd "$H" "$P" ready addme --details >"$T/rdy2" 2>&1
+ck "qtdeck ready --details wraps the long sentences too: no line is longer than 120 characters and none is cut off with dots" \
+  '! grep -q "\.\.\.$" "$T/rdy2" && grep -q "Cycles" "$T/rdy2" && awk "length > 120 { bad = 1 } END { exit bad }" "$T/rdy2"'
 ck "the cycle refusal names the command that switches it on" 'grep -q "qtdeck enable \$PROJECT cycle" "$REAL/bin/cycle"'
 # ---- a data folder that cannot be written: one plain line and a non-zero exit, never a traceback; remove does not say removed ----
 RO="$T/ro"; RUNRO=""; ROOK=1; mkdir -p "$RO/home"; chmod 755 "$T" "$RO"; chmod -R a+rX "$P" "$T/stub"

@@ -235,11 +235,15 @@ part3_cycle_cli() {
   local early; early=$(jq -r 'select(.prompt | contains("REQUIREMENTS_JSON") or contains("RULING_JSON")) | 1' "$T/claude-calls" | wc -l | tr -d ' ')
   crew_replies; : > "$T/claude-calls"
   setreg '.["sample-react"].build = "qd-no-such-tool"'      # a check whose tool is not installed exits 127; the shipwright says what that means
+  setreg '.["sample-react"].repo = "o/sample-react"'        # a repo is registered but this checkout has no origin remote: the wording must say that, not "connect a repo"
   cyc --resume "$fid"
+  setreg '.["sample-react"].repo = ""'
   setreg '.["sample-react"].build = "npm run build"'
   local again builds; again=$(jq -r 'select(.prompt | contains("REQUIREMENTS_JSON") or contains("RULING_JSON")) | 1' "$T/claude-calls" | wc -l | tr -d ' '); builds=$(jq -r 'select(.prompt | contains("Build this one ticket")) | 1' "$T/claude-calls" | wc -l | tr -d ' ')
   ck "--resume goes on at the failed stage: the purser and the panel are not asked again (they were asked $early times), the shipwright builds once" '[ "$RC" = 0 ] && [ "$ID" = "$fid" ] && [ "$early" -ge 2 ] && [ "$again" = 0 ] && [ "$builds" = 1 ] && [ "$(jq -r .status "$REC")" = awaiting-review ] && [ "$(jq -r .resumed "$REC")" = 1 ]'
   ck "  a check that exits 127 is explained: the command was not found, the crew never installs, and what to change" 'grep -q "build exit 127" <<<"$OUT" && grep -q "exit 127 means that command was not found" <<<"$OUT" && grep -q "never installs" <<<"$OUT" && grep -qF "needs no install" <<<"$OUT"'
+  ck "  the shipwright of a project with a repo but no origin remote says the checkout has no origin remote and names the repo, and does not say to connect a repo" 'grep -q "no .origin. remote" <<<"$OUT" && grep -q "o/sample-react" <<<"$OUT" && ! grep -q "connect a repo with" <<<"$OUT"'
+  ck "  the skipped pull request stages say the same: the checkout has no origin remote, not connect a repo" 'for sid in assayer r1:surveyor caulker; do [ "$(stg $sid .state)" = skipped ] && stg $sid .detail | grep -q "no .origin. remote" && ! stg $sid .detail | grep -q "connect a repo" || { echo "bad $sid"; false; break; }; done && ! grep -q "connect a repo (qtdeck repo" <<<"$OUT" && grep -q "add an .origin. remote that points at o/sample-react" <<<"$OUT"'
   ck "  ticket 2 now has its own branch with one commit that adds summary, and the checkout is still clean on main" '[ "$(git -C "$P" rev-list --count main..ticket/2-show-a-summary-line)" = 1 ] && git -C "$P" show ticket/2-show-a-summary-line:src/todos.js | grep -q "export function summary" && [ "$(git -C "$P" rev-parse --abbrev-ref HEAD)" = main ] && [ -z "$(git -C "$P" status --porcelain)" ]'
   ck "  all along, nothing was pushed and gh was never called" '[ -z "$(git -C "$P" remote)" ] && nogh'
 }
@@ -815,7 +819,7 @@ part9_ready() {
   ck "  the verify item is a to do, the scan is done, and plain ASCII marks are used when stdout is not a terminal" 'grep -qE "^  \[ \] Verify command +node --test is set. It has not been run yet" <<<"$OUT" && grep -qE "^  \[x\] Scan " <<<"$OUT"'
   OUT2=$(QUARTERDECK_MARKS=unicode $QD ready sample-ready 2>&1)
   ck "  on a terminal the marks are a tick and a dash (forced here with QUARTERDECK_MARKS=unicode)" 'grep -q "^  ✓ Scan" <<<"$OUT2" && grep -q "^  - Verify command" <<<"$OUT2"'
-  ck "  the repo item says it is optional and tickets work on this computer without it, with the one sentence and qtdeck repo" 'grep -qE "GitHub repo +Optional: tickets work on this computer without it" <<<"$OUT" && OUT3=$($QD ready sample-ready --details 2>&1) && grep -q "sample-ready has no GitHub repo, so the crew cannot open pull requests yet; local tickets still work." <<<"$OUT3" && grep -q "^      qtdeck repo sample-ready$" <<<"$OUT3"'
+  ck "  the repo item says it is optional and tickets work on this computer without it, with the one sentence and qtdeck repo" 'grep -qE "GitHub repo +Optional: tickets work on this computer without it" <<<"$OUT" && OUT3=$($QD ready sample-ready --details 2>&1) && [ "$(tr -s " \n" "  " <<<"$OUT3" | grep -c "no GitHub repo, so the crew cannot open pull requests yet; local tickets still work.")" = 1 ] && grep -q "^      qtdeck repo sample-ready$" <<<"$OUT3"'
   ck "  the docs item offers the scribe (qtdeck docs), the agents item gives each duty its reason, the cycle line gives the command to allow it" 'grep -q "^      qtdeck docs sample-ready$" <<<"$OUT3" && grep -q "Missing: README and an architecture overview" <<<"$OUT3" && grep -q "^      on   surveyor: reads a pull request" <<<"$OUT3" && grep -q "^      off  joiner: React is a UI framework" <<<"$OUT3" && grep -q "(qtdeck enable sample-ready joiner)" <<<"$OUT3" && grep -q "^      qtdeck enable sample-ready cycle$" <<<"$OUT3"'
   # --prove: one real run in the sandbox, on a throwaway worktree, never in the owner's tree
   rm -f "$T/gh-calls"; touch "$T/stamp9"; sleep 1
@@ -838,7 +842,7 @@ part9_ready() {
   ck "a verify command changed since it was proven is a to do again, and the next step is to prove it" 'grep -qE "^  \[ \] Verify command +qd-no-such-tool --check is set. It was changed since it was last proven" <<<"$OUT" && grep -q "next: Run it once to prove it" <<<"$OUT"'
   OUT=$($QD ready sample-ready --prove 2>&1); RC=$?
   ck "--prove on a command that exits 127 keeps the failure: blocked, with the plain explanation (not found, the crew never installs, what to do), and one next step that is the fix" '[ "$RC" = 0 ] && [ "$(jq -r .exit "$T/state/projects/sample-ready/verify.json")" = 127 ] && grep -qE "^  \[!\] Verify command" <<<"$OUT" && grep -q "failed: exit 127" <<<"$OUT" && [ "$(nlines "^  next: " "$OUT")" = 1 ] && grep -q "next: Fix the verify command (the command was not found; the crew never installs dependencies: run npm install (or your install step) in the project first, or set a command that runs without one)" <<<"$OUT"'
-  ck "  the long form names the exit code and explains 127 in the item itself" '$QD ready sample-ready --details 2>&1 | grep -q "Exit 127: the command was not found; the crew never installs dependencies"'
+  ck "  the long form names the exit code and explains 127 in the item itself" 'OUT4=$($QD ready sample-ready --details 2>&1); tr -s " \n" "  " <<<"$OUT4" | grep -q "Exit 127: the command was not found; the crew never installs dependencies"'
   # a failing command (exit 1) shows its first line
   setreg '.["sample-ready"].verify = "false"'
   OUT=$($QD ready sample-ready --prove 2>&1)
@@ -860,7 +864,7 @@ part9_ready() {
   $QD enable sample-ready cycle >/dev/null 2>&1
   OUT=$($QD ready sample-ready 2>&1)
   ck "  once cycles are allowed (purser and dev panel on), it is: Start a mission from ticket 1, with the command" 'grep -qF "next: Start a mission from ticket 1: qtdeck cycle sample-ready --ticket 1" <<<"$OUT" && grep -qE "^  \[x\] Cycles +Allowed" <<<"$OUT" && [ "$(nlines "^  next: " "$OUT")" = 1 ]'
-  ck "  the agents item now counts the purser and the panel, each with a reason" '$QD ready sample-ready --details 2>&1 | grep -q "^      on   purser: " && $QD ready sample-ready --details 2>&1 | grep -q "^      on   panel: "'
+  ck "  the agents item now counts the purser and the panel, each with a reason" 'OUT4=$($QD ready sample-ready --details 2>&1); grep -q "^      on   purser: " <<<"$OUT4" && grep -q "^      on   panel: " <<<"$OUT4"'
 }
 
 # ---- part 10. the crew switches, and the small things around them -----------------------------------------------------------------------------

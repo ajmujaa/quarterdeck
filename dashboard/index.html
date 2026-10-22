@@ -384,7 +384,9 @@ function verdictClass(v){
 }
 const routine = r => r.verdict === "DRY-RUN" && /(^|\s)0 finding/.test(r.detail || "");
 
+let quietToast = false;      // a caller that says an error at a field itself turns the error toast off for the length of its call
 function toast(msg, bad){
+  if(bad && quietToast) return;
   if(customElements.get("sl-alert")){
     const a = document.createElement("sl-alert");
     a.variant = bad ? "danger" : "success"; a.closable = !!bad; a.duration = bad ? 9000 : 3800;
@@ -1732,7 +1734,7 @@ function openMissionPage(id){
   delete missionCache[id];
   if(view === "mission"){ routeTouch(); render(); } else go("mission");
 }
-function closeMissionPage(){ missionId = ""; try{ localStorage.removeItem("quarterdeck.mission"); }catch(e){} routeTouch(); render(); }
+function closeMissionPage(){ missionId = ""; try{ localStorage.removeItem("quarterdeck.mission"); }catch(e){} go("missions"); }          // back to the Missions list, not the picker on the mission view
 function setLens(l){ missionLens = l; render(); }
 function loadMission(){
   const id = missionId, c = missionCache[id];
@@ -2545,7 +2547,7 @@ function agentSourcesCard(a){
   if(!a) return "";
   const rows = (a.sources || []).map(x => li({title: esc(x.name), sub: `${esc(x.host)} · ${x.token ? "token saved" : "no token"} · ` + (x.state === "waiting" ? "waiting for the first answer" : x.state === "ok" ? `${x.agents} ${plural(x.agents, "agent")}, read ${esc(srcAgo(x.ok_at))}` : esc(x.error || "cannot be reached")),
     end: pill(x.state === "ok" ? "done" : x.state === "waiting" ? "" : "bad", x.state === "ok" ? "Working" : x.state === "waiting" ? "Waiting" : "Unreachable") + btn("Remove", {size: "small", click: act("asRemove", x.id), attrs: `aria-label="Remove the agent source ${esc(x.name)}"`})})).join("");
-  const presets = (a.presets || []).map((p, i) => btn(esc(p.label), {size: "small", click: act("asPreset", i)})).join("");
+  const presets = (a.presets || []).map((p, i) => btn(esc(p.label), {size: "small", click: act("asPreset", i), attrs: 'class="as-preset"'})).join("");
   const input = ([k, label]) => slInput({id: "as-" + k, label: label, type: k === "token" ? "password" : "text", password: k === "token"});
   return `<section class="card conn" id="conn-agent-sources"><div class="conn-h"><h2>Add an agent source</h2>${pill("", (a.sources || []).length + " added")}</div>
     <div class="conn-body"><p class="sub">An agent source shows agents that live somewhere else in Fleet, and on Home while one is running. Quarterdeck asks the address you give for one small JSON list, at most once a minute, over https or through a tunnel you run yourself (http://127.0.0.1:port). It only reads, never follows a redirect, keeps only the fields you map below, and the token stays in the credential store, never in a file or a log.</p>
@@ -4049,8 +4051,9 @@ function renderSchedForm(){
   if(schedDraft){ $("#s-args").value = schedDraft.args; $("#s-every").value = schedDraft.every; $("#s-at").value = schedDraft.at; $("#s-apply").checked = schedDraft.apply; }
 }
 async function attachNew(){
-  const j = await post("/api/newproject", {name: $("#nw-name").value.trim(), about: $("#nw-about").value.trim(), folder: $("#nw-folder").value.trim(), confirm: true});
-  if(!j) return;
+  if(!$("#nw-name").value.trim()) return fieldError($("#nw-name"), "Give it a name first.");      // said at the field: a toast would sit over the Create it button
+  quietToast = true; let j; try{ j = await post("/api/newproject", {name: $("#nw-name").value.trim(), about: $("#nw-about").value.trim(), folder: $("#nw-folder").value.trim(), confirm: true}); } finally{ quietToast = false; }
+  if(!j) return fieldError($(/folder|where/i.test(lastPostError) ? "#nw-folder" : "#nw-name"), lastPostError || "It could not be created.");
   $("#at-path").value = j.path; toast("Created. Have a look, then add it."); attachLook();
   nwBrief = {id: "", name: $("#nw-name").value.trim(), busy: false}; nwIdeaPaint();
 }

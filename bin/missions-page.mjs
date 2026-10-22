@@ -82,7 +82,7 @@ try {
   ok("  its buttons: Open the pull request and Dismiss; not Try again, not Close the issue", await button("Open the pull request").count() === 1 && await button("Dismiss").count() === 1 && await button("Try again").count() === 0 && await button("Close the issue").count() === 0);
   await shot("mission-merged");
 
-  await page.evaluate(() => closeMissionPage()); await here(".mission-list", 10000); await sleep(300);
+  await page.evaluate(() => { missionId = ""; go("mission"); }); await here(".mission-list", 10000); await sleep(300);
   const lst1 = await page.locator("#view .mission-list").innerText();
   ok("Hide handled on the mission list: finished and Nothing to build missions are not in it, open ones are", !/Merged on GitHub|Already fixed on main/.test(lst1) && /Stopped, to try again/.test(lst1), lst1.slice(0, 200));
   await page.locator('#view sl-switch[aria-label="Hide handled missions"]').click(); await sleep(500);
@@ -135,6 +135,10 @@ try {
   await button("Undo dismiss").click(); await sleep(900);
   await missions();
   ok("  Undo brings it back into the list, and the count goes back to 1", /Stopped, to try again/.test(await page.locator(".traj .list").innerText()) && /1 dismissed/.test(await page.locator(".handled-bar").first().innerText()));
+
+  await openMission("fix:issue#20");
+  await page.locator("#view .back sl-button", {hasText: /All missions/}).click(); await sleep(800);
+  ok("the All missions button on a mission page goes to the Missions list, not a picker", await page.evaluate(() => view === "missions") && await here(".traj", 8000) && !/Pick one to focus on/.test(await view()), (await view()).slice(0, 200));
 
   // ================= Calm mode, a phone, the console =================
   await page.evaluate(() => toggleCalm()); await sleep(500);

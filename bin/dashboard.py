@@ -3499,7 +3499,7 @@ def _start_llm():
 
 def _start_tts():
     if not (TTS_PYTHON.is_file() and TTS_MODEL.is_file()):
-        raise RuntimeError("the natural voice is not set up: see the README")
+        raise RuntimeError(f"the natural voice is not set up: it needs the Kokoro model at {TTS_MODEL} and a Python at {TTS_PYTHON}")
     p = subprocess.Popen([str(TTS_PYTHON), str(TTS_SCRIPT)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                          stderr=subprocess.DEVNULL, bufsize=0)
     try:
@@ -5913,6 +5913,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Referrer-Policy", "no-referrer")
         if cookie:
             self.send_header("Set-Cookie", cookie)
+        if code == 405:
+            self.send_header("Allow", "GET, POST")
         self.end_headers()
         try:
             self.wfile.write(data)
@@ -6013,6 +6015,12 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Allow", "GET, POST")
         self.send_header("Content-Length", "0")
         self.end_headers()
+
+    def _method_not_allowed(self):
+        self.close_connection = True                                           # a body that was sent is not read
+        return self._send(405, json.dumps({"error": "method not allowed"}))
+
+    do_PUT = do_DELETE = do_PATCH = do_OPTIONS = _method_not_allowed
 
     # ---- reads ----
     def do_GET(self):
@@ -6448,7 +6456,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, json.dumps(understand(b.get("text"), b.get("views") if isinstance(b.get("views"), list) else [], names,
                                                           {n: v["duties"] for n, v in demo.PROJECTS.items()} if demo_on() else None)))
             except Exception as e:
-                return self._send(500, json.dumps({"error": str(e)[:200]}))
+                return self._send(503 if "is not set up" in str(e) else 500, json.dumps({"error": str(e)[:200]}))
 
         if u.path == "/api/chat":
             self.send_response(200)
@@ -6474,7 +6482,7 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as e:
                 return self._send(400, json.dumps({"error": str(e)}))
             except Exception as e:
-                return self._send(500, json.dumps({"error": str(e)[:200]}))
+                return self._send(503 if "is not set up" in str(e) else 500, json.dumps({"error": str(e)[:200]}))
 
         if u.path in EXT["post"]:
             try:

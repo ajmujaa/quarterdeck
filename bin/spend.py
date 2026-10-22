@@ -78,7 +78,10 @@ def main(argv):
     days, home = 7, None
     i = 0
     while i < len(argv):
-        if argv[i] == "--days" and i + 1 < len(argv) and argv[i + 1].isdigit():
+        if argv[i] == "--days":
+            if i + 1 >= len(argv) or not argv[i + 1].isdigit():
+                print("usage: qtdeck spend [--days N]   (N is a number)", file=sys.stderr)
+                return 2
             days = int(argv[i + 1]); i += 2
         else:
             home = argv[i]; i += 1

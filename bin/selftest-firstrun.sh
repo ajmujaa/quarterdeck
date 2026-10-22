@@ -120,4 +120,17 @@ ck "setup: checks the tools, keeps the data folder, and ends with the attach ste
 # ---- dashboard: the Demo hint ----
 ck "dashboard ends with the Demo hint" 'grep -qF "Switch Demo on to look around before you connect anything." "$REAL/bin/qtdeck"'
 
+# ---- small command line gaps: logs -f, a bad number, one usage line, an empty list that says so ----
+qd "$H" "$P" logs -f >"$T/lg" 2>&1
+ck "logs -f follows the default log, it is not read as a log called -f" '! grep -q -- "-f.log" "$T/lg"'
+qd "$H" "$P" runs abc >"$T/rn" 2>&1; rrn=$?
+qd "$H" "$P" spend --days abc >"$T/sp" 2>&1; rsp=$?
+ck "runs and spend --days with something that is not a number say usage, with no jq error" \
+  '[ "$rrn" != 0 ] && [ "$rsp" != 0 ] && grep -q "usage: qtdeck runs" "$T/rn" && grep -q "usage: qtdeck spend" "$T/sp" && ! grep -qi "jq" "$T/rn" "$T/sp"'
+ck "run, plan, remove and mockup with a missing argument print one usage line, not the whole help" \
+  'good=1; for c in run plan remove mockup; do qd "$H" "$P" $c >"$T/u" 2>&1; rc=$?; [ "$rc" != 0 ] && [ "$(wc -l < "$T/u" | tr -d " ")" -le 2 ] && grep -q "usage: qtdeck $c" "$T/u" || good=0; done; [ "$good" = 1 ]'
+ck "plan list and brief list say so when there is nothing to list" \
+  'qd "$H" "$P" plan list addme >"$T/pl" 2>&1; qd "$H" "$P" brief list >"$T/bl" 2>&1; grep -q "no plans" "$T/pl" && grep -q "no briefs" "$T/bl"'
+ck "the cycle refusal names the command that switches it on" 'grep -q "qtdeck enable \$PROJECT cycle" "$REAL/bin/cycle"'
+
 echo; [ "$fails" = 0 ] && echo "  all checks passed" || { echo "  $fails check(s) failed"; exit 1; }

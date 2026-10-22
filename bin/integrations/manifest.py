@@ -144,6 +144,8 @@ def status(services=None, cfg=None, have=None, recorded=None):
                 on = bool((src.get("accounts") or {}).get(label, {}).get("enabled"))
             missing = [c["key"] for c in s["credentials"] if c["key"] not in have_l and not c["optional"]]
             recs = [recorded[k] for n in s["snapshots"] for k in [accounts.status_key(n, label)] if isinstance(recorded.get(k), dict)]
+            if not missing:                                    # "needs credentials" was true when it was recorded; the values are saved now, so it says nothing about this account
+                recs = [r for r in recs if not str(r.get("error_short") or "").startswith("needs credentials")]
             stamp = None
             if s["local"]:                                     # a helper app writes the snapshot itself; its own stamp is the last refresh
                 for n in s["snapshots"]:

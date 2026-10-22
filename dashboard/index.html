@@ -299,8 +299,10 @@ function confirmDlg(msg, o = {}){
     const yes = $("#confirm-yes"), no = $("#confirm-no");
     yes.textContent = o.ok || "Continue"; yes.variant = o.danger ? "danger" : "primary";
     let done = false;
-    const fin = v => { if(done) return; done = true; yes.removeEventListener("click", y); no.removeEventListener("click", n); d.removeEventListener("sl-after-hide", h); res(v); };
+    const fin = v => { if(done) return; done = true; yes.removeEventListener("click", y); no.removeEventListener("click", n); d.removeEventListener("sl-after-hide", h); d.removeEventListener("sl-request-close", rc); res(v); };
     const y = () => { fin(true); d.hide(); }, n = () => { fin(false); d.hide(); }, h = e => { if(e.target === d) fin(false); };
+    const t0 = Date.now(), rc = e => { if(e.target === d && e.detail && e.detail.source === "overlay" && Date.now() - t0 < 300) e.preventDefault(); };   // the second click of a double click lands on the overlay: it must not cancel
+    d.addEventListener("sl-request-close", rc);
     yes.addEventListener("click", y); no.addEventListener("click", n); d.addEventListener("sl-after-hide", h); d.show();
   });
 }
@@ -384,7 +386,9 @@ function verdictClass(v){
 }
 const routine = r => r.verdict === "DRY-RUN" && /(^|\s)0 finding/.test(r.detail || "");
 
+let quietToast = false;      // a caller that says an error at a field itself turns the error toast off for the length of its call
 function toast(msg, bad, warn){
+  if(bad && quietToast) return;
   if(customElements.get("sl-alert")){
     const a = document.createElement("sl-alert");
     a.variant = bad ? "danger" : warn ? "warning" : "success"; a.closable = !!(bad || warn); a.duration = bad || warn ? 9000 : 3800;
@@ -405,12 +409,15 @@ function fieldError(el, msg){
 }
 document.addEventListener("sl-input", e => { if(e.target.hasAttribute && e.target.hasAttribute("data-error")) fieldError(e.target, ""); });
 let lastPostError = "";
+const BUSY = new Set();      // a second click on a button whose action is still running is ignored: once("key", async () => ...)
+async function once(key, fn){ if(BUSY.has(key)) return; BUSY.add(key); try{ return await fn(); } finally{ BUSY.delete(key); } }
 async function post(path, body){
   if(path === "/api/demo") HR.hold = true;           // Demo is being switched: no per-project reads of the old world until the next state arrives (see loadHomeReady)
   const r = await fetch(path, {method:"POST",
     headers:{"Content-Type":"application/json","X-Quarterdeck-Token":TOKEN}, body:JSON.stringify(body)});
   const j = await r.json().catch(() => ({}));
   if(r.status === 401){ showUnpaired(); return null; }
+  if(r.status === 403 && j.error === "forbidden"){ showUnpaired("stale"); return null; }   // another tab paired and replaced this tab's key: reads still work, every write is refused
   if(!r.ok){ lastPostError = j.error || ("failed: " + r.status); toast(lastPostError, true); return null; }
   return j;
 }
@@ -1732,7 +1739,7 @@ function openMissionPage(id){
   delete missionCache[id];
   if(view === "mission"){ routeTouch(); render(); } else go("mission");
 }
-function closeMissionPage(){ missionId = ""; try{ localStorage.removeItem("quarterdeck.mission"); }catch(e){} routeTouch(); render(); }
+function closeMissionPage(){ missionId = ""; try{ localStorage.removeItem("quarterdeck.mission"); }catch(e){} go("missions"); }          // back to the Missions list, not the picker on the mission view
 function setLens(l){ missionLens = l; render(); }
 function loadMission(){
   const id = missionId, c = missionCache[id];
@@ -1848,7 +1855,8 @@ async function tkDraft(){
   announce("The planner is drafting. This can take a minute and costs a few cents; nothing is filed yet.");
   render(); loadTickets(true);
 }
-async function tkFile(did, local){
+async function tkFile(did, local){ return once("tkfile:" + did, () => tkFileNow(did, local)); }
+async function tkFileNow(did, local){
   const p = sel, d = tkData(p), dr = d && d.drafts.find(x => x.id === did);
   if(!dr) return;
   const n = dr.tickets.length, toGithub = d.has_repo && !local;
@@ -1858,7 +1866,10 @@ async function tkFile(did, local){
   if(!j) return;
   TK.error = "";
   if(j.started){ TK.filing = {n, repo: d.repo}; TK.at = 0; announce(`Filing ${n} ${plural(n, "issue")} on ${d.repo}.`); render(); loadTickets(true); return; }
-  toast(`Saved ${n} ${plural(n, "ticket")} on this computer.`);
+  const added = typeof j.added === "number" ? j.added : n, had = n - added;      // tickets already on the list are not added twice
+  toast(added === 0 ? (n === 1 ? "Nothing new was saved: that ticket was already on this computer." : `Nothing new was saved: ${n === 2 ? "both" : "all " + n} tickets were already on this computer.`)
+    : had ? `Saved ${added} new ${plural(added, "ticket")} on this computer. ${had} ${had === 1 ? "was" : "were"} already on the list.`
+    : `Saved ${n} ${plural(n, "ticket")} on this computer.`);
   await loadTickets(true); focusSoon("#tk-list");
 }
 async function tkDiscard(did){
@@ -2282,7 +2293,8 @@ async function missionPost(id, action, extra){
   delete missionCache[id]; try{ await tick(); }catch(e){}
   render(); return j;
 }
-async function dismissMission(id, undo){
+async function dismissMission(id, undo){ return once("mission:" + id, () => dismissMissionNow(id, undo)); }
+async function dismissMissionNow(id, undo){
   const j = await missionPost(id, undo ? "undo" : "dismiss");
   if(j) toast(undo ? "Brought back into the lists." : "Dismissed. It is kept in History, and you can undo it here.");
 }
@@ -2545,7 +2557,7 @@ function agentSourcesCard(a){
   if(!a) return "";
   const rows = (a.sources || []).map(x => li({title: esc(x.name), sub: `${esc(x.host)} · ${x.token ? "token saved" : "no token"} · ` + (x.state === "waiting" ? "waiting for the first answer" : x.state === "ok" ? `${x.agents} ${plural(x.agents, "agent")}, read ${esc(srcAgo(x.ok_at))}` : esc(x.error || "cannot be reached")),
     end: pill(x.state === "ok" ? "done" : x.state === "waiting" ? "" : "bad", x.state === "ok" ? "Working" : x.state === "waiting" ? "Waiting" : "Unreachable") + btn("Remove", {size: "small", click: act("asRemove", x.id), attrs: `aria-label="Remove the agent source ${esc(x.name)}"`})})).join("");
-  const presets = (a.presets || []).map((p, i) => btn(esc(p.label), {size: "small", click: act("asPreset", i)})).join("");
+  const presets = (a.presets || []).map((p, i) => btn(esc(p.label), {size: "small", click: act("asPreset", i), attrs: 'class="as-preset"'})).join("");
   const input = ([k, label]) => slInput({id: "as-" + k, label: label, type: k === "token" ? "password" : "text", password: k === "token"});
   return `<section class="card conn" id="conn-agent-sources"><div class="conn-h"><h2>Add an agent source</h2>${pill("", (a.sources || []).length + " added")}</div>
     <div class="conn-body"><p class="sub">An agent source shows agents that live somewhere else in Fleet, and on Home while one is running. Quarterdeck asks the address you give for one small JSON list, at most once a minute, over https or through a tunnel you run yourself (http://127.0.0.1:port). It only reads, never follows a redirect, keeps only the fields you map below, and the token stays in the credential store, never in a file or a log.</p>
@@ -2703,7 +2715,7 @@ function billingCard(b){
         help: b.key_present ? `Stored in ${store}. It is never shown again.` : "Not stored."})}
       <div class="btns">${btn("Save", {size: "small", attrs: 'type="submit"'})}${b.key_present ? btn("Remove", {size: "small", click: act("setKeyRemove")}) : ""}</div></form>
     <form class="conn-cred" ${actOn("submit", "seq", ["setCapSave"], ["preventDefault"])}>
-      ${slInput({id: "set-capday", label: "Daily cap for the API key, in dollars", type: "number", value: cap, placeholder: "No cap", help: `Billed to the key today: ${usd(b.api_spent_today || 0)}. Empty means no daily cap.`})}
+      ${slInput({id: "set-capday", label: "Daily cap for the API key, in dollars", type: "number", value: cap, placeholder: "No cap", attrs: 'step="any" min="0"', help: `Billed to the key today: ${usd(b.api_spent_today || 0)}. Empty means no daily cap.`})}
       <div class="btns">${btn("Save cap", {size: "small", attrs: 'type="submit"'})}</div></form>
     ${duties}`;
 }
@@ -2726,7 +2738,7 @@ async function setBilling(duty, mode){
 }
 async function setCapSave(){
   const el = document.getElementById("set-capday"), v = el ? String(el.value || "").trim() : "";
-  if(v !== "" && !(Number(v) >= 0)) return fieldError(el, "A number of dollars, or empty for no cap.");
+  if(v !== "" && !(Number(v) >= 0)) return fieldError(el, "Enter an amount in dollars, like 12.50, or leave it empty for no cap.");
   const j = await post("/api/settings", {action: "cap", scope: "daily", usd: v === "" ? null : Number(v), confirm: true});
   if(j){ toast("Saved."); loadSettings(true); }
 }
@@ -3732,7 +3744,8 @@ async function proposeMissionPlan(id){
   const r = await post("/api/missions", {action:"propose_plan", id});
   if(r){ toast("plan proposed"); await tick(); openMission(id); }
 }
-async function approveMissionPlan(id, revision){
+async function approveMissionPlan(id, revision){ return once("mission:" + id, () => approveMissionPlanNow(id, revision)); }
+async function approveMissionPlanNow(id, revision){
   const r = await post("/api/missions", {action:"approve_plan", id, revision});
   if(r){ toast("plan approved"); await tick(); openMission(id); }
 }
@@ -3989,7 +4002,7 @@ function yourDay(){
 }
 function homeNow(){
   const C = S.captures || {items: [], open: 0};
-  const dump = card(null, `<form class="cap-form" ${actOn("submit", "capSubmit", T.ev)}>${slInput({id: "cap-in", placeholder: "A thought or a task. Enter saves it.", label: "Brain dump", cls: "nolabel"})}
+  const dump = card(null, `<form class="cap-form" ${actOn("submit", "capSubmit", T.ev)}>${slInput({id: "cap-in", placeholder: "A thought or a task. Enter saves it.", label: "Brain dump", cls: "nolabel", attrs: 'maxlength="1000"'})}
         ${btn("Save", {variant: "primary", attrs: 'type="submit"'})}</form>
       ${C.items.slice(0, 5).map(c => `<div class="cap-item"><span>${esc(c.text)}</span><small>${ago(c.at)}</small>${btn("Done", {size: "small", click: act("capDone", c.id)})}</div>`).join("")}`,
     {kicker: "Brain dump", count: `${C.open} open`, actions: `<button class="mlink link" ${act("go", "notes")}>All notes</button>`, label: "Brain dump"});
@@ -4051,8 +4064,9 @@ function renderSchedForm(){
   if(schedDraft){ $("#s-args").value = schedDraft.args; $("#s-every").value = schedDraft.every; $("#s-at").value = schedDraft.at; $("#s-apply").checked = schedDraft.apply; }
 }
 async function attachNew(){
-  const j = await post("/api/newproject", {name: $("#nw-name").value.trim(), about: $("#nw-about").value.trim(), folder: $("#nw-folder").value.trim(), confirm: true});
-  if(!j) return;
+  if(!$("#nw-name").value.trim()) return fieldError($("#nw-name"), "Give it a name first.");      // said at the field: a toast would sit over the Create it button
+  quietToast = true; let j; try{ j = await post("/api/newproject", {name: $("#nw-name").value.trim(), about: $("#nw-about").value.trim(), folder: $("#nw-folder").value.trim(), confirm: true}); } finally{ quietToast = false; }
+  if(!j) return fieldError($(/folder|where/i.test(lastPostError) ? "#nw-folder" : "#nw-name"), lastPostError || "It could not be created.");
   $("#at-path").value = j.path; toast("Created. Have a look, then add it."); attachLook();
   nwBrief = {id: "", name: $("#nw-name").value.trim(), busy: false}; nwIdeaPaint();
 }
@@ -4087,7 +4101,8 @@ async function nwWatch(id){
     closeDrawer(); openMissionPage("brief:" + id); return;
   }
 }
-async function attachAdd(){
+async function attachAdd(){ return once("attach", attachAddNow); }
+async function attachAddNow(){
   const path = $("#at-path").value.trim(), name = $("#at-name").value.trim();
   const j = await post("/api/attach", {path, name, apply: true, confirm: true, edits: attachEdits(), agents_md: !!$("#at-agents").checked});
   if(!j) return;
@@ -4403,7 +4418,7 @@ function viewNotes(){
   </div>`;
   const list = rows.length ? rows.map(noteCard).join("")
     : emptyState({inline: true, title: C.total ? "No notes match." : "No notes yet.", body: C.total ? "Change the filters to see more." : "Write one in the box beside this list, or say: Helm, remember to call the dentist."});
-  const side = card(null, `<form class="cap-form" ${actOn("submit", "noteAdd", T.ev)}>${slInput({id: "note-new", label: "New note", cls: "nolabel", placeholder: "A thought or a task"})}${btn("Save", {variant: "primary", attrs: 'type="submit"'})}</form>
+  const side = card(null, `<form class="cap-form" ${actOn("submit", "noteAdd", T.ev)}>${slInput({id: "note-new", label: "New note", cls: "nolabel", placeholder: "A thought or a task", attrs: 'maxlength="1000"'})}${btn("Save", {variant: "primary", attrs: 'type="submit"'})}</form>
       <p class="sub" style="margin-top:var(--s3)">Saved in <code>${esc(C.path || "state/capture.jsonl")}</code> on this Mac. The file is only ever added to, and it is never sent anywhere. ${C.open || 0} open, ${C.total || 0} in all.</p>`, {kicker: "New note", label: "New note"})
     + card(null, `<div class="stack">${slInput({id: "note-q", type: "search", label: "Search notes", cls: "nolabel", size: "small", clearable: true, placeholder: "Search notes", value: noteUi.q, input: actOn("input", "noteFilter", "q", T.value)})}</div>`, {kicker: "Find", label: "Find notes", attrs: 'data-calm="hide"'});
   return `<div class="split"><div class="stack">${card(null, list, {kicker: "Notes", count: rows.length, label: "Notes",
@@ -4416,7 +4431,7 @@ async function noteAdd(e){
   if(t && await post("/api/capture", {text: t, project: sel})){ i.value = ""; toast("Saved"); tick(); }
   return false;
 }
-function noteEditStart(id){ const n = allNotes().find(x => x.id === id); if(!n) return; noteUi.editId = id; noteUi.editText = n.text; render(); const t = $("#note-edit"); if(t) t.focus(); }
+async function noteEditStart(id){ const n = allNotes().find(x => x.id === id); if(!n) return; noteUi.editId = id; noteUi.editText = n.text; render(); const t = $("#note-edit"); if(t){ await customElements.whenDefined("sl-textarea"); await t.updateComplete; t.focus(); } }   // the box may not be upgraded or drawn yet; focus() on it before then throws or does nothing
 function noteEditStop(){ noteUi.editId = null; render(); }
 async function noteEditSave(id){
   const t = ($("#note-edit") || {}).value || "";
@@ -5616,6 +5631,7 @@ const ACTIONS = {
 function showUnpaired(why){
   document.body.classList.add("unpaired"); $("#unpaired").hidden = false;
   $("#unpaired-why").textContent = why === "expired" ? "That link has already been used or has expired."
+    : why === "stale" ? "This tab was disconnected, most likely because a newer link was opened in another tab. Nothing you typed was saved."
     : why === "newtab" ? "This is a new tab, and each tab needs its own link." : "This tab is not connected to your dashboard.";
   const t = $("#unpaired-go"); if(t) t.focus();
   unpaired = true;                                   // the poll stops; opening the real link reloads the page

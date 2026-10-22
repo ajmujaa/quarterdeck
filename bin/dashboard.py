@@ -2739,10 +2739,11 @@ def mission_act(action, body, source):
             raise ValueError("propose a plan before approving one")
         if body.get("revision") != m["plan_revision"]:
             raise ValueError("that plan revision is no longer current")
-        m["plan_approved_revision"] = m["plan_revision"]
-        m["plan_approved_at"] = iso(now_utc())
-        m["updated_at"] = iso(now_utc())
-        m["events"].append(record_event("approved", f"plan revision {m['plan_revision']} approved", source))
+        if m.get("plan_approved_revision") != m["plan_revision"]:        # a repeat of the same approval (a double click) changes nothing
+            m["plan_approved_revision"] = m["plan_revision"]
+            m["plan_approved_at"] = iso(now_utc())
+            m["updated_at"] = iso(now_utc())
+            m["events"].append(record_event("approved", f"plan revision {m['plan_revision']} approved", source))
     elif action == "start_panel":
         # The one thing an approved mission can actually start: a spec panel,
         # seeded with the objective, since that is the one duty that takes an
@@ -3913,7 +3914,7 @@ def settings_api(b):
         elif action == "cap":
             usd = b.get("usd")
             if usd is not None and _billing._usd(usd) is None:
-                return 400, {"error": "a cap is a number of dollars, or null for none"}
+                return 400, {"error": "A cap is an amount in dollars, cents allowed, below one million. Leave it empty for no cap."}
             cfg = _billing.load()
             if b.get("scope") == "daily":
                 cfg["caps"]["daily_usd"] = _billing._usd(usd) if usd is not None else None
@@ -4443,10 +4444,11 @@ def ticket_file_api(b):
                 return 409, {"error": f"the planner is already working on {project}: wait for it to finish"}
             argv = _tk.argv_file(project, did, apply=True)
         else:
+            had = {t["id"] for t in _tk.load(project)["tickets"]}
             made = _tk.local_add(project, dr["tickets"])
             _tk.draft_remove(project, did)
             _ticket_log("file-local", project)
-            return 200, {"tickets": made, "local": True}
+            return 200, {"tickets": made, "local": True, "added": sum(1 for t in made if t["id"] not in had)}
     except ValueError as e:
         return 400, {"error": str(e)}
     at = iso(now_utc())

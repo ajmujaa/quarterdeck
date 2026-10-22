@@ -224,7 +224,7 @@ def load_env(label="default"):
 def read_env_file():
     p = env_path()
     if not p.is_file():
-        raise IntegrationError(f"needs credentials: create ~/.config/quarterdeck/{ENV_NAME} (see the README)")
+        raise IntegrationError(f"needs credentials: none saved yet. Paste them on the Connections page, or create ~/.config/quarterdeck/{ENV_NAME} (see the README)")
     if p.stat().st_mode & 0o077:
         raise IntegrationError(f"~/.config/quarterdeck/{ENV_NAME} is readable by others: run chmod 600 on it")
     out = {}

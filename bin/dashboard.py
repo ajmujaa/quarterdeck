@@ -48,6 +48,7 @@ import home as _home
 import firstrun as _firstrun                            # the first-run checklist and its one small state file (bin/firstrun.py)
 import markers as _markers                              # the marks written into GitHub bodies (bin/markers.py)
 import safegit as _safegit
+import projectroots as _projroots                       # where a project folder may live, shared with `qtdeck attach` (bin/projectroots.py)
 import addons as _addons                              # add-ons in the data folder: which files may load, and `qtdeck addon` (bin/addons.py)
 import packs as _packs_mod                              # stack and infrastructure packs (bin/packs.py)
 import spend as _spend                                  # where the tokens went: the Spend view and `qtdeck spend` share it (bin/spend.py)
@@ -254,40 +255,13 @@ def session_get(sid):
 
 def project_roots():
     """The folders a project may live under: QUARTERDECK_PROJECT_ROOTS in config/quarterdeck.env (colon-separated), else your home directory."""
-    raw = env_flag("QUARTERDECK_PROJECT_ROOTS", "")
-    out = []
-    for part in [x for x in raw.split(":") if x.strip()] or [str(Path.home())]:
-        try:
-            out.append(Path(part.strip()).expanduser().resolve())
-        except OSError:
-            pass
-    return out
+    return _projroots.project_roots(env_flag)
 
 
 def check_project_folder(raw, what="a project", whole=True):
-    """The real folder `raw` names, or ValueError saying where projects may live. It must sit under an allowed root and no part of
-    the path below that root may be a dot folder (.ssh, .aws, .config ...). Symlinks are followed first, so a link cannot lead out.
-    With whole (the project folder itself, not the folder a new one goes in): not an allowed root, not the home folder, and neither
-    the program folder, the data folder, nor a folder that holds either of them."""
-    roots = project_roots()
-    try:
-        real = Path(raw).expanduser().resolve()
-    except (OSError, RuntimeError, ValueError):
-        raise ValueError(f"{raw} is not a usable folder name")
-    for r in roots:
-        try:
-            rel = real.relative_to(r)
-        except ValueError:
-            continue
-        if any(part.startswith(".") for part in rel.parts):
-            raise ValueError(f"{raw} is inside a hidden folder, which {what} may not be")
-        if whole and (real == r or real == Path.home().resolve()):
-            raise ValueError(f"{raw} is a whole folder of projects, not one project. Choose the project's own folder inside it")
-        if any(real == x or x in real.parents or (whole and real in x.parents) for x in (ROOT.resolve(), HOME.resolve())):
-            raise ValueError(f"{raw} is, holds or sits inside Quarterdeck's own program or data folder, which {what} may not be")
-        return real
-    where = ", ".join(str(r) for r in roots)
-    raise ValueError(f"{raw} is outside the places {what} may live ({where}). To allow another, set QUARTERDECK_PROJECT_ROOTS in your config/quarterdeck.env (folders separated by a colon)")
+    """The real folder `raw` names, or ValueError saying where projects may live. The rule lives in bin/projectroots.py so
+    `qtdeck attach` applies the same one; this passes the dashboard's own settings reader and folders."""
+    return _projroots.check_project_folder(raw, what, whole, read=env_flag, program=(ROOT, HOME))
 
 
 def log_field(x):
@@ -1690,15 +1664,7 @@ def speech_vocab(names):
 
 def env_flag(name, default=""):
     """Read a value out of config/quarterdeck.env without sourcing it. Your own file in your data folder wins over the shipped defaults."""
-    for base in dict.fromkeys((HOME, ROOT)):
-        try:
-            text = (base / "config" / "quarterdeck.env").read_text()
-            m = re.search(rf'^{name}="\$\{{{name}:-([^}}]*)\}}"', text, re.M)
-            if m:
-                return os.environ.get(name, m.group(1))
-        except Exception:
-            continue
-    return os.environ.get(name, default)
+    return _projroots.env_flag(name, default, (HOME, ROOT))
 
 
 # ---- showcase -----------------------------------------------------------------

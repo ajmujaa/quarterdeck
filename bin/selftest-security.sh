@@ -492,7 +492,7 @@ ck "R9 the model's process gets the system TMPDIR it was started with, not the d
 
 # ---- F8: what attach writes is private, even from a process with umask 022 (the dashboard) -------------------------
 AH="$T/attach-home"; mkdir -p "$AH"
-( umask 022; QUARTERDECK_HOME="$AH" QUARTERDECK_DIR= python3 "$REAL/bin/attach.py" "$AT" --name decoy --apply >/dev/null 2>&1 )
+( umask 022; QUARTERDECK_PROJECT_ROOTS="$T" QUARTERDECK_HOME="$AH" QUARTERDECK_DIR= python3 "$REAL/bin/attach.py" "$AT" --name decoy --apply >/dev/null 2>&1 )
 loose=$(find "$AH" -type f \( -perm -g+r -o -perm -o+r \) 2>/dev/null | head -3 | tr '\n' ' ')
 ck "F8 attach --apply leaves the registry, the profile and the record owner-only (0600), not world-readable${loose:+: $loose}" '[ -n "$(find "$AH" -type f -name "*.json" | head -1)" ] && [ -z "$loose" ]'
 
@@ -678,12 +678,30 @@ STUB
   lenv "$REAL/bin/qtdeck" dashboard stop >/dev/null 2>&1
 else st_skip "S4 pairing link (macOS open only)"; fi
 
+# ---- #145: the command line keeps a project folder where the dashboard does (under the home folder or QUARTERDECK_PROJECT_ROOTS, never hidden) --------------
+PH="$T/pr145"; mkdir -p "$PH/home/proj" "$PH/home/.hid/proj" "$PH/outside/proj" "$PH/extra/proj" "$PH/data"
+for pd in "$PH/home/proj" "$PH/home/.hid/proj" "$PH/outside/proj" "$PH/extra/proj"; do git -C "$pd" init -q; echo "# x" > "$pd/README.md"; done
+pr_att() { env -u QUARTERDECK_PROJECT_ROOTS HOME="$PH/home" QUARTERDECK_HOME="$PH/data" ${PRR:+QUARTERDECK_PROJECT_ROOTS="$PRR"} python3 "$REAL/bin/attach.py" "$@" 2>&1; }
+pr_out=$(pr_att "$PH/outside/proj" --name outp --apply); pr_rc=$?
+ck "#145 attach --apply refuses a folder outside the home folder: exit non-zero, the dashboard's sentence, nothing in the registry" '[ "$pr_rc" != 0 ] && grep -q "is outside the places a project may live" <<<"$pr_out" && grep -q QUARTERDECK_PROJECT_ROOTS <<<"$pr_out" && ! { [ -f "$PH/data/config/projects.json" ] && grep -q outp "$PH/data/config/projects.json"; }'
+pr_out=$(pr_att "$PH/home/.hid/proj" --name hidp --apply); pr_rc=$?
+ck "#145 and a hidden folder inside the home folder, with nothing written" '[ "$pr_rc" != 0 ] && grep -q "hidden folder" <<<"$pr_out" && ! { [ -f "$PH/data/config/projects.json" ] && grep -q hidp "$PH/data/config/projects.json"; }'
+pr_out=$(pr_att "$PH/home/proj" --name inp --apply); pr_rc=$?
+ck "#145 a folder inside the home folder still registers" '[ "$pr_rc" = 0 ] && grep -q inp "$PH/data/config/projects.json"'
+PRR="$PH/extra"; pr_out=$(pr_att "$PH/extra/proj" --name extp --apply); pr_rc=$?
+ck "#145 QUARTERDECK_PROJECT_ROOTS lets the command line use another folder" '[ "$pr_rc" = 0 ] && grep -q extp "$PH/data/config/projects.json"'
+PRR=""
+pr_out=$(env -u QUARTERDECK_PROJECT_ROOTS HOME="$PH/home" QUARTERDECK_HOME="$PH/data" QUARTERDECK_DIR="$REAL" "$REAL/bin/qtdeck" new thing --in "$PH/outside" 2>&1); pr_rc=$?
+ck "#145 qtdeck new refuses a parent folder outside the home folder, and makes nothing" '[ "$pr_rc" != 0 ] && [ ! -e "$PH/outside/thing" ] && grep -q "outside the places" <<<"$pr_out"'
+pr_out=$(env -u QUARTERDECK_PROJECT_ROOTS HOME="$PH/home" QUARTERDECK_HOME="$PH/data" QUARTERDECK_DIR="$REAL" "$REAL/bin/qtdeck" add addp --repo a/b --path "$PH/outside/proj" 2>&1); pr_rc=$?
+ck "#145 qtdeck add --path refuses a folder outside the home folder, and registers nothing" '[ "$pr_rc" != 0 ] && grep -q "outside the places" <<<"$pr_out" && ! grep -q addp "$PH/data/config/projects.json"'
+
 # ---- #161: a folder that holds several projects is not one project (the scan refuses it, so `qtdeck attach` does too) ------------------------------------
 MP="$T/many161"; mkdir -p "$MP/api" "$MP/web" "$MP/notes" "$T/mp161data"; git -C "$MP/api" init -q; git -C "$MP/web" init -q
-mp_out=$(QUARTERDECK_HOME="$T/mp161data" python3 "$REAL/bin/attach.py" "$MP" --name many --apply 2>&1); mp_rc=$?
+mp_out=$(QUARTERDECK_PROJECT_ROOTS="$T" QUARTERDECK_HOME="$T/mp161data" python3 "$REAL/bin/attach.py" "$MP" --name many --apply 2>&1); mp_rc=$?
 ck "#161 attach refuses a folder of projects, naming them, and registers nothing" '[ "$mp_rc" != 0 ] && grep -q "is a whole folder of projects, not one project" <<<"$mp_out" && grep -q "api, web" <<<"$mp_out" && ! { [ -f "$T/mp161data/config/projects.json" ] && grep -q many "$T/mp161data/config/projects.json"; }'
 git -C "$MP" init -q
-mp_out=$(QUARTERDECK_HOME="$T/mp161data" python3 "$REAL/bin/attach.py" "$MP" 2>&1); mp_rc=$?
+mp_out=$(QUARTERDECK_PROJECT_ROOTS="$T" QUARTERDECK_HOME="$T/mp161data" python3 "$REAL/bin/attach.py" "$MP" 2>&1); mp_rc=$?
 ck "#161 the same folder, once it is a git repository itself, is scanned as one project" '[ "$mp_rc" = 0 ] && ! grep -q "whole folder of projects" <<<"$mp_out"'
 
 st_done

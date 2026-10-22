@@ -17,21 +17,22 @@ source "$(dirname "${BASH_SOURCE[0]}")/selftest-lib.sh"
 st_init shipwright
 cp -R "$REAL"/bin/. "$T/bin/"; rm -rf "$T/bin/__pycache__" "$T/bin/integrations/__pycache__"
 cp -R "$REAL/dashboard" "$T/dashboard"; cp -R "$REAL/packs" "$T/packs"
-mkdir -p "$T/home" "$T/proj" && export HOME="$T/home" XDG_CONFIG_HOME="$T/home/.config" QUARTERDECK_PROJECT_ROOTS="$T/proj"
+TP="$T.proj"   # the projects live beside the data folder, not inside it
+mkdir -p "$T/home" "$TP" && export HOME="$T/home" XDG_CONFIG_HOME="$T/home/.config" QUARTERDECK_PROJECT_ROOTS="$TP"
 export QUARTERDECK_HOME="$T" REAL PYTHONDONTWRITEBYTECODE=1; touch "$T/.quarterdeck-home"
 QD="bash $T/bin/qtdeck"
 DASH=""
 X="$(cd "$(mktemp -d)" && pwd -P)"          # a second project folder outside the data folder: the dashboard's attach refuses one inside it
-trap '[ -z "$DASH" ] || kill "$DASH" 2>/dev/null; [ -n "${QD_KEEP:-}" ] || rm -rf "$T" "$X"' EXIT
+trap '[ -z "$DASH" ] || kill "$DASH" 2>/dev/null; [ -n "${QD_KEEP:-}" ] || rm -rf "$T" "$X" "$TP"' EXIT
 
-P="$T/proj/relay"
+P="$TP/relay"
 mkdir -p "$P/src"; printf 'hello\n' > "$P/README.txt"; printf 'x = 1\n' > "$P/src/app.py"
 git init -q -b main "$P" 2>/dev/null || { git init -q "$P"; git -C "$P" checkout -q -b main; }
 git -C "$P" add -A; git -C "$P" -c user.name=Test -c user.email=t@example.invalid commit -q -m "initial"
 $QD attach "$P" --name relay --verify "true" --apply >/dev/null 2>&1
 setverify() { jq --arg v "$1" '.relay.verify = $v' "$T/config/projects.json" > "$T/c.t" && chmod 600 "$T/c.t" && mv "$T/c.t" "$T/config/projects.json"; }
 
-export QUARTERDECK_PROJECT_ROOTS="$T/proj:$X" QD_OTHER="$X"
+export QUARTERDECK_PROJECT_ROOTS="$TP:$X" QD_OTHER="$X"
 PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
 export QD_PORT="$PORT" T
 denv=(); for k in $(compgen -e); do
@@ -234,7 +235,7 @@ while IFS= read -r line; do
 done <<<"$OUT"
 
 # ---- 5b. a script-driven project: verify candidates found by name, offered, never set or run silently ----
-SP="$T/proj/scripty"; mkdir -p "$SP/bin" "$SP/scripts"
+SP="$TP/scripty"; mkdir -p "$SP/bin" "$SP/scripts"
 printf 'print("ok")\n' > "$SP/bin/selftest.py"; printf 'true\n' > "$SP/bin/selftest-flow.sh"; printf 'true\n' > "$SP/bin/selftest-lib.sh"; printf 'true\n' > "$SP/scripts/build.sh"
 printf 'check:\n\ttrue\n' > "$SP/Makefile"
 git init -q -b main "$SP" 2>/dev/null || { git init -q "$SP"; git -C "$SP" checkout -q -b main; }

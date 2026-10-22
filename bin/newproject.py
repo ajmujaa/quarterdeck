@@ -13,6 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import safegit as _safegit
+import projectroots as _projroots
 
 GITIGNORE = ".env\n.env.*\n!.env.example\n*.pem\nnode_modules/\n__pycache__/\n.venv/\ndist/\nbuild/\n.DS_Store\n"
 
@@ -55,6 +56,10 @@ def main(argv):
         print(__doc__)
         return 2
     try:
+        base = Path(parent).expanduser() if parent else Path.home() / "Projects"       # the dashboard's rule: under your home folder or QUARTERDECK_PROJECT_ROOTS, never hidden
+        _projroots.check_project_folder(str(base), "a new project", whole=False)
+        if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,60}", name):
+            _projroots.check_project_folder(str(base / name), "a new project")
         dest = create(name, parent, about)
     except ValueError as e:
         print(f"  {e}")

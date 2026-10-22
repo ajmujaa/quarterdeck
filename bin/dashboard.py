@@ -3983,6 +3983,11 @@ def connection_test(sid, label, timeout=180):
     why = line.split("failed:", 1)[1].strip() if "failed:" in line else ""
     if "_oauth.py" in why:                                       # the page has its own sign-in button: do not send anyone to a terminal
         why = "Not signed in with Google yet. Press Sign in with Google on this card." if sid in SIGNIN_TOOLS and sid != "meta" else "Not connected to Facebook yet. Press Connect with Facebook on this card."
+    if r.returncode != 0 and why.startswith("network error"):
+        # Every saved credential is there and the failure is the network, not a refusal (401/403 say something else): the token was fine as far as anyone knows.
+        have = integrations_manifest.env_keys(label)
+        if all(c["key"] in have for c in svc["credentials"] if not c["optional"]) and any(c["key"] in have for c in svc["credentials"]):
+            return {"ok": False, "message": "Token saved. The service could not be reached just now (network); it will retry on the next refresh."}
     return {"ok": r.returncode == 0, "message": "Refreshed." if r.returncode == 0 else (why[:200] or "the refresh failed")}
 
 

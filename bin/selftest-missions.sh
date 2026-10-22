@@ -234,6 +234,20 @@ chk("  and a merged fix, an old stopped one (three weeks) and a dismissed one, t
 PY
 pyck "$T/t3.py"
 
+# ---- 3c. other methods get a JSON 405, and a voice that is not set up says what it needs and is not a 500 ------------------------------------
+cat > "$T/t3c.py" <<'PY'
+exec(open(__import__("os").environ["T"] + "/qc.py").read())
+for m in ("PUT", "DELETE", "PATCH", "OPTIONS"):
+    c = http.client.HTTPConnection("127.0.0.1", PORT, timeout=30)
+    c.request(m, "/api/state", headers={"Host": "127.0.0.1:%d" % PORT}); r = c.getresponse(); raw = r.read(); c.close()
+    chk(m + " is a JSON 405 that names the allowed methods and carries the security headers",
+        r.status == 405 and r.getheader("Allow") == "GET, POST" and "error" in json.loads(raw) and r.getheader("X-Frame-Options") == "DENY" and b"<html" not in raw.lower())
+st, j = post("/api/speak", {"text": "hello"})
+chk("/api/speak with no voice set up is a 503 that names the model it needs, not a pointer to the README", st == 503 and "kokoro" in j.get("error", "").lower() and "README" not in j["error"])
+PY
+pyck "$T/t3c.py"
+
+
 # ---- 4. each action does what it says and nothing more -----------------------------------------------------------------------------------------
 cat > "$T/t4.py" <<'PY'
 exec(open(__import__("os").environ["T"] + "/qc.py").read())

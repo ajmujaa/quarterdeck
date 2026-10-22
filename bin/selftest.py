@@ -1481,6 +1481,10 @@ check("approving the wrong revision is refused",
 d.mission_act("approve_plan", {"id": m["id"], "revision": 1}, "owner")
 check("approving the current revision records it",
       d.load_missions()[0]["plan_approved_revision"] == 1)
+_ev1 = [e["kind"] for e in d.load_missions()[0]["events"]]
+d.mission_act("approve_plan", {"id": m["id"], "revision": 1}, "owner")
+check("approving the same revision again (a double click) is a no-op: still approved, no second history line",
+      d.load_missions()[0]["plan_approved_revision"] == 1 and [e["kind"] for e in d.load_missions()[0]["events"]] == _ev1)
 
 # A second, disposable mission, so exercising start_panel (which moves a
 # mission past "draft" for good) does not disturb m's own remaining checks.
@@ -2803,6 +2807,15 @@ with _tf.TemporaryDirectory() as _at:
     _attach.apply(_pr, _pf, _regf)
     _got = _json.loads(_regf.read_text())
     _rec = _json.loads((_scan.profile_dir() / "shopfront.attach.json").read_text())
+    _tmps = []
+    _real_replace = _os0.replace
+    _os0.replace = lambda src, dst, *x, **k: (_tmps.append(str(src)), _real_replace(src, dst, *x, **k))[1]
+    try:
+        _attach.write_registry({"a": {}}, Path(_at) / "reg" / "w.json"); _attach.write_registry({"a": {}}, Path(_at) / "reg" / "w.json")
+    finally:
+        _os0.replace = _real_replace
+    check("attach: the registry is written through a temp file of its own each time (two attaches at once must not share projects.tmp)",
+          len(_tmps) == 2 and _tmps[0] != _tmps[1] and not any(t.endswith("w.tmp") for t in _tmps) and not list((Path(_at) / "reg").glob("*.tmp")))
     check("attach: --apply registers the project, keeps the profile and a record of what was proposed and approved, and leaves the project alone",
           "shopfront" in _got and _got["shopfront"]["verify"] == "npm test" and _rec["approved"] == _rec["proposed"] and (_scan.profile_dir() / "shopfront.json").exists() and _digest(_proj) == _snap)
     try:

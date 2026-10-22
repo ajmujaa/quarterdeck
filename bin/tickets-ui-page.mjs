@@ -32,6 +32,8 @@ page.on("pageerror", e => { if (watching) problems.page.push(String(e.message));
 page.on("requestfailed", r => { if (watching) problems.requests.push(r.url() + " " + (r.failure() || {}).errorText); });
 page.on("response", r => { if (watching && r.status() >= 400) problems.requests.push(r.url() + " " + r.status()); });
 const shot = async name => { try { await page.screenshot({path: path.join(SHOTS, name + ".png")}); } catch (e) { /* a picture is a bonus */ } };
+const fileCalls = [];                              // every POST /api/ticket/file: a double click on Save must send one
+page.on("request", r => { if (r.method() === "POST" && new URL(r.url()).pathname === "/api/ticket/file") fileCalls.push(r.postData() || ""); });
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const off = sel => page.locator(sel).first().evaluate(e => !!e.disabled);      // a Shoelace button's own state (Playwright's isDisabled reads only native controls)
 const text = async sel => (await page.locator(sel).first().innerText().catch(() => "")).replace(/\s+/g, " ").trim();
@@ -78,7 +80,8 @@ ok("then the draft arrives: two tickets with their acceptance checks, one primar
 ok("  that button is the primary one, Discard draft sits beside it, and the request box is cleared and enabled", (await page.locator("#tk-file-d1").getAttribute("variant")) === "primary" && await page.getByText("Discard draft", {exact: true}).count() === 1
   && (await page.locator("#tk-request textarea").inputValue()) === "");
 await shot("04-draft");
-await page.locator("#tk-file-d1").click();
+await page.locator("#tk-file-d1").dblclick();
+ok("a double click on Save sends one request, and no error toast follows it", await here("#tk-list .li", 15000) && (await sleep(800), fileCalls.length === 1) && !(await page.locator("sl-alert[variant=danger]").count()), fileCalls.length);
 ok("Save on this computer lists the tickets: id, title, status open, kept on this computer, and the draft is gone", await here("#tk-list .li", 15000) && await page.locator("#tk-list .li").count() === 2 && (await text("#tk-list")).includes("Add a reset button")
   && (await text("#tk-list")).includes("kept on this computer") && (await text("#tk-list")).includes("open") && await gone(".tk-draft"));
 await sleep(500);

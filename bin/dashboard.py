@@ -2739,10 +2739,11 @@ def mission_act(action, body, source):
             raise ValueError("propose a plan before approving one")
         if body.get("revision") != m["plan_revision"]:
             raise ValueError("that plan revision is no longer current")
-        m["plan_approved_revision"] = m["plan_revision"]
-        m["plan_approved_at"] = iso(now_utc())
-        m["updated_at"] = iso(now_utc())
-        m["events"].append(record_event("approved", f"plan revision {m['plan_revision']} approved", source))
+        if m.get("plan_approved_revision") != m["plan_revision"]:        # a repeat of the same approval (a double click) changes nothing
+            m["plan_approved_revision"] = m["plan_revision"]
+            m["plan_approved_at"] = iso(now_utc())
+            m["updated_at"] = iso(now_utc())
+            m["events"].append(record_event("approved", f"plan revision {m['plan_revision']} approved", source))
     elif action == "start_panel":
         # The one thing an approved mission can actually start: a spec panel,
         # seeded with the objective, since that is the one duty that takes an

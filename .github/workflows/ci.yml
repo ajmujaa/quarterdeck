@@ -31,26 +31,48 @@ jobs:
       QUARTERDECK_APP_NET: ${{ matrix.os == 'ubuntu-latest' && 'share' || '' }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2           # a pull request is checked out as a merge commit: its first parent is the base, which the next step compares against
+      # A pull request that changes only repository furniture (issue and pull request templates, the dependabot and conduct files, the licence) runs no tests.
+      # The job still runs and passes, because the branch rule waits for this exact check; only its steps are skipped.
+      - name: Does this change need the tests?
+        id: scope
+        if: github.event_name == 'pull_request'
+        run: |
+          skip=true
+          for f in $(git diff --name-only HEAD^1 HEAD); do
+            case "$f" in
+              .github/ISSUE_TEMPLATE/*|.github/PULL_REQUEST_TEMPLATE.md|.github/dependabot.yml|CODE_OF_CONDUCT.md|LICENSE) ;;
+              *) skip=false ;;
+            esac
+          done
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+          [ "$skip" = true ] && echo "Only repository files changed: the tests are skipped."
+          exit 0
       - uses: actions/setup-python@v5
+        if: steps.scope.outputs.skip != 'true'
         with:
           python-version: "3.12"
       - uses: actions/setup-node@v4
+        if: steps.scope.outputs.skip != 'true'
         with:
           node-version: "20"
       - name: Install jq (Linux only; the macOS runner has it)
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && steps.scope.outputs.skip != 'true'
         run: command -v jq || sudo apt-get install -y jq
       - name: Linux sandbox (bubblewrap needs unprivileged user namespaces, which Ubuntu 24.04 blocks by default)
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && steps.scope.outputs.skip != 'true'
         run: |
           sudo apt-get install -y bubblewrap
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           bwrap --ro-bind / / --unshare-all --die-with-parent true && echo "bwrap works"
       - name: Use a clean home folder
+        if: steps.scope.outputs.skip != 'true'
         run: |
           mkdir -p "$RUNNER_TEMP/home"
           echo "HOME=$RUNNER_TEMP/home" >> "$GITHUB_ENV"
       - name: Every test (what `qtdeck check` runs; the suite list is found by name, so none is left out)
+        if: steps.scope.outputs.skip != 'true'
         run: python3 bin/check.py ${{ github.event_name == 'pull_request' && '--quick' || '' }}
 
 # Dependencies: there are none to audit. Quarterdeck is Python standard library and

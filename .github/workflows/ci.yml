@@ -49,7 +49,7 @@ jobs:
           echo "skip=$skip" >> "$GITHUB_OUTPUT"
           [ "$skip" = true ] && echo "Only repository files changed: the tests are skipped."
           exit 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         if: steps.scope.outputs.skip != 'true'
         with:
           python-version: "3.12"

@@ -493,7 +493,10 @@ def main(a):
         print("\n".join(apply(a[1], a[2], a[3], a[4], a[5], a[6], "" if a[7] == "-" else a[7], "--apply" in a[8:]))
               + ("" if "--apply" in a[8:] else "\n(report only: add --apply to make these moves)"))
     elif c == "list":
-        for p in _plans(a[1], a[2]):
+        ps = _plans(a[1], a[2])
+        if not ps:
+            print(f"no plans for {a[2]} yet")
+        for p in ps:
             print(f"{p['id']}  {p['status']:10}  {len(p['sprint'])} in sprint of {len(p['plan'])}  {p.get('doc', '')}")
     else:
         sys.exit(__doc__)

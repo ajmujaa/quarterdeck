@@ -346,7 +346,7 @@ def firstrun_api(b=None):
     try:
         st = _firstrun.record(HOME, b["action"])
     except OSError as e:
-        return 500, {"error": "could not save it: " + type(e).__name__}
+        return 500, {"error": integrations_common.why_not_saved(e)}
     if b["action"] == "demo":
         demo_set(True)
     return 200, {"first": False, "done_at": st.get("done_at"), "demo": demo_on()}
@@ -3782,6 +3782,7 @@ import fleetview
 import livework
 import projagents
 from integrations import accounts as integrations_accounts
+from integrations import common as integrations_common
 from integrations import manifest as integrations_manifest
 import billing as _billing                               # who pays for a duty's model calls, and the API key's presence (bin/billing.py)
 
@@ -3897,7 +3898,7 @@ def settings_api(b):
     except ValueError as e:
         return 400, {"error": str(e)}
     except OSError as e:
-        return 500, {"error": "could not write: " + type(e).__name__}
+        return 500, {"error": integrations_common.why_not_saved(e)}
     try:
         LOGS.mkdir(parents=True, exist_ok=True)
         with open(LOGS / "settings.log", "a") as f:                     # what changed, never a value of the key
@@ -4054,7 +4055,7 @@ def agent_sources_api(b):
     except ValueError as e:
         return 400, {"error": str(e)}
     except OSError as e:
-        return 500, {"error": "could not write: " + type(e).__name__}
+        return 500, {"error": integrations_common.why_not_saved(e)}
     try:
         LOGS.mkdir(parents=True, exist_ok=True)
         with open(LOGS / "connections.log", "a") as f:
@@ -4113,7 +4114,7 @@ def connections_api(b):
     except ValueError as e:
         return 400, {"error": str(e)}
     except OSError as e:
-        return 500, {"error": "could not write: " + type(e).__name__}
+        return 500, {"error": integrations_common.why_not_saved(e)}
     try:
         LOGS.mkdir(parents=True, exist_ok=True)
         what = "test" if b.get("test") is True else "remove" if b.get("remove") is True else action
@@ -4137,7 +4138,7 @@ def newproject_api(b):
     except ValueError as e:
         return 400, {"error": str(e)}
     except OSError as e:
-        return 500, {"error": "could not create it: " + type(e).__name__}
+        return 500, {"error": integrations_common.why_not_saved(e)}
     return 200, {"path": str(dest)}
 
 
@@ -4460,7 +4461,7 @@ def repo_api(b):
     except ValueError as e:
         return 400, {"error": str(e)}
     except OSError as e:
-        return 500, {"error": "could not write: " + type(e).__name__}
+        return 500, {"error": integrations_common.why_not_saved(e)}
     argv = [sys.executable, str(ROOT / "bin" / "repo.py"), "create", project, "--private", "--yes"] + (["--push"] if push else [])
     try:
         r = subprocess.run(argv, capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL, cwd=str(ROOT))
@@ -4830,7 +4831,7 @@ def project_duties_api(b):
     except ValueError as e:
         return 400, {"error": str(e)}
     except OSError as e:
-        return 500, {"error": "could not write: " + type(e).__name__}
+        return 500, {"error": integrations_common.why_not_saved(e)}
     _ticket_log("duties", project)
     return 200, r
 
@@ -4858,7 +4859,7 @@ def project_guardrails_api(b):
     except ValueError as e:
         return 400, {"error": str(e)}
     except OSError as e:
-        return 500, {"error": "could not write: " + type(e).__name__}
+        return 500, {"error": integrations_common.why_not_saved(e)}
     return 200, r
 
 
@@ -6756,7 +6757,11 @@ def main():
         demo_set(True)
     STATE.mkdir(exist_ok=True)
     PANELS.mkdir(parents=True, exist_ok=True)
-    (STATE / "dashboard.pid").write_text(str(os.getpid()))
+    try:
+        (STATE / "dashboard.pid").write_text(str(os.getpid()))
+    except OSError as e:
+        print("quarterdeck: the dashboard cannot start: " + integrations_common.why_not_saved(e), file=sys.stderr)
+        sys.exit(1)
     tok = STATE / "dashboard.token"
     fd = os.open(tok, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)            # owner-only from the first byte, not after
     with os.fdopen(fd, "w") as f:
@@ -6801,7 +6806,11 @@ if __name__ == "__main__":
         print("every paired browser is signed out; `qtdeck dashboard link` pairs one again")
         sys.exit(0)
     if sys.argv[1:2] == ["link"]:           # `qtdeck dashboard link`: a fresh one-time link, made by writing into state/, never over HTTP
-        STATE.mkdir(parents=True, exist_ok=True)
-        print(pair_link())
+        try:
+            STATE.mkdir(parents=True, exist_ok=True)
+            print(pair_link())
+        except OSError as e:
+            print("quarterdeck: could not make a link: " + integrations_common.why_not_saved(e), file=sys.stderr)
+            sys.exit(1)
         sys.exit(0)
     main()

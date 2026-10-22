@@ -105,7 +105,7 @@ find "$QUARTERDECK_HOME/state/tmp" -mindepth 1 -maxdepth 1 -mtime +2 -exec rm -r
 RUNS_LEDGER="$QUARTERDECK_HOME/state/runs.json"
 [ -f "$RUNS_LEDGER" ] || echo '[]' > "$RUNS_LEDGER"
 
-log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "${LOG_FILE:-$QUARTERDECK_HOME/logs/quarterdeck.log}"; }
+log() { { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "${LOG_FILE:-$QUARTERDECK_HOME/logs/quarterdeck.log}"; } 2>/dev/null || true; }   # a log that cannot be written must not hide the real message
 # need_num <what> <value> — a number the duty will put into a gh query, a --jq filter or a path must be digits and nothing else.
 need_num() { [[ "${2:-}" =~ ^[1-9][0-9]{0,8}$ ]] || die "${1} takes a number (digits only), not '${2:-}'"; }
 say() { printf '%s\n' "$*" >&2; }

@@ -2247,6 +2247,88 @@ check("a schedule that cannot be saved answers 500 with the plain reason", _s1[0
 check("toggling a schedule on a full disk answers 500 too", _s2[0] == 500 and "disk is full" in _s2[1].get("error", ""), _s2)
 check("a showcase item that cannot be saved answers 500 with the plain reason", _s3[0] == 500 and _s3[1].get("error") == "the disk is full: nothing was saved", _s3)
 
+# Issue 141 (rest): every other route that writes into the data folder answers JSON with one plain reason when the folder is full or read-only:
+# never a dropped connection, never a Python error name or a stack trace. Every way of writing under the test home is made to fail.
+import builtins as _bi141, os as _os141, pathlib as _pl141
+def _write_fails141(no):
+    _real = {"osopen": _os141.open, "open": _bi141.open, "replace": _os141.replace, "wt": _pl141.Path.write_text, "wj": d.write_json, "pw": d._private_write, "ap": d._append_private}
+    _under = lambda f: str(f).startswith((str(_TEST_HOME), str(_pdir141)))
+    def _boom(*a, **k):
+        raise OSError(no, _os141.strerror(no))
+    def _open(f, mode="r", *a, **k):
+        if isinstance(f, (str, bytes, _os141.PathLike)) and _under(f) and any(c in mode for c in "wax+"):
+            _boom()
+        return _real["open"](f, mode, *a, **k)
+    def _osopen(f, flags, *a, **k):
+        if isinstance(f, (str, bytes, _os141.PathLike)) and _under(f) and flags & (_os141.O_WRONLY | _os141.O_RDWR | _os141.O_CREAT):
+            _boom()
+        return _real["osopen"](f, flags, *a, **k)
+    def _replace(src, dst, *a, **k):
+        if _under(dst):
+            _boom()
+        return _real["replace"](src, dst, *a, **k)
+    def _wt(self, *a, **k):
+        if _under(self):
+            _boom()
+        return _real["wt"](self, *a, **k)
+    _os141.open, _bi141.open, _os141.replace, _pl141.Path.write_text, d.write_json, d._private_write, d._append_private = _osopen, _open, _replace, _wt, _boom, _boom, _boom
+    def _undo():
+        _os141.open, _bi141.open, _os141.replace, _pl141.Path.write_text = _real["osopen"], _real["open"], _real["replace"], _real["wt"]
+        d.write_json, d._private_write, d._append_private = _real["wj"], _real["pw"], _real["ap"]
+    return _undo
+_pj141 = _TEST_HOME / "config" / "projects.json"
+import guardrails as _gr141, tempfile as _tf141
+_pdir141 = Path(_tf141.mkdtemp(prefix="qd-p141-"))
+_proj141 = _pdir141 / "p141dir"; (_proj141 / "bin").mkdir(parents=True, exist_ok=True); (_proj141 / "bin" / "selftest.sh").write_text("exit 0\n")
+(_proj141 / ".git").mkdir(exist_ok=True)
+_cand141 = d._ready.verify_candidates(str(_proj141))[0]["command"] if hasattr(d, "_ready") else "bash bin/selftest.sh"
+_roots141 = _os141.environ.get("QUARTERDECK_PROJECT_ROOTS"); _os141.environ["QUARTERDECK_PROJECT_ROOTS"] = str(_pdir141)
+_pj141_was = _pj141.read_text() if _pj141.exists() else None
+_pj141.write_text(_dj.dumps({"p141": {"repo": "x/p", "path": str(_proj141), "summary": "s", "default_branch": "main", "duties": ["panel", "scribe"], "guardrails": [], "verify": ""}}))
+_routes141 = [("/api/capture", {"text": "a note"}), ("/api/missions", {"action": "create", "project": "p141", "objective": "do a thing"}),
+              ("/api/intent", {"projects": ["p141"], "confirm": True}), ("/api/project-status", {"project": "p141", "status": "park", "confirm": True}),
+              ("/api/inbox", {"action": "acknowledge", "id": "x"}), ("/api/firstrun", {"action": "dismiss", "confirm": True}),
+              ("/api/settings", {"action": "cap", "scope": "daily", "usd": 5, "confirm": True}),
+              ("/api/connections", {"action": "enable", "id": "gmail", "on": True, "confirm": True}),
+              ("/api/connections", {"action": "credential", "key": sorted(d.integrations_manifest.known_keys())[0], "value": "abc123abc123", "confirm": True}),
+              ("/api/agent-sources", {"action": "add", "name": "n", "url": "https://example.com/x", "map": {"list": "data.agents", "name": "name", "status": "status", "last_run": "updated_at", "detail": "summary"}, "token": "tok", "confirm": True}),
+              ("/api/project/duties", {"project": "p141", "remove": ["scribe"], "confirm": True}),
+              ("/api/project/verify", {"project": "p141", "command": _cand141, "confirm": True}),
+              ("/api/project/guardrails", {"project": "p141", "guardrails": [*_gr141.LOCKED_TEXTS, "Never touch x"], "confirm": True}),
+              ("/api/repo", {"project": "p141", "action": "set", "repo": "o/n", "confirm": True}),
+              ("/api/newproject", {"name": "p141new", "folder": str(_pdir141), "confirm": True}),
+              ("/api/attach", {"path": str(_proj141), "apply": True, "confirm": True}),
+              ("/api/schedule", {"project": "p141", "duty": "panel", "args": [], "every": "1d"}),
+              ("/api/showcase", {"action": "create", "title": "A title"})]
+_bad141, _got141 = [], {}
+from integrations import common as _cm141                       # the credential store goes to the temp folder too, never ~/.config
+_oc141 = (_cm141.CONFIG_DIR, _cm141.HOME, _cm141.STATE)
+_cm141.CONFIG_DIR, _cm141.HOME, _cm141.STATE = _pdir141 / "cfg", _pdir141 / "home", _pdir141 / "home" / "state"
+for _no141, _reason141 in ((_errno141.ENOSPC, "the disk is full: nothing was saved"), (_errno141.EACCES, "your data folder is read-only: nothing was saved")):
+    for _rt141, _bd141 in _routes141:
+        shutil.rmtree(_pdir141 / "p141new", ignore_errors=True)
+        _undo141 = _write_fails141(_no141)
+        try:
+            _st141, _js141 = _call("POST", _rt141, _bd141)
+        except Exception as _e141:
+            _st141, _js141 = "dropped: " + type(_e141).__name__, {}
+        finally:
+            _undo141()
+        _txt141 = _dj.dumps(_js141)
+        _got141[(_rt141, _no141)] = _st141
+        if _st141 == 500 and _js141.get("error") != _reason141 or not isinstance(_st141, int) or "Errno" in _txt141 or "Traceback" in _txt141 or "OSError" in _txt141 or _st141 >= 500 and _st141 != 500:
+            _bad141.append((_rt141, _no141, _st141, _txt141[:100]))
+check("write routes with a full or read-only data folder: JSON, one plain reason, no stack text, no dropped connection", not _bad141, _bad141)
+_no500 = sorted({r for (r, n), st in _got141.items() if st != 500})
+check("those routes reach their write and answer 500 (the body fits the route)", not _no500, [(r, [(n, _got141[(r, n)]) for n in (_errno141.ENOSPC,)]) for r in _no500])
+
+_cm141.CONFIG_DIR, _cm141.HOME, _cm141.STATE = _oc141
+shutil.rmtree(_pdir141, ignore_errors=True)
+if _roots141 is None: del _os141.environ["QUARTERDECK_PROJECT_ROOTS"]
+else: _os141.environ["QUARTERDECK_PROJECT_ROOTS"] = _roots141
+if _pj141_was is not None: _pj141.write_text(_pj141_was)
+else: _pj141.unlink()
+
 # Issue 167: turning an agent off. Schedules go with it, all or nothing; demo mode changes nothing.
 import attach as _att167
 _pj167 = _TEST_HOME / "config" / "projects.json"

@@ -785,6 +785,10 @@ def main(argv):
     except ValueError as e:
         print(f"  {e}")
         return 2
+    except OSError as e:
+        from integrations import common as _common
+        print("  " + _common.why_not_saved(e))
+        return 1
     return 0
 
 

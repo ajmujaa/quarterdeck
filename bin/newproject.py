@@ -64,6 +64,10 @@ def main(argv):
     except ValueError as e:
         print(f"  {e}")
         return 2
+    except OSError as e:
+        from integrations import common as _common
+        print("  " + _common.why_not_saved(e))
+        return 1
     print(f"  created {dest}  (a git repository with a README and a .gitignore)")
     print(f"  next: bin/qtdeck attach {dest}    to see what the crew would do, then add --apply to register it")
     return 0

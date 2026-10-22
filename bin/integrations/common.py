@@ -82,6 +82,11 @@ def why_not_saved(e):
     return "could not save: " + (getattr(e, "strerror", None) or "the file could not be written")
 
 
+def is_write_failure(e):
+    """True when an OSError is the data folder refusing a write (full, read-only, no permission), not a network or read problem."""
+    return getattr(e, "errno", None) in (errno.ENOSPC, errno.EROFS, errno.EACCES, errno.EPERM, getattr(errno, "EDQUOT", errno.ENOSPC))
+
+
 def write_private(path, text):
     """Atomic write, owner-only: a new temp file in the same folder (a random name made with O_EXCL, so a link planted there is never followed:
     round 8, L3), then rename. The temp file is removed on any error."""

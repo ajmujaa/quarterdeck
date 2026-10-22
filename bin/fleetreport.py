@@ -152,7 +152,8 @@ def main(argv=None):
         else:
             print(source_add(a.id, a.label))
     except (ValueError, OSError) as e:
-        print(f"qtdeck fleet: {e}", file=sys.stderr)
+        from integrations import common as _common
+        print("qtdeck fleet: " + (_common.why_not_saved(e) if isinstance(e, OSError) else str(e)), file=sys.stderr)
         return 1
     return 0
 

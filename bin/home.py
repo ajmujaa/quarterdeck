@@ -290,7 +290,13 @@ if __name__ == "__main__":
     elif cmd == "why":
         print(why())
     elif cmd == "init":
-        print(init(sys.argv[2] if len(sys.argv) > 2 else Path.home() / ".quarterdeck"))
+        try:
+            print(init(sys.argv[2] if len(sys.argv) > 2 else Path.home() / ".quarterdeck"))
+        except OSError as e:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            from integrations import common as _common
+            print("qtdeck: " + _common.why_not_saved(e), file=sys.stderr)
+            sys.exit(1)
         print("  next: qtdeck attach <your project folder>")
     elif cmd == "first-run":                      # bin/lib.sh, rule 4: three lines, the home, why, and 1 if it was just made
         h, w, made = first_run()

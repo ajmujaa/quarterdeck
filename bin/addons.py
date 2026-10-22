@@ -241,7 +241,8 @@ def main(argv=None):
         try:
             made = scaffold(a[1], home)
         except (ValueError, OSError) as e:
-            print(f"qtdeck addon: {e}", file=sys.stderr)
+            from integrations import common as _common
+            print("qtdeck addon: " + (_common.why_not_saved(e) if isinstance(e, OSError) else str(e)), file=sys.stderr)
             return 1
         for p in made:
             print(f"  wrote {p}")

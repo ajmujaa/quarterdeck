@@ -134,6 +134,8 @@ def main(argv):
     except ValueError as e:
         return fail(str(e))
     except (common.IntegrationError, OSError) as e:
+        if isinstance(e, OSError) and common.is_write_failure(e):
+            return fail(common.why_not_saved(e), 1)
         return fail(getattr(e, "short", None) or f"could not do that ({type(e).__name__})", 1)
     except (KeyboardInterrupt, EOFError):
         return fail("stopped; nothing more was changed", 1)

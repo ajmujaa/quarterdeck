@@ -171,7 +171,7 @@ if [ "$ROOK" = 1 ]; then
   mkdir -p "$RO/home/x" && ( cd "$RO/home/x" && git init -q && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m one ) >/dev/null 2>&1; chown -R 65534 "$RO/home/x"
   rm -f "$RO/home/.quarterdeck/state/runs.json"      # the ledger is made on the first command; a folder that cannot be written must not show echo's own error for it
   [ "$(id -u)" = 0 ] && chown -R root "$RO/home/.quarterdeck"; chmod -R a-w,a+rX "$RO/home/.quarterdeck"
-  for c in "enable demo planner" "repo demo a/b" "billing cap daily 5" "dashboard link" "remove demo"; do
+  for c in "enable demo planner" "repo demo a/b" "billing cap daily 5" "dashboard link" "fleet source add src1 Demo" "addon new foo" "add xx --path $RO/home/x --repo o/xx" "attach $RO/home/x --apply" "dashboard sessions revoke" "dashboard --no-open" "fix demo --issue 1" "home init" "remove demo"; do
     qdro $c >"$T/ro.out" 2>&1; rc=$?
     ck "read-only data folder, qtdeck $c: one plain line, non-zero exit, no traceback" \
       '[ "$rc" != 0 ] && grep -qi "read-only\|could not save" "$T/ro.out" && ! grep -q "Traceback\|Error:" "$T/ro.out" && [ "$(wc -l < "$T/ro.out" | tr -d " ")" -le 2 ]'

@@ -690,6 +690,9 @@ def main(argv):
     except ValueError as e:
         print(f"  {e}")
         return 2
+    except OSError as e:
+        print("qtdeck: " + _common.why_not_saved(e), file=sys.stderr)
+        return 1
     return 0
 
 

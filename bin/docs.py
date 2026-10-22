@@ -242,6 +242,10 @@ def main(argv):
     except ValueError as e:
         print(f"docs: {e}", file=sys.stderr)
         return 1
+    except OSError as e:
+        from integrations import common as _common
+        print("docs: " + _common.why_not_saved(e), file=sys.stderr)
+        return 1
     print(__doc__, file=sys.stderr)
     return 2
 

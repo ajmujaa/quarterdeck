@@ -79,6 +79,7 @@ WHAT="item $ITEM of $PANEL_ID"; [ -n "$ISSUE_ARG" ] && WHAT="started from the bo
 KEY="${PANEL_ID}-${ITEM//,/-}"
 
 LOG_FILE="$QUARTERDECK_HOME/logs/fix-$PROJECT.log"
+mkdir -p "$QUARTERDECK_HOME/logs" 2>/dev/null; { : >>"$LOG_FILE"; } 2>/dev/null || die "your data folder cannot be written to (it is read-only or the disk is full): nothing was started"
 if [ -z "$ISSUE_ARG" ]; then
 TX="$QUARTERDECK_HOME/state/panels/$PANEL_ID.json"
 [ -f "$TX" ] || die "fix: no panel called $PANEL_ID"

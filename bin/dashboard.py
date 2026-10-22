@@ -309,6 +309,11 @@ def firstrun_projects():
         return {}
 
 
+def _why(e):
+    """The reason to show for a failed request: the plain write reason when the data folder refused it, else the message, short."""
+    return integrations_common.why_not_saved(e) if isinstance(e, OSError) and integrations_common.is_write_failure(e) else str(e)[:200]
+
+
 def firstrun_api(b=None):
     """GET /api/firstrun -> (200, {first, items, done_at}); POST {action: demo|dismiss, confirm: true} records it in state/first-run.json and, for demo,
     switches Demo on through the same switch as the Demo toggle. Nothing else is written; no secret is read."""
@@ -4285,7 +4290,7 @@ def attach_api(b):
         return 400, {"error": str(e)}
     except OSError as e:
         live_close("attach", "failed")
-        return 500, {"error": str(e)[:200]}
+        return 500, {"error": _why(e)}
     live_close("attach", "done")
     return 200, {"profile": prof, "survey": sv, "ready": ready, "proposal": prop, "applied": bool(b.get("apply")), "registered": already, "agents_md": agents, "duty_options": [{"name": x["name"], "role": x["role"]} for x in duty_list() if x["name"] in _attach.known_duties()], "guardrail_options": _attach.GUARDRAILS, "pack_status": {x["id"]: x["status"] for x in _packs_mod.load()}}
 
@@ -4872,6 +4877,8 @@ def project_verify_api(b):
         _attach.update_commands(project, {"verify": cmd})
     except ValueError as e:
         return 400, {"error": str(e)}
+    except OSError as e:
+        return 500, {"error": integrations_common.why_not_saved(e)}
     _ticket_log("ready-verify-set", project)
     return 200, {"verify": cmd, "run": False}
 
@@ -6436,6 +6443,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._post()
         except BodyError as e:
             return self._send(e.code, json.dumps({"error": str(e)}))
+        except (BrokenPipeError, ConnectionError):
+            raise
+        except OSError as e:                          # any write into the data folder that no route caught: one plain reason, never a dropped connection
+            return self._send(500, json.dumps({"error": integrations_common.why_not_saved(e)}))
 
     def _pair(self):
         """Trade a one-time nonce for a session: an HttpOnly, SameSite=Strict cookie, and the API token for the page's memory."""
@@ -6500,7 +6511,7 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as e:
                 return self._send(400, json.dumps({"error": str(e)}))
             except Exception as e:
-                return self._send(500, json.dumps({"error": str(e)[:200]}))
+                return self._send(500, json.dumps({"error": _why(e)}))
 
         b = self._body()
 
@@ -6589,7 +6600,7 @@ class Handler(BaseHTTPRequestHandler):
             except LookupError as e:
                 return self._send(409, json.dumps({"error": str(e)}))
             except Exception as e:
-                return self._send(500, json.dumps({"error": str(e)[:200]}))
+                return self._send(500, json.dumps({"error": _why(e)}))
 
         if u.path == "/api/run":
             try:
@@ -6598,7 +6609,7 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as e:
                 return self._send(400, json.dumps({"error": str(e)}))
             except Exception as e:
-                return self._send(500, json.dumps({"error": str(e)}))
+                return self._send(500, json.dumps({"error": _why(e)}))
             return self._send(200, json.dumps({"started": what}))
 
         if u.path == "/api/fix":
@@ -6630,7 +6641,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(409 if "already running" in str(e) else 400,
                                   json.dumps({"error": str(e)}))
             except Exception as e:
-                return self._send(500, json.dumps({"error": str(e)}))
+                return self._send(500, json.dumps({"error": _why(e)}))
             BOARD_CACHE.pop(b.get("project"), None)   # the card is about to move
             return self._send(200, json.dumps({"started": what}))
 
@@ -6640,7 +6651,7 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as e:
                 return self._send(409 if "already running" in str(e) or "budget" in str(e) else 400, json.dumps({"error": str(e)}))
             except Exception as e:
-                return self._send(500, json.dumps({"error": str(e)}))
+                return self._send(500, json.dumps({"error": _why(e)}))
             return self._send(200, json.dumps(got))
 
         if u.path == "/api/merge":
@@ -6649,7 +6660,7 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as e:
                 return self._send(409, json.dumps({"error": str(e)}))
             except Exception as e:
-                return self._send(500, json.dumps({"error": str(e)}))
+                return self._send(500, json.dumps({"error": _why(e)}))
             return self._send(200, json.dumps(rec))
 
         if u.path == "/api/mission/action":
@@ -6660,15 +6671,17 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as e:
                 return self._send(409 if "already" in str(e) else 400, json.dumps({"error": str(e)}))
             except Exception as e:
-                return self._send(500, json.dumps({"error": str(e)[:200]}))
+                return self._send(500, json.dumps({"error": _why(e)}))
 
         if u.path == "/api/missions":
             try:
                 rec = mission_act(b.get("action"), b, "dashboard")
             except ValueError as e:
                 return self._send(400, json.dumps({"error": str(e)}))
+            except OSError as e:
+                return self._send(500, json.dumps({"error": integrations_common.why_not_saved(e)}))
             except Exception as e:
-                return self._send(500, json.dumps({"error": str(e)}))
+                return self._send(500, json.dumps({"error": _why(e)}))
             return self._send(200, json.dumps(rec))
 
         if u.path == "/api/capture":
@@ -6688,7 +6701,7 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as e:
                 return self._send(400, json.dumps({"error": str(e)}))
             except OSError as e:
-                return self._send(500, json.dumps({"error": "could not write the note: " + str(e)[:120]}))
+                return self._send(500, json.dumps({"error": integrations_common.why_not_saved(e)}))
 
         if u.path == "/api/intent":
             try:
@@ -6696,7 +6709,7 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as e:
                 return self._send(400, json.dumps({"error": str(e)}))
             except OSError as e:
-                return self._send(500, json.dumps({"error": "could not save the focus: " + str(e)[:120]}))
+                return self._send(500, json.dumps({"error": integrations_common.why_not_saved(e)}))
 
         if u.path == "/api/project-status":
             try:
@@ -6704,7 +6717,7 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as e:
                 return self._send(400, json.dumps({"error": str(e)}))
             except OSError as e:
-                return self._send(500, json.dumps({"error": "could not save: " + str(e)[:120]}))
+                return self._send(500, json.dumps({"error": integrations_common.why_not_saved(e)}))
 
         if u.path == "/api/inbox":
             try:
@@ -6770,7 +6783,7 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     os.kill(pid, signal.SIGTERM)
                 except Exception as e:
-                    return self._send(500, json.dumps({"error": str(e)}))
+                    return self._send(500, json.dumps({"error": _why(e)}))
             return self._send(200, json.dumps({"stopped": lock}))
 
         if u.path == "/api/schedule":
@@ -6865,18 +6878,18 @@ def main():
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))   # atexit stops the helpers; non-zero so launchd restarts us
     if os.environ.get("QUARTERDECK_DEMO") == "1":
         demo_set(True)
-    STATE.mkdir(exist_ok=True)
-    PANELS.mkdir(parents=True, exist_ok=True)
     try:
+        STATE.mkdir(exist_ok=True)
+        PANELS.mkdir(parents=True, exist_ok=True)
         (STATE / "dashboard.pid").write_text(str(os.getpid()))
+        tok = STATE / "dashboard.token"
+        fd = os.open(tok, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)        # owner-only from the first byte, not after
+        with os.fdopen(fd, "w") as f:
+            f.write(TOKEN)
+        os.chmod(tok, 0o600)
     except OSError as e:
         print("quarterdeck: the dashboard cannot start: " + integrations_common.why_not_saved(e), file=sys.stderr)
         sys.exit(1)
-    tok = STATE / "dashboard.token"
-    fd = os.open(tok, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)            # owner-only from the first byte, not after
-    with os.fdopen(fd, "w") as f:
-        f.write(TOKEN)
-    os.chmod(tok, 0o600)
     threading.Thread(target=scheduler_loop, daemon=True).start()
     threading.Thread(target=agenda_loop, daemon=True).start()
     threading.Thread(target=attention_loop, daemon=True).start()
@@ -6912,7 +6925,11 @@ EXTENSIONS = load_extensions()
 
 if __name__ == "__main__":
     if sys.argv[1:3] == ["sessions", "revoke"]:      # `qtdeck dashboard sessions revoke`: every paired browser is signed out, in a running dashboard too
-        sessions_revoke()
+        try:
+            sessions_revoke()
+        except OSError as e:
+            print("quarterdeck: could not sign the browsers out: " + integrations_common.why_not_saved(e), file=sys.stderr)
+            sys.exit(1)
         print("every paired browser is signed out; `qtdeck dashboard link` pairs one again")
         sys.exit(0)
     if sys.argv[1:2] == ["link"]:           # `qtdeck dashboard link`: a fresh one-time link, made by writing into state/, never over HTTP

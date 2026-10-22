@@ -2170,6 +2170,42 @@ _back = _call("GET", "/api/state")[1]
 check("demo off puts the real world back, with no demo marker", _off == (200, {"on": False}) and "demo" not in _back
       and {p["name"] for p in _back["projects"]} == _real_names)
 check("state/, logs/, workspace/ and config/projects.json are byte for byte as they were", _tree_print() == _before)
+# Issue 167: turning an agent off. Schedules go with it, all or nothing; demo mode changes nothing.
+import attach as _att167
+_pj167 = _TEST_HOME / "config" / "projects.json"
+_reg167 = {"p167": {"repo": "x/p", "path": str(_TEST_HOME), "summary": "s", "default_branch": "main", "duties": ["panel", "scribe"], "guardrails": [], "verify": ""},
+           "q167": {"repo": "x/q", "path": str(_TEST_HOME), "summary": "s", "default_branch": "main", "duties": ["panel", "scribe"], "guardrails": [], "verify": ""}}
+_saved167 = (_pj167.read_text() if _pj167.exists() else None, d.SCHEDULES_FILE.read_text() if d.SCHEDULES_FILE.exists() else None)
+_pj167.write_text(_dj.dumps(_reg167))
+def _row167(i, pr, du):
+    return {"id": i, "project": pr, "duty": du, "args": [], "apply": False, "every": "1d", "at": "", "paused": False, "created": "2026-01-01T00:00:00Z", "last_run": None}
+d.SCHEDULES_FILE.write_text(_dj.dumps([_row167("s1", "p167", "scribe"), _row167("s2", "p167", "panel"), _row167("s3", "q167", "scribe")]))
+d.demo_set(True)
+try:
+    _st, _j = d.project_duties_api({"project": "p167", "remove": ["scribe"], "confirm": True})
+finally:
+    d.demo_set(False)
+check("demo mode: turning an agent off changes nothing and says so", _st == 400 and "Demo mode" in _j["error"] and "scribe" in _dj.loads(_pj167.read_text())["p167"]["duties"] and len(_dj.loads(d.SCHEDULES_FILE.read_text())) == 3)
+_real_wj = d.write_json
+def _failing_wj(path, data, *a, **k):
+    if Path(path) == d.SCHEDULES_FILE:
+        raise OSError(28, "No space left on device")
+    return _real_wj(path, data, *a, **k)
+d.write_json = _failing_wj
+try:
+    _st, _j = d.project_duties_api({"project": "p167", "remove": ["scribe"], "confirm": True})
+finally:
+    d.write_json = _real_wj
+check("if the schedules cannot be saved the agent stays on (all or nothing) and the answer is a 500 with one reason",
+      _st == 500 and _j.get("error") and "scribe" in _dj.loads(_pj167.read_text())["p167"]["duties"] and len(_dj.loads(d.SCHEDULES_FILE.read_text())) == 3, (_st, _j))
+_st, _j = d.project_duties_api({"project": "p167", "remove": ["scribe"], "confirm": True})
+_ids = sorted(x["id"] for x in _dj.loads(d.SCHEDULES_FILE.read_text()))
+check("turning it off removes its schedules for this project only", _st == 200 and _ids == ["s2", "s3"] and _j["schedules_removed"] == 1
+      and "scribe" not in _dj.loads(_pj167.read_text())["p167"]["duties"] and "scribe" in _dj.loads(_pj167.read_text())["q167"]["duties"], (_st, _j, _ids))
+if _saved167[0] is not None: _pj167.write_text(_saved167[0])
+if _saved167[1] is not None: d.SCHEDULES_FILE.write_text(_saved167[1])
+else: d.SCHEDULES_FILE.unlink()
+
 _srv.shutdown()
 
 # the scenario: deterministic, it moves, then settles

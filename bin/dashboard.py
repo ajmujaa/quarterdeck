@@ -4853,7 +4853,8 @@ def project_verify_api(b):
 def project_duties_api(b):
     """Turn duties on or off, and allow or forbid full cycles: attach.set_duties, the function `qtdeck enable` and `qtdeck disable` use."""
     import attach as _attach
-    no_demo("change the crew")
+    if DEMO["world"] is not None:
+        return 400, {"error": "Demo mode: nothing is changed."}
     if b.get("confirm") is not True:
         return 400, {"error": "confirm is required: this changes which duties may run for the project"}
     project, add, remove, cycle = b.get("project"), b.get("add", []), b.get("remove", []), b.get("cycle")
@@ -4869,6 +4870,21 @@ def project_duties_api(b):
         return 400, {"error": str(e)}
     except OSError as e:
         return 500, {"error": integrations_common.why_not_saved(e)}
+    if r.get("removed"):
+        # Turning an agent off also removes its scheduled runs for this project (other projects' are left alone), as one action: if the
+        # schedules cannot be saved the duties are put back. A run already in progress is not stopped.
+        scheds = load_schedules()
+        keep = [x for x in scheds if not (x.get("project") == project and x.get("duty") in r["removed"])]
+        if len(keep) != len(scheds):
+            try:
+                write_json(SCHEDULES_FILE, keep)
+            except OSError as e:
+                try:
+                    _attach.set_duties(project, add=r["removed"])
+                except Exception as e2:
+                    log_error("restore duties", e2)
+                return 500, {"error": integrations_common.why_not_saved(e)}
+            r["schedules_removed"] = len(scheds) - len(keep)
     _ticket_log("duties", project)
     return 200, r
 

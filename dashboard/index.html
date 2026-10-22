@@ -2945,7 +2945,8 @@ function crewRow(r){
   const can = st !== "off" && st !== "unbuilt";
   const end = (can ? btn(st === "running" ? "Run another" : "Run", {size: "small", click: act("openRun", runP, duty, many ? r.projects : null), attrs: `data-run="${esc(runP + "/" + duty)}" aria-label="Run the ${esc(duty)}${many && r.projects.length > 1 ? "" : " on " + esc(where)}"`}) : "")
     + (can && st === "running" ? btn("Stop", {size: "small", click: act("stopRun", r.live[0].lock, duty, r.live[0].project)}) : "")
-    + (can ? btn("Log", {size: "small", variant: "text", click: act("seq", ["go", "log"], ["showLog", `${duty}-${a ? a.project : project}`])}) : "");
+    + (can ? btn("Log", {size: "small", variant: "text", click: act("seq", ["go", "log"], ["showLog", `${duty}-${a ? a.project : project}`])}) : "")
+    + (project && st !== "off" ? btn("Turn off", {size: "small", variant: "text", click: act("crewDisable", project, duty), attrs: `data-disable="${esc(duty)}" aria-label="Turn off the ${esc(duty)} for ${esc(project)}"`}) : "");
   return `<div class="crew-row tone-${st}">${li({title: `<span class="mono">${esc(duty)}</span>${sel ? "" : ` <span class="crew-proj">${esc(where)}</span>`} ${badge}`,
     sub: `${esc(crewMod.sentence(duty, r.role))}<br><span class="crew-last">${line}</span>`, end})}</div>`;
 }
@@ -2973,6 +2974,13 @@ async function crewEnable(project, duty){
   toast(`Enabled the ${duty} for ${project}.`); announce(`The ${duty} is enabled for ${project} and is now listed with the enabled agents.`);
   await tick();
   setTimeout(() => focusRun(project + "/" + duty), 120);
+}
+async function crewDisable(project, duty){
+  if(!await confirmDlg(`A run in progress finishes. Its scheduled runs are removed.`, {title: `Turn off ${duty} for ${project}?`, ok: "Turn off"})) return;
+  const j = await post("/api/project/duties", {project, remove: [duty], confirm: true});
+  if(!j) return;
+  toast(`Turned off the ${duty} for ${project}.`); announce(`The ${duty} is turned off for ${project}. It is listed under Available.`);
+  await tick();
 }
 function viewCrew(){
   if(crewMod === null) return `<div class="stack"><sl-skeleton effect="sheen" style="height:90px"></sl-skeleton><sl-skeleton effect="sheen" style="height:200px"></sl-skeleton></div>`;
@@ -5593,7 +5601,7 @@ const ACTIONS = {
   brainErrClear: () => { brainErr = ""; render(); },
   copyCommand, firstRunDemo, firstRunSkip, homeTicket, ackInbox, addSched, approveMissionPlan, attachAdd, attachLook, attachNew, backToLedger, bargeInToggle, briefAct, briefAsk, briefForIssue, briefRetry, briefSend,
   capDone, capSubmit, caseStepTo, closeCard, closeDrawer, closeMissionPage, closeMobileMenu, closePalette, asAdd, asPreset, asRemove, connAddOpen, connAddSave, connEnable, connHelp, connRemove, connRemoveAccount, connSave, connSaveAll, connSignCancel, connSignin, connStore, connTest, crewRun,
-  crewEnable, liveJump, crewSchedule, openRun, runGo, runPaint,
+  crewEnable, crewDisable, liveJump, crewSchedule, openRun, runGo, runPaint,
   dockStartOver, dockGo, dockToggle, explainWrites, fileAsIssues, fixItem, fixSelected, fleetAct, focusEdit, go, helmOrb, leaveBrain, linkPanelToMission,
   loadBoard, markSeen, mergePr, noteAdd, noteDone, noteEditSave, noteEditStart, noteEditStop, noteFilter, notePromote, noteTag, nwMakeBrief,
   openScope, openAttach, openAttention, openCard, openCycleDialog, openDoc, openFocusDrawer, openFullLog, openMission, openMissionPage, openPalette, openPanel, openShowcase,

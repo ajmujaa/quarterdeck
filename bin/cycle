@@ -165,6 +165,7 @@ REPO=$(project_get "$PROJECT" repo)
 num_ok "$CEILING" || die "cycle: QUARTERDECK_CYCLE_BUDGET must be a number of dollars"
 
 LOG_FILE="$QUARTERDECK_HOME/logs/cycle-$PROJECT.log"
+mkdir -p "$QUARTERDECK_HOME/logs" 2>/dev/null; { : >>"$LOG_FILE"; } 2>/dev/null || die "your data folder cannot be written to (it is read-only or the disk is full): nothing was started"
 mkdir -p "$CYCLES"
 if [ -d "$QUARTERDECK_HOME/state/cycle-$PROJECT-$KEY.lock" ] && holder=$(cat "$QUARTERDECK_HOME/state/cycle-$PROJECT-$KEY.lock/pid" 2>/dev/null) && kill -0 "$holder" 2>/dev/null; then
   die "cycle: a cycle is already running for $PROJECT $LABEL (pid $holder)"

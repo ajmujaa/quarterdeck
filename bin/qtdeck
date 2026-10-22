@@ -447,7 +447,7 @@ case "$cmd" in
        --argjson d "$(jq -Rc 'split(",")' <<<"$duties")" \
        '.[$n] = {repo:$r, path:$p, summary:"", default_branch:$b, duties:$d,
                  guardrails:["Never merge a pull request.","Never push to the default branch."]}' \
-       "$PROJECTS_FILE" > "$t" && mv "$t" "$PROJECTS_FILE"
+       "$PROJECTS_FILE" > "$t" 2>/dev/null && mv "$t" "$PROJECTS_FILE" 2>/dev/null || { rm -f "$t"; die "could not save the registry: nothing was registered (is your data folder read-only or the disk full?)"; }
 
     echo "registered '$name' -> $repo  ($path)"
     echo "  duties: $duties"
@@ -625,7 +625,7 @@ case "$cmd" in
       exit 0
     fi
     if [ "${1:-}" = sessions ] && [ "${2:-}" = revoke ]; then      # sign every paired browser out (a running dashboard obeys at once)
-      python3 "$QUARTERDECK_DIR/bin/dashboard.py" sessions revoke
+      python3 "$QUARTERDECK_DIR/bin/dashboard.py" sessions revoke || exit 1
       exit 0
     fi
     if [ "${1:-}" = link ]; then      # a fresh one-time link for a dashboard that is already running (or about to be): pairs one browser, good for five minutes
@@ -637,6 +637,8 @@ case "$cmd" in
       echo "dashboard already running: http://127.0.0.1:$port"
     else
       rm -f "$pidfile"
+      mkdir -p "$QUARTERDECK_HOME/logs" 2>/dev/null
+      { : >>"$QUARTERDECK_HOME/logs/dashboard-server.log"; } 2>/dev/null || die "your data folder cannot be written to (it is read-only or the disk is full): the dashboard was not started"
       nohup python3 "$QUARTERDECK_DIR/bin/dashboard.py" >>"$QUARTERDECK_HOME/logs/dashboard-server.log" 2>&1 &
       for _ in 1 2 3 4 5 6 7 8 9 10; do
         curl -sf -m 1 -o /dev/null "http://127.0.0.1:$port/api/health" && break

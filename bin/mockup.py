@@ -460,4 +460,8 @@ def main(a):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1:])
+    try:
+        main(sys.argv[1:])
+    except OSError as e:
+        from integrations import common as _common
+        sys.exit("mockup: " + _common.why_not_saved(e))

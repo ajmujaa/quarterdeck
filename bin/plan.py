@@ -507,3 +507,6 @@ if __name__ == "__main__":
         main(sys.argv[1:])
     except PlanError as e:
         sys.exit(f"plan: {e}")
+    except OSError as e:
+        from integrations import common as _common
+        sys.exit("plan: " + _common.why_not_saved(e))

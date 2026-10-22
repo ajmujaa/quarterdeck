@@ -58,6 +58,9 @@ def main(argv):
     if argv[:1] in (["-h"], ["--help"]):
         print(__doc__)
         return 0
+    if argv:
+        print("usage: qtdeck setup", file=sys.stderr)
+        return 2
     system = platform.system()
     managers = {m for m in ("brew", "apt-get", "dnf") if shutil.which(m)}
     print("── Quarterdeck setup ──\n")

@@ -982,7 +982,7 @@ def start_cycle(project, issue, confirm, ticket=None):
     if not isinstance(project, str) or project not in projects:
         raise ValueError("unknown project")
     if projects[project].get("cycle") is not True:
-        raise ValueError(f"'{project}' has not opted in to full cycles: add \"cycle\": true to its registry entry")
+        raise ValueError(f"'{project}' has not opted in to full cycles: switch it on with: qtdeck enable {project} cycle")
     if ticket is not None and issue is not None:
         raise ValueError("start a cycle from an issue or from a ticket, not both")
     if ticket is not None:

@@ -133,7 +133,11 @@ if [ "$APPLY" = 1 ]; then
   say "  review it:   git -C $SOURCE_REPO_DIR diff $BASE...$BRANCH"
   say "  keep it:     git -C $SOURCE_REPO_DIR merge $BRANCH        (when you are happy with it)"
   say "  discard it:  git -C $SOURCE_REPO_DIR branch -D $BRANCH"
-  say "  to open a pull request for it later: connect a repo with  qtdeck repo $PROJECT"
+  if [ -n "$(project_get "$PROJECT" repo)" ] && ! git -C "$SOURCE_REPO_DIR" remote get-url origin >/dev/null 2>&1; then
+    say "  to open a pull request for it later: this checkout has no 'origin' remote. Add one that points at $(project_get "$PROJECT" repo) with  git -C $SOURCE_REPO_DIR remote add origin <url>"
+  else
+    say "  to open a pull request for it later: connect a repo with  qtdeck repo $PROJECT"
+  fi
   record_run "$PROJECT" scribe BRANCH "$files_txt on the local branch $BRANCH"
   exit 0
 fi

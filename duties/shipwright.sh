@@ -377,7 +377,11 @@ if [ -n "$TICKET" ]; then
   if jq -es 'any(.[]; .rc == 127)' <<<"$AFTER_CHECKS" >/dev/null 2>&1; then
     say "  exit 127 means that command was not found. The crew never installs a project's tools: run its install step yourself (for example npm install), or change \"verify\" or \"build\" in the project's entry in $PROJECTS_FILE to a command that needs no install."
   fi
-  say "  to open a pull request for it later: connect a repo with  qtdeck repo $PROJECT"
+  if [ -n "$(project_get "$PROJECT" repo)" ] && ! git -C "$SOURCE_REPO_DIR" remote get-url origin >/dev/null 2>&1; then
+    say "  to open a pull request for it later: this checkout has no 'origin' remote. Add one that points at $(project_get "$PROJECT" repo) with  git -C $SOURCE_REPO_DIR remote add origin <url>"
+  else
+    say "  to open a pull request for it later: connect a repo with  qtdeck repo $PROJECT"
+  fi
   record_run "$PROJECT" shipwright BRANCH "$REF → $BRANCH; checks: ${checks_line:-none set}"
   exit 0
 fi

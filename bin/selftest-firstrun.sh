@@ -124,6 +124,8 @@ ck "dashboard ends with the Demo hint" 'grep -qF "Switch Demo on to look around 
 RO="$T/ro"; RUNRO=""; ROOK=1; mkdir -p "$RO/home"; chmod 755 "$T" "$RO"; chmod -R a+rX "$P" "$T/stub"
 if [ "$(id -u)" = 0 ]; then
   if command -v setpriv >/dev/null 2>&1; then RUNRO="setpriv --reuid=65534 --regid=65534 --clear-groups"; chown 65534 "$RO/home"; else ROOK=0; fi
+else
+  ROOK=0       # the owner of a folder can chmod it back (qtdeck does at start), so read-only needs another user to own it
 fi
 qdro() { $RUNRO env -u QUARTERDECK_HOME -u QUARTERDECK_DIR -u QUARTERDECK_HOME_WHY -u PROJECTS_FILE -u QUARTERDECK_SECRETS_DIR \
   HOME="$RO/home" QUARTERDECK_GH="$T/stub/gh" CLAUDE_BIN="$T/stub/claude" QUARTERDECK_DASHBOARD_PORT=1 PYTHONDONTWRITEBYTECODE=1 bash "$P/bin/qtdeck" "$@"; }
@@ -140,7 +142,7 @@ if [ "$ROOK" = 1 ]; then
     '! grep -q "^removed" "$T/ro.out" && jq -e ".demo" "$RO/home/.quarterdeck/config/projects.json" >/dev/null'
   chmod -R u+w "$RO/home/.quarterdeck"
 else
-  echo "  skip  read-only data folder: needs a non-root user or setpriv"
+  echo "  skip  read-only data folder: needs to run as root with setpriv, so the folder belongs to someone else"
 fi
 
 echo; [ "$fails" = 0 ] && echo "  all checks passed" || { echo "  $fails check(s) failed"; exit 1; }

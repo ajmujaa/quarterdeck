@@ -2252,7 +2252,7 @@ check("a showcase item that cannot be saved answers 500 with the plain reason", 
 import builtins as _bi141, os as _os141, pathlib as _pl141
 def _write_fails141(no):
     _real = {"osopen": _os141.open, "open": _bi141.open, "replace": _os141.replace, "wt": _pl141.Path.write_text, "wj": d.write_json, "pw": d._private_write, "ap": d._append_private}
-    _under = lambda f: str(f).startswith((str(_TEST_HOME), str(_pdir141)))
+    _under = lambda f: str(f).startswith((str(_TEST_HOME), str(_pdir141), str(_TEST_HOME.resolve()), str(_pdir141.resolve())))   # macOS temp folders are symlinks: the resolved name counts too
     def _boom(*a, **k):
         raise OSError(no, _os141.strerror(no))
     def _open(f, mode="r", *a, **k):

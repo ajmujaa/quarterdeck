@@ -329,7 +329,7 @@ a.pill{text-decoration:none}a.pill:hover{text-decoration:underline}
 .li .ico{width:34px;height:34px;border-radius:8px;background:var(--accent-bg);color:var(--accent);display:grid;place-items:center;flex:none}
 .li .ico.bad{background:var(--bad-bg);color:var(--bad)}.li .ico.await{background:var(--await-bg);color:var(--await)}
 .li .ico sl-icon{font-size:16px}
-a.mlink,button.mlink{background:none;border:0;padding:0;font:inherit;color:inherit;text-align:left;cursor:pointer;display:inline;border-radius:3px;text-decoration:none}
+a.mlink,button.mlink{background:none;border:0;padding:0;font:inherit;color:inherit;text-align:left;cursor:pointer;display:inline-flex;align-items:center;min-height:24px;border-radius:3px;text-decoration:none}
 .mlink.title{font-weight:500}.mlink.title:hover{color:var(--accent);text-decoration:underline}
 .mlink.link{color:var(--accent);font-size:12.5px;text-decoration:underline;text-underline-offset:2px}
 .empty-state{display:flex;flex-direction:column;align-items:center;gap:var(--s3);text-align:center;padding:var(--s7) var(--s4);border:1px dashed var(--line-2);border-radius:var(--r);background:var(--card)}
@@ -596,6 +596,7 @@ body.hd-sheet #talk-log{min-height:120px;max-height:30vh}
 .calm .card-t{font-size:21px}
 .calm .phead h1{font-size:40px}
 .calm sl-button[size="small"]::part(base){font-size:14.5px;min-height:38px}
+.as-preset{max-width:100%}.as-preset::part(base){white-space:normal;text-align:left;line-height:1.3;padding-block:6px}
 .calm .card-h{padding:24px 28px 0}
 .calm .card-b{padding:14px 28px 28px}
 .calm .page{max-width:800px}
@@ -731,7 +732,7 @@ body.brain-mode .page{padding:0;max-width:none;margin:0;display:flex;flex-direct
 body.brain-mode #lost{margin:var(--s2) 20px 0}
 body.brain-mode #view{flex:1;min-height:0;display:flex;flex-direction:column}
 body.brain-mode .rh{flex:1;min-height:0;overflow:auto;margin:var(--s3) var(--s4)}
-.brain-bar{container:bbar/inline-size;contain:layout}
+.brain-bar{container:bbar/inline-size;position:relative;z-index:5}
 .bb-row{display:flex;align-items:center;gap:var(--s3);flex-wrap:nowrap;min-width:0}
 .bb-grp{display:flex;align-items:center;gap:var(--s2);flex:none;min-width:0}
 .bb-grp+.bb-grp{padding-left:var(--s3);border-left:1px solid var(--line-2)}

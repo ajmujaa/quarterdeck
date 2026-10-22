@@ -30,6 +30,9 @@ page.on("console", m => { if (m.type() === "error") problems.console.push(m.text
 page.on("pageerror", e => problems.page.push(String(e.message)));
 page.on("requestfailed", r => { const why = (r.failure() || {}).errorText || ""; if (!/ERR_ABORTED/.test(why)) problems.requests.push(r.url() + " " + why); });
 page.on("response", r => { if (r.status() >= 400) problems.requests.push(r.url() + " " + r.status()); });
+const sent = [];                                   // every POST the page sends: a double click must send one
+page.on("request", r => { if (r.method() === "POST") sent.push({url: new URL(r.url()).pathname, body: r.postData() || ""}); });
+const sentCount = (path, needle) => sent.filter(x => x.url === path && x.body.includes(needle)).length;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const shot = async name => { try { await page.evaluate(() => window.scrollTo(0, 0)); await page.screenshot({path: path.join(SHOTS, name + ".png")}); } catch (e) { /* a picture is a bonus */ } };
 const view = async () => (await page.locator("#view").innerText().catch(() => "")).replace(/\s+/g, " ").trim();
@@ -82,7 +85,7 @@ try {
   ok("  its buttons: Open the pull request and Dismiss; not Try again, not Close the issue", await button("Open the pull request").count() === 1 && await button("Dismiss").count() === 1 && await button("Try again").count() === 0 && await button("Close the issue").count() === 0);
   await shot("mission-merged");
 
-  await page.evaluate(() => closeMissionPage()); await here(".mission-list", 10000); await sleep(300);
+  await page.evaluate(() => { missionId = ""; go("mission"); }); await here(".mission-list", 10000); await sleep(300);
   const lst1 = await page.locator("#view .mission-list").innerText();
   ok("Hide handled on the mission list: finished and Nothing to build missions are not in it, open ones are", !/Merged on GitHub|Already fixed on main/.test(lst1) && /Stopped, to try again/.test(lst1), lst1.slice(0, 200));
   await page.locator('#view sl-switch[aria-label="Hide handled missions"]').click(); await sleep(500);
@@ -110,7 +113,8 @@ try {
   ok("a real stop says Blocked, with Try again and Dismiss, and the hint to add the brief duty (tp lacks it, the mission has no brief)", /Blocked/.test(v) && await button("Try again").count() === 1 && await button("Dismiss").count() === 1
     && /To make a brief for this issue, add "brief" to the duties of tp/.test(v), v.slice(0, 400));
   await shot("mission-blocked");
-  await button("Try again").click();
+  await button("Try again").dblclick(); await sleep(700);
+  ok("a double click on Try again leaves the confirmation open (the second click must not close it)", await page.locator("#confirm-dlg[open]").count() === 1);
   const msg2 = await confirmed(false);
   ok("Try again asks first; declining starts nothing", msg2 && /same work again/.test(msg2) && !/--issue 20/.test(fixLog()), msg2);
   const hint = await page.evaluate(() => {
@@ -127,14 +131,20 @@ try {
   v = await view();
   ok("  on a project that has the brief duty the mission offers 'Make a brief for this issue' and no hint", /Make a brief for this issue/.test(v) && !/To make a brief for this issue/.test(v), v.slice(0, 300));
   await openMission("fix:issue#20");
-  await button("Dismiss").click(); await button("Undo dismiss").waitFor({state: "visible", timeout: 8000}).catch(() => null); await sleep(300);
+  const dis0 = sentCount("/api/mission/action", '"dismiss"');
+  await button("Dismiss").dblclick(); await button("Undo dismiss").waitFor({state: "visible", timeout: 8000}).catch(() => null); await sleep(300);
   ok("Dismiss is undoable on the page: the button turns into Undo dismiss, and the mission is still on its address", await button("Undo dismiss").count() === 1 && await button("Dismiss").count() === 0 && await page.evaluate(() => missionId === "fix:issue#20" && missionNow().dismissed === true), (await view()).slice(0, 300));
+  ok("  a double click on Dismiss sent one request, not two", sentCount("/api/mission/action", '"dismiss"') - dis0 === 1, sentCount("/api/mission/action", '"dismiss"') - dis0);
   await missions();
   ok("  dismissed, it leaves the list and the count says 2 dismissed", !/Stopped, to try again/.test(await page.locator(".traj .list").innerText().catch(() => "")) && /2 dismissed/.test(await page.locator(".handled-bar").first().innerText()));
   await openMission("fix:issue#20");
   await button("Undo dismiss").click(); await sleep(900);
   await missions();
   ok("  Undo brings it back into the list, and the count goes back to 1", /Stopped, to try again/.test(await page.locator(".traj .list").innerText()) && /1 dismissed/.test(await page.locator(".handled-bar").first().innerText()));
+
+  await openMission("fix:issue#20");
+  await page.locator("#view .back sl-button", {hasText: /All missions/}).click(); await sleep(800);
+  ok("the All missions button on a mission page goes to the Missions list, not a picker", await page.evaluate(() => view === "missions") && await here(".traj", 8000) && !/Pick one to focus on/.test(await view()), (await view()).slice(0, 200));
 
   // ================= Calm mode, a phone, the console =================
   await page.evaluate(() => toggleCalm()); await sleep(500);
@@ -151,6 +161,19 @@ try {
   await missions(); const w3 = await wide();
   ok("at 390px wide the list and the mission pages have no sideways scroll", w1 && w2 && w3, [w1, w2, w3].join());
   await shot("mission-phone");
+  // ================= a plan to approve: a double click approves once =================
+  await page.setViewportSize({width: 1280, height: 1000});
+  const mid = await page.evaluate(async () => {
+    const c = await post("/api/missions", {action: "create", project: "tp", objective: "Double click test"});
+    if (!c) return null;
+    await post("/api/missions", {action: "propose_plan", id: c.id}); await tick(); return c.id;
+  });
+  await missions(); await page.evaluate(id => openMission(id), mid);
+  await page.locator("#dbody sl-button", {hasText: /^\s*Approve this plan\s*$/}).waitFor({state: "visible", timeout: 10000}).catch(() => null);
+  const ap0 = sentCount("/api/missions", "approve_plan");
+  await page.locator("#dbody sl-button", {hasText: /^\s*Approve this plan\s*$/}).dblclick(); await sleep(1500);
+  ok("a double click on Approve this plan sent one request, and the history holds one approval", !!mid && sentCount("/api/missions", "approve_plan") - ap0 === 1
+    && await page.evaluate(id => S.missions.find(m => m.id === id).events.filter(e => e.kind === "approved").length === 1, mid), sentCount("/api/missions", "approve_plan") - ap0);
   ok("no console errors, no page errors, no failed requests", problems.console.length + problems.page.length + problems.requests.length === 0, JSON.stringify(problems));
 } catch (e) {
   ok("the page test ran to the end", false, e && e.stack ? e.stack.split("\n").slice(0, 3).join(" ") : e);

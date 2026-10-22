@@ -146,7 +146,7 @@ STAMP="$(date +%Y-%m-%d)"
 PANEL_ID="${RESUME:-${PROJECT}-${PANEL}-$(date +%s)}"
 TX="$QUARTERDECK_HOME/state/panels/$PANEL_ID.json"
 mkdir -p "$QUARTERDECK_HOME/state/panels"
-TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
+TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"; release_lock' EXIT
 
 # ---- what the panel is looking at -------------------------------------------
 # The harness gathers the target itself rather than trusting each seat to fetch

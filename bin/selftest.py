@@ -4417,6 +4417,20 @@ check("overview: the stack sentence comes from the survey's profile, empty when 
 check("overview: no registered project gives an empty list", d.project_overview({}, [], [], [], {}, [], [], [], [], [], "", "") == [])
 check("overview: the real state and the Demo state both carry it", '"overview": _safe(lambda: project_overview(' in (ROOT / "bin" / "dashboard.py").read_text() and 'st["overview"] = project_overview(' in (ROOT / "bin" / "dashboard.py").read_text())
 
+# two writes of the same file at the same moment both succeed (no shared temp file)
+import tempfile, threading, json; _wj_dir = pathlib.Path(tempfile.mkdtemp()); _wj_errs = []
+def _wj_hammer():
+    for n in range(60):
+        try:
+            d.write_json(_wj_dir / "same.json", {"n": n})
+        except Exception as e:
+            _wj_errs.append(repr(e))
+_wj_ts = [threading.Thread(target=_wj_hammer) for _ in range(8)]
+[t.start() for t in _wj_ts]; [t.join() for t in _wj_ts]
+check("simultaneous write_json calls on one file all succeed and leave no temp file",
+      not _wj_errs and json.loads((_wj_dir / "same.json").read_text()).get("n") is not None and not list(_wj_dir.glob("*.tmp")), str(_wj_errs[:1]))
+shutil.rmtree(_wj_dir, ignore_errors=True)
+
 print()
 if FAILS:
     print(f"  {len(FAILS)} check(s) failed")

@@ -467,6 +467,18 @@ def read_json(path, default):
     return got
 
 
+def _nested_deeper_than(v, limit):
+    """True when lists and objects inside v are nested more than limit deep. Walks with a list, not recursion."""
+    stack = [(v, 1)]
+    while stack:
+        x, d = stack.pop()
+        if isinstance(x, (dict, list)):
+            if d > limit:
+                return True
+            stack.extend((y, d + 1) for y in (x.values() if isinstance(x, dict) else x))
+    return False
+
+
 def text_in(v, name):
     """A text field of a request, stripped; missing is empty, and anything but text (a number, a list, a boolean) is refused with a plain message."""
     if v is None:
@@ -6015,6 +6027,8 @@ class Handler(BaseHTTPRequestHandler):
             raise BodyError(400, "the request body is not JSON")
         if not isinstance(v, dict):
             raise BodyError(400, "the request body must be a JSON object")
+        if _nested_deeper_than(v, 64):                                         # Python 3.12 parses very deep JSON; str() or dumps of it later would not survive
+            raise BodyError(400, "the request body is nested too deeply")
         return v
 
     def do_HEAD(self):

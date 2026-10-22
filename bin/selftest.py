@@ -29,6 +29,7 @@ _os0.environ["QUARTERDECK_HOME"] = str(_TEST_HOME)
 spec = importlib.util.spec_from_file_location("dash", ROOT / "bin" / "dashboard.py")
 d = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(d)
+_REAL_SPAWN_RUN = d.spawn_run
 
 FAILS = []
 
@@ -102,6 +103,30 @@ else:
     except ValueError as e:
         check("a registered project and enabled duty is accepted", False, e)
 
+    # #142: every flag the page can send (dashboard/assets/crew.js) is in the duty's allow-list, and --apply never is
+    _crew = (Path(__file__).resolve().parent.parent / "dashboard" / "assets" / "crew.js").read_text()
+    _blk = _crew.split("export const INFO = {", 1)[1].split("\nconst ORDER", 1)[0]
+    _sent = {}
+    for _m in __import__("re").finditer(r"^  (\w+): \{(.*?)(?=^  \w+: \{|\Z)", _blk, __import__("re").S | __import__("re").M):
+        _sent[_m.group(1)] = set(__import__("re").findall(r'(?:F\(|flag: )"(--[a-z-]+)"', _m.group(2)))
+    check("#142 every flag the page sends is in its duty's allow-list, and --apply is in none",
+          len(_sent) >= 20 and all(f <= d.DUTY_FLAGS.get(n, set()) for n, f in _sent.items()) and not any("--apply" in f for f in d.DUTY_FLAGS.values()),
+          {n: f - d.DUTY_FLAGS.get(n, set()) for n, f in _sent.items() if f - d.DUTY_FLAGS.get(n, set())})
+    def _why(*a):
+        try:
+            d.validate_run(*a)
+            return ""
+        except ValueError as e:
+            return str(e)
+    _ok_flag = sorted(d.DUTY_FLAGS.get(duty, set()))
+    _w1, _w2, _w3 = _why(project, duty, ["--apply"]), _why(project, duty, ["--nonesuch"]), _why(project, duty, ["--zzz-other", "x"])
+    check("#142 --apply inside args is refused (run and schedule share validate_run), naming the duty and the flag",
+          duty in _w1 and "--apply" in _w1, _w1)
+    check("#142 an unknown flag is refused, naming the duty and the flag, before anything starts",
+          duty in _w2 and "--nonesuch" in _w2 and duty in _w3 and "--zzz-other" in _w3, (_w2, _w3))
+    check("#142 each flag the duty takes is still accepted, and a flag only another duty takes (--pr for the purser) is not",
+          all(not _why(project, duty, [f] + (["1"] if f != "--one" else [])) for f in _ok_flag)
+          and "--pr" in d.DUTY_FLAGS["surveyor"] and "--pr" not in d.DUTY_FLAGS["purser"] and "--issue" not in d.DUTY_FLAGS["surveyor"], (duty, _ok_flag))
     check("a shell metacharacter in a value is refused",
           refused(project, duty, ["--path", "; rm -rf /"]))
     check("a path traversal is refused",
@@ -1490,8 +1515,8 @@ check("approving the same revision again (a double click) is a no-op: still appr
 # mission past "draft" for good) does not disturb m's own remaining checks.
 _saved_spawn_run = d.spawn_run
 _spawn_calls = []
-d.spawn_run = lambda project, duty, args, apply_=False, source="dashboard", mission=None: (
-    _spawn_calls.append((project, duty, args, apply_, source, mission)) or "ok")
+d.spawn_run = lambda project, duty, args, apply_=False, source="dashboard", mission=None, idea_text=None: (
+    _spawn_calls.append((project, duty, args, apply_, source, mission, idea_text)) or "ok")
 m2 = d.mission_act("create", {"project": "my-web-app", "objective": "Ship the export button",
                               "constraints": "no new dependencies"}, "owner")
 check("starting a mission with no plan at all is refused", mact_refused("start_panel", {"id": m2["id"]}, "test") and not _spawn_calls)
@@ -1502,9 +1527,9 @@ d.mission_act("approve_plan", {"id": m2["id"], "revision": 1}, "owner")
 d.mission_act("start_panel", {"id": m2["id"]}, "owner")
 check("starting spawns a spec panel seeded with the objective and constraints",
       _spawn_calls and _spawn_calls[0][:2] == ("my-web-app", "panel")
-      and _spawn_calls[0][2][:3] == ["--panel", "spec", "--idea"]
-      and "Ship the export button" in _spawn_calls[0][2][3]
-      and "no new dependencies" in _spawn_calls[0][2][3],
+      and _spawn_calls[0][2] == ["--panel", "spec"]
+      and "Ship the export button" in _spawn_calls[0][6]
+      and "Constraints: no new dependencies" in _spawn_calls[0][6],
       _spawn_calls)
 check("starting is a real write, not a dry run", _spawn_calls[0][3] is True)
 check("the run is tagged with this exact mission, so the ledger can find it back",
@@ -1512,6 +1537,35 @@ check("the run is tagged with this exact mission, so the ledger can find it back
 check("a started mission is no longer a draft", d.load_missions()[-1]["status"] == "started")
 check("starting an already-started mission is refused", mact_refused("start_panel", {"id": m2["id"]}, "test"))
 d.spawn_run = _saved_spawn_run
+
+# Issue 164: the real spawn_run puts the idea in a private file and passes only its path; the text never reaches an argument or the log line.
+_idea = "Add export (CSV, 'quoted' and \"double\")?\nSecond line; $(not run) `nor this`"
+_popen_calls = []
+class _FakeProc:
+    def wait(self):
+        return 0
+_saved_popen = d.subprocess.Popen
+d.subprocess.Popen = lambda argv, **kw: (_popen_calls.append(argv), _FakeProc())[1]
+try:
+    _REAL_SPAWN_RUN("my-web-app", "panel", ["--panel", "spec"], True, "mission", None, idea_text=_idea)
+finally:
+    d.subprocess.Popen = _saved_popen
+_av = _popen_calls[0] if _popen_calls else []
+_ix = _av.index("--idea-file") if "--idea-file" in _av else -1
+_fp = Path(_av[_ix + 1]) if _ix >= 0 else Path("/nonexistent")
+import time as _t164
+for _ in range(50):
+    if not _fp.exists():
+        break
+    _t164.sleep(0.05)
+check("a run's idea text is passed as a file path made inside the data folder, never as an argument",
+      _ix >= 0 and str(_fp.parent) == str(d.STATE / "ideas") and not any("export" in a for a in _av), _av)
+check("the file is removed when the run ends", not _fp.exists())
+_lg = (d.LOGS / "panel-my-web-app.log").read_text()
+check("the run log line names the file, not the idea text", "--idea-file" in _lg and "export" not in _lg.split("--idea-file")[-1], _lg[-300:])
+_f2 = d.write_idea_file(_idea)
+check("the idea file is private (0600) and holds the text intact", (_f2.stat().st_mode & 0o777) == 0o600 and _f2.read_text() == _idea)
+_f2.unlink()
 
 d.mission_act("update", {"id": m["id"], "constraints": "changed my mind"}, "owner")
 check("editing an approved draft invalidates that approval",
@@ -2174,6 +2228,42 @@ _back = _call("GET", "/api/state")[1]
 check("demo off puts the real world back, with no demo marker", _off == (200, {"on": False}) and "demo" not in _back
       and {p["name"] for p in _back["projects"]} == _real_names)
 check("state/, logs/, workspace/ and config/projects.json are byte for byte as they were", _tree_print() == _before)
+# Issue 167: turning an agent off. Schedules go with it, all or nothing; demo mode changes nothing.
+import attach as _att167
+_pj167 = _TEST_HOME / "config" / "projects.json"
+_reg167 = {"p167": {"repo": "x/p", "path": str(_TEST_HOME), "summary": "s", "default_branch": "main", "duties": ["panel", "scribe"], "guardrails": [], "verify": ""},
+           "q167": {"repo": "x/q", "path": str(_TEST_HOME), "summary": "s", "default_branch": "main", "duties": ["panel", "scribe"], "guardrails": [], "verify": ""}}
+_saved167 = (_pj167.read_text() if _pj167.exists() else None, d.SCHEDULES_FILE.read_text() if d.SCHEDULES_FILE.exists() else None)
+_pj167.write_text(_dj.dumps(_reg167))
+def _row167(i, pr, du):
+    return {"id": i, "project": pr, "duty": du, "args": [], "apply": False, "every": "1d", "at": "", "paused": False, "created": "2026-01-01T00:00:00Z", "last_run": None}
+d.SCHEDULES_FILE.write_text(_dj.dumps([_row167("s1", "p167", "scribe"), _row167("s2", "p167", "panel"), _row167("s3", "q167", "scribe")]))
+d.demo_set(True)
+try:
+    _st, _j = d.project_duties_api({"project": "p167", "remove": ["scribe"], "confirm": True})
+finally:
+    d.demo_set(False)
+check("demo mode: turning an agent off changes nothing and says so", _st == 400 and "Demo mode" in _j["error"] and "scribe" in _dj.loads(_pj167.read_text())["p167"]["duties"] and len(_dj.loads(d.SCHEDULES_FILE.read_text())) == 3)
+_real_wj = d.write_json
+def _failing_wj(path, data, *a, **k):
+    if Path(path) == d.SCHEDULES_FILE:
+        raise OSError(28, "No space left on device")
+    return _real_wj(path, data, *a, **k)
+d.write_json = _failing_wj
+try:
+    _st, _j = d.project_duties_api({"project": "p167", "remove": ["scribe"], "confirm": True})
+finally:
+    d.write_json = _real_wj
+check("if the schedules cannot be saved the agent stays on (all or nothing) and the answer is a 500 with one reason",
+      _st == 500 and _j.get("error") and "scribe" in _dj.loads(_pj167.read_text())["p167"]["duties"] and len(_dj.loads(d.SCHEDULES_FILE.read_text())) == 3, (_st, _j))
+_st, _j = d.project_duties_api({"project": "p167", "remove": ["scribe"], "confirm": True})
+_ids = sorted(x["id"] for x in _dj.loads(d.SCHEDULES_FILE.read_text()))
+check("turning it off removes its schedules for this project only", _st == 200 and _ids == ["s2", "s3"] and _j["schedules_removed"] == 1
+      and "scribe" not in _dj.loads(_pj167.read_text())["p167"]["duties"] and "scribe" in _dj.loads(_pj167.read_text())["q167"]["duties"], (_st, _j, _ids))
+if _saved167[0] is not None: _pj167.write_text(_saved167[0])
+if _saved167[1] is not None: d.SCHEDULES_FILE.write_text(_saved167[1])
+else: d.SCHEDULES_FILE.unlink()
+
 _srv.shutdown()
 
 # the scenario: deterministic, it moves, then settles
@@ -2780,6 +2870,36 @@ with _tf.TemporaryDirectory() as _sc:
     except ValueError:
         _miss = True
     check("scan: a folder that does not exist is refused", _miss)
+    # #161: a folder of projects is refused; a project that holds sub-repos, and an empty folder, are not
+    _mp = Path(_sc) / "many"
+    for _n in ("alpha", "beta", "gamma", "delta"):
+        (_mp / _n).mkdir(parents=True); (_mp / _n / ".git").mkdir()
+    (_mp / "notes").mkdir(); (_mp / ".hidden" / "x").mkdir(parents=True); (_mp / ".hidden" / "x" / "package.json").write_text("{}")
+    try:
+        _scan.scan(_mp); _mpe = ""
+    except ValueError as e:
+        _mpe = str(e)
+    check("scan: a folder with no marker of its own and two or more projects inside is refused like the home folder, naming up to three", "is a whole folder of projects, not one project. Choose the project's own folder inside it" in _mpe
+          and "alpha, beta, delta" in _mpe and "gamma" not in _mpe and "notes" not in _mpe and ".hidden" not in _mpe, _mpe)
+    _mp2 = Path(_sc) / "many2"
+    for _n in ("web", "api"):
+        (_mp2 / _n).mkdir(parents=True); (_mp2 / _n / "go.mod").write_text("module x\n")
+    try:
+        _scan.scan(_mp2); _mpe2 = ""
+    except ValueError as e:
+        _mpe2 = str(e)
+    check("scan: sub-folders that only carry a project file count the same", "web, api" in _mpe2 or "api, web" in _mpe2, _mpe2)
+    _mp3 = Path(_sc) / "monorepo"
+    for _n in ("one", "two"):
+        (_mp3 / "vendor-like" / _n).mkdir(parents=True); (_mp3 / _n).mkdir(); (_mp3 / _n / ".git").mkdir()
+    (_mp3 / "package.json").write_text("{}")
+    _mp4 = Path(_sc) / "gitroot"
+    (_mp4 / ".git").mkdir(parents=True)
+    for _n in ("one", "two"):
+        (_mp4 / _n).mkdir(); (_mp4 / _n / ".git").mkdir()
+    check("scan: a real project (a manifest, or a git repository) that holds sub-repositories is still scanned", _scan.scan(_mp3)["name"] == "monorepo" and _scan.scan(_mp4)["name"] == "gitroot")
+    (Path(_sc) / "one-inside").mkdir(); (Path(_sc) / "one-inside" / "only").mkdir(); (Path(_sc) / "one-inside" / "only" / ".git").mkdir()
+    check("scan: one project inside is not a folder of projects, and an empty folder is unchanged", _scan.scan(Path(_sc) / "one-inside")["name"] == "one-inside" and _scan.scan(_empty)["languages"] == [])
     _src = (ROOT / "bin" / "scan.py").read_text()
     check("scan: no network, no shell, no model", not any(w in _src for w in ("urllib", "socket", "subprocess", "os.system", "claude_run", "requests")))
 
@@ -3015,6 +3135,21 @@ with _tf.TemporaryDirectory() as _cd:
         _logtxt = (d.LOGS / "connections.log").read_text() if (d.LOGS / "connections.log").exists() else ""
         check("connections endpoint: nothing changes without confirm, unknown keys are refused, the answer and the log never hold the value",
               _c1 == 400 and _c2 == 200 and _c3 == 400 and "log-me-not" not in _json.dumps(_b2) and "log-me-not" not in _logtxt and "credential" in _logtxt, (_c1, _c2, _c3, _b2, _logtxt))
+        _w1c, _w1 = d.connections_api({"action": "credential", "key": "SLACK_USER_TOKEN", "value": "wrong-prefix-value", "confirm": True})
+        _w1saved = "wrong-prefix-value" in _envp.read_text()
+        _w2c, _w2 = d.connections_api({"action": "credential", "key": "SLACK_USER_TOKEN", "value": "xoxp-" + "right-prefix-value", "confirm": True})
+        _w3c, _w3 = d.connections_api({"action": "credential", "key": "GOOGLE_OAUTH_CLIENT_SECRET", "value": "not-gocspx-free-text", "confirm": True})
+        _w4c, _w4 = d.connections_api({"action": "credential", "key": "SLACK_USER_TOKEN", "value": "", "confirm": True})
+        _logtxt2 = (d.LOGS / "connections.log").read_text()
+        check("#147 a value that does not start the way the manifest says still saves, and the answer carries a warning that never repeats it",
+              _w1c == 200 and _w1saved and _w1.get("present") is True and _w1.get("warning") == "That does not start with xoxp-. It was saved anyway; if the Test fails, check the token."
+              and "wrong-prefix-value" not in _json.dumps(_w1) and "wrong-prefix-value" not in _logtxt2, (_w1c, _w1))
+        check("#147 a value with the right prefix, a free-text 'looks' and a removal carry no warning",
+              _w2c == 200 and "warning" not in _w2 and _w3c == 200 and "warning" not in _w3 and _w4c == 200 and "warning" not in _w4, (_w2, _w3, _w4))
+        check("#147 only a clear 'Starts with X' counts: other wordings and an unknown key give no warning",
+              _mf.prefix_warning("SLACK_USER_TOKEN", "zzz", [{"credentials": [{"key": "SLACK_USER_TOKEN", "looks": "A token that often starts with xoxp-"}]}]) == ""
+              and _mf.prefix_warning("SLACK_USER_TOKEN", "zzz", [{"credentials": [{"key": "SLACK_USER_TOKEN", "looks": "Starts with xoxp- or xoxb-"}]}]) == ""
+              and _mf.prefix_warning("NOPE", "zzz") == "" and "toast(j.warning, false, true)" in (ROOT / "dashboard" / "index.html").read_text())
         d.LOGS = _od[0]
         _src = (ROOT / "bin" / "integrations" / "manifest.py").read_text()
         check("connections: the manifest module makes no network call and starts no process", not any(w in _src for w in ("urllib", "socket", "subprocess", "os.system")))

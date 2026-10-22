@@ -177,6 +177,23 @@ def known_keys(services=None):
     return {c["key"] for s in (load_services() if services is None else services) for c in s["credentials"]} | {common.AGENT_SOURCE_KEY}
 
 
+_STARTS = re.compile(r"Starts with ([A-Za-z0-9_-]{1,20})\.?")
+
+
+def prefix_warning(key, value, services=None):
+    """A sentence when a manifest says the credential `key` "Starts with X" and `value` does not, else "". Only that exact wording counts as a
+    prefix; any other `looks` text (free text, "Digits only") never warns. It only advises: the value is saved either way, and is never in the sentence."""
+    value = str(value or "").strip()
+    if not value:
+        return ""
+    for s in (load_services() if services is None else services):
+        for c in s["credentials"]:
+            m = _STARTS.fullmatch(c.get("looks") or "") if c["key"] == key else None
+            if m:
+                return "" if value.startswith(m.group(1)) else f"That does not start with {m.group(1)}. It was saved anyway; if the Test fails, check the token."
+    return ""
+
+
 _LOCK = threading.RLock()
 _HELD = threading.local()
 

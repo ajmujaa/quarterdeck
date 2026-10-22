@@ -461,6 +461,15 @@ st, j = post("/api/project/duties", {"project": P, "add": ["joiner"], "confirm":
 chk("POST /api/project/duties turns a duty on: the answer lists the duties, the registry has it", st == 200 and "joiner" in j["duties"] and j["added"] == ["joiner"] and "joiner" in registry()[P]["duties"], (st, j))
 st, j = post("/api/project/duties", {"project": P, "remove": ["joiner"], "confirm": True})
 chk("  and off again", st == 200 and "joiner" not in registry()[P]["duties"])
+# Issue 167: turning an agent off also removes that agent's scheduled runs for this project, and only this project's.
+st, j = post("/api/project/duties", {"project": P, "add": ["joiner"], "confirm": True})
+_sf = T + "/state/schedules.json"
+_row = lambda i, pr, du: {"id": i, "project": pr, "duty": du, "args": [], "apply": False, "every": "1d", "at": "", "paused": False, "created": "2026-01-01T00:00:00Z", "last_run": None}
+json.dump([_row("a1", P, "joiner"), _row("a2", P, "joiner"), _row("b1", P, registry()[P]["duties"][0]), _row("c1", "elsewhere", "joiner")], open(_sf, "w"))
+st, j = post("/api/project/duties", {"project": P, "remove": ["joiner"], "confirm": True})
+_left = sorted(x["id"] for x in json.load(open(_sf)))
+chk("turning an agent off removes its schedule entries for that project, leaves its other agents' and other projects' alone, and reports how many",
+    st == 200 and "joiner" not in registry()[P]["duties"] and _left == ["b1", "c1"] and j.get("schedules_removed") == 2, (st, j, _left))
 chk("  an unknown duty, the standing rules, a bad body and an unknown project are each a 400 with the registry unchanged",
     post("/api/project/duties", {"project": P, "add": ["nonesuch"], "confirm": True})[0] == 400 and post("/api/project/duties", {"project": P, "remove": ["guardrails"], "confirm": True})[0] == 400
     and post("/api/project/duties", {"project": P, "add": "joiner", "confirm": True})[0] == 400 and post("/api/project/duties", {"project": "nosuch", "add": ["joiner"], "confirm": True})[0] == 400

@@ -469,6 +469,25 @@ code, body = api(action="enable", id="gmail", label="personal", on=True, test=Tr
 assert body["ok"] is False and "Sign in with Google" in body["message"] and "python3" not in body["message"], body
 code, body = api(action="enable", id="gmail", label="nobody", on=True, test=True)
 assert body["ok"] is False and "no such account" in body["message"]
+# issue 169: a network error with every saved credential present says the token was saved and the network is the problem; other failures keep their words
+try:
+    common._urllib_transport("GET", "http://127.0.0.1:1/", {}, None, 2)
+    raise SystemExit("the closed port answered")
+except common.IntegrationError as e:
+    assert str(e).startswith("network error"), e          # the words the card message keys on come from the real transport
+NETMSG = "Token saved. The service could not be reached just now (network); it will retry on the next refresh."
+api(action="credential", id="slack", key="SLACK_USER_TOKEN", value="not-a-real-token-for-the-test")
+d.subprocess.run = lambda argv, **k: type("R", (), {"returncode": 1, "stdout": "slack: failed: network error: could not reach the service\n", "stderr": ""})()
+code, body = api(action="enable", id="slack", on=True, test=True)
+assert code == 200 and body == {"ok": False, "message": NETMSG}, body
+assert "not-a-real-token-for-the-test" not in json.dumps(body)
+d.subprocess.run = lambda argv, **k: type("R", (), {"returncode": 1, "stdout": "slack: failed: token expired or rejected (HTTP 401): sign in again\n", "stderr": ""})()
+code, body = api(action="enable", id="slack", on=True, test=True)
+assert body["ok"] is False and body["message"] != NETMSG and "401" in body["message"], body
+api(action="credential", id="slack", key="SLACK_USER_TOKEN", value="")
+d.subprocess.run = lambda argv, **k: type("R", (), {"returncode": 1, "stdout": "slack: failed: network error: could not reach the service\n", "stderr": ""})()
+code, body = api(action="enable", id="slack", on=True, test=True)
+assert body["ok"] is False and body["message"] == "network error: could not reach the service", body      # no token saved: the old wording stays
 log = (d.LOGS / "connections.log").read_text()
 assert "log-me-not" not in log and " credential gmail work" in log and " test gmail personal" in log and " remove gmail work" in log, log
 # the DEMO world answers /api/connections with accounts, and refuses writes

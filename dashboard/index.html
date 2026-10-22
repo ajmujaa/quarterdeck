@@ -411,6 +411,7 @@ async function post(path, body){
     headers:{"Content-Type":"application/json","X-Quarterdeck-Token":TOKEN}, body:JSON.stringify(body)});
   const j = await r.json().catch(() => ({}));
   if(r.status === 401){ showUnpaired(); return null; }
+  if(r.status === 403 && j.error === "forbidden"){ showUnpaired("stale"); return null; }   // another tab paired and replaced this tab's key: reads still work, every write is refused
   if(!r.ok){ lastPostError = j.error || ("failed: " + r.status); toast(lastPostError, true); return null; }
   return j;
 }
@@ -5614,6 +5615,7 @@ const ACTIONS = {
 function showUnpaired(why){
   document.body.classList.add("unpaired"); $("#unpaired").hidden = false;
   $("#unpaired-why").textContent = why === "expired" ? "That link has already been used or has expired."
+    : why === "stale" ? "This tab was disconnected, most likely because a newer link was opened in another tab. Nothing you typed was saved."
     : why === "newtab" ? "This is a new tab, and each tab needs its own link." : "This tab is not connected to your dashboard.";
   const t = $("#unpaired-go"); if(t) t.focus();
   unpaired = true;                                   // the poll stops; opening the real link reloads the page

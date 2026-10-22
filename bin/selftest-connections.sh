@@ -263,6 +263,27 @@ assert by["default"]["state"] == "ok" and by["work"]["state"] == "ok" and by["pe
 assert row["state"] == "ok" and row["error"] == "" and "token expired" in by["personal"]["error"]
 assert not any("AT-" in json.dumps(v) or "RT-" in json.dumps(v) for v in (st, row))
 PY
+pyk "issue 169: after a background refresh fails on the network with every credential saved, the card's last-error line says the token is saved and it will retry; a 401 or a missing credential keeps its own words" <<'PY'
+creds("default", "cid-d", "sec-d"); sign_in("default", "RT-default"); manifest.set_enabled("gmail", True)
+def down(method, url, headers, data, timeout):
+    raise common.IntegrationError("network error: could not reach the service")
+common.TRANSPORT = down
+ok, msg = run.run_source("gmail")
+row = lambda: [r for r in manifest.status() if r["id"] == "gmail"][0]
+assert not ok and msg.startswith("network error"), (ok, msg)
+assert row()["error"] == "Token saved. The service could not be reached just now (network); it will retry on the next refresh.", row()["error"]
+assert row()["accounts"][0]["error"] == row()["error"] and row()["state"] == "failing", row()
+assert "could not reach the service" not in json.dumps(row()), row()
+common.TRANSPORT = lambda method, url, headers, data, timeout: (401, b"")           # a refusal says what it says
+ok, msg = run.run_source("gmail")
+assert not ok and "network" not in row()["error"] and "token expired" in row()["error"], row()["error"]
+common.TRANSPORT = down                                                             # a network error with a credential missing is not "saved": the old words stay
+run.run_source("gmail")
+assert row()["error"].startswith("Token saved"), row()["error"]
+common.record_status("gmail", False, "network error: could not reach the service")
+manifest.set_credential("GOOGLE_OAUTH_CLIENT_SECRET", "")
+assert not row()["error"].startswith("Token saved"), row()["error"]
+PY
 pyk "meta writes facebook and instagram under state/connectors/meta/<label>/ for each account" <<'PY'
 from integrations import meta
 common.write_snapshot("facebook", [{"title": "p"}], service="meta", label="work")

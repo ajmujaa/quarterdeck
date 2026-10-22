@@ -122,6 +122,16 @@ def _state_of(s, on, missing, recs, local_last=None):
     return state, last, bad
 
 
+NETWORK_SAVED = "Token saved. The service could not be reached just now (network); it will retry on the next refresh."
+
+
+def _plain_error(text, s, have_l):
+    """The last-error line for a card: a network failure with every saved credential present is not the token's fault, and says so (the Test message says the same)."""
+    if str(text).startswith("network error") and all(c["key"] in have_l for c in s["credentials"] if not c["optional"]) and any(c["key"] in have_l for c in s["credentials"]):
+        return NETWORK_SAVED
+    return text
+
+
 def status(services=None, cfg=None, have=None, recorded=None):
     """One row per service: its state in plain words and when it last refreshed. Values of credentials are never part of it.
     The top-level fields describe the default account; `accounts` lists every account (the default first) with the same facts, and `multi` says
@@ -155,7 +165,7 @@ def status(services=None, cfg=None, have=None, recorded=None):
                         stamp = t
             state, last, bad = _state_of(s, on or s["local"], missing, recs, stamp)
             entry = {"label": label, "enabled": on, "state": state, "missing": missing, "last_at": (last or {}).get("at"),
-                     "error": (bad or {}).get("error_short") or "",
+                     "error": _plain_error((bad or {}).get("error_short") or "", s, have_l),
                      "credentials": [{**c, "present": c["key"] in have_l, "stored": kind if c["key"] in have_l else None} for c in s["credentials"]]}
             if s["id"] in google_oauth.SCOPES:                     # the page offers "Sign in with Google" for these, and says whether it was done
                 entry["signin"] = {"kind": "google", "signed_in": google_oauth.token_file(s["id"], label).is_file()}

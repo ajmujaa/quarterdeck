@@ -731,7 +731,7 @@ body.brain-mode .page{padding:0;max-width:none;margin:0;display:flex;flex-direct
 body.brain-mode #lost{margin:var(--s2) 20px 0}
 body.brain-mode #view{flex:1;min-height:0;display:flex;flex-direction:column}
 body.brain-mode .rh{flex:1;min-height:0;overflow:auto;margin:var(--s3) var(--s4)}
-.brain-bar{container:bbar/inline-size;contain:layout}
+.brain-bar{container:bbar/inline-size;position:relative;z-index:5}
 .bb-row{display:flex;align-items:center;gap:var(--s3);flex-wrap:nowrap;min-width:0}
 .bb-grp{display:flex;align-items:center;gap:var(--s2);flex:none;min-width:0}
 .bb-grp+.bb-grp{padding-left:var(--s3);border-left:1px solid var(--line-2)}

@@ -269,6 +269,22 @@ try {
   await page.goto("about:blank"); await page.goto(BASE + "#/brain/map"); await ready(); await sleep(1000); await page.keyboard.press("Escape"); await sleep(600); s = await snap();
   ok("a Brain opened by a pasted address has no page to return to: Esc goes Home (one new entry)", s.hash === "#/home/overview" && s.view === "overview", JSON.stringify(s));
 
+  // ---- the Brain's More menu (a narrow window folds the toolbar into it) opens above the map and its items take the mouse ----
+  await page.setViewportSize({width: 900, height: 800});
+  await page.goto("about:blank"); await page.goto(BASE + "#/brain/map"); await ready(); await here('.brain-bar [data-k="more"]', 15000); await sleep(800);
+  await page.locator('.brain-bar [data-k="more"]').click(); await sleep(500);
+  const mm = await page.evaluate(() => {
+    const it = [...document.querySelectorAll(".brain-bar .bb-more sl-menu-item")].find(i => i.textContent.trim() === "My focus");
+    if (!it) return {found: false};
+    const r = it.getBoundingClientRect(), top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return {found: true, onItem: !!top && (top === it || it.contains(top)), top: top ? top.localName + "." + top.className : null};
+  });
+  ok("the More menu opens above the map: the My focus item is what the mouse would hit", mm.found && mm.onItem, JSON.stringify(mm));
+  const clicked = await page.locator('.brain-bar sl-menu-item', {hasText: /^\s*My focus\s*$/}).click({timeout: 3000}).then(() => true, () => false); await sleep(500);
+  ok("  a mouse click on that item opens the My focus drawer", clicked && (await text("#dtitle")) === "My focus" && await page.evaluate(() => !!document.querySelector("sl-drawer[open]")));
+  await page.evaluate(async () => { const d = document.querySelector("sl-drawer[open]"); if (d) await d.hide(); }); await sleep(300);
+  await page.setViewportSize({width: 1280, height: 1000});
+
   // ---- polls and re-renders never touch the address ----
   await rail("Projects"); await sleep(300); await tab("missions"); await sleep(400);
   const p0 = await page.evaluate(() => ({len: history.length, hash: location.hash, state: JSON.stringify(history.state)}));

@@ -202,6 +202,19 @@ try {
   await rail("Projects"); await sleep(400);
   ok("  and the Projects rail button opens the place again with the select back", await visible("#proj-switch") && (await snap()).hash.startsWith("#/projects/"));
 
+  // ---- Settings: a daily cap with cents is sent and saved, and a refused cap is explained in plain words ----
+  if (MODE === "real") {
+    const caps = []; page.on("request", r => { if (r.method() === "POST" && new URL(r.url()).pathname === "/api/settings" && (r.postData() || "").includes('"cap"')) caps.push(r.postData()); });
+    await page.evaluate(() => go("settings")); await here("#set-capday", 15000);
+    const capIn = page.locator("#set-capday input");
+    await capIn.fill("12.5"); await capIn.press("Enter"); await sleep(800);
+    ok("a daily cap with cents (12.5) is sent, and the page says Saved", caps.length === 1 && caps[0].includes("12.5") && (await page.locator("sl-alert").allInnerTexts()).some(t => t.includes("Saved.")), JSON.stringify(caps));
+    await capIn.fill("1000000000"); await capIn.press("Enter"); await sleep(800);
+    const alerts = (await page.locator("sl-alert").allInnerTexts()).join(" | ");
+    ok("  a cap that is too large is explained in plain words, with no 'null' in them", /amount in dollars/.test(alerts) && !/null/.test(alerts), alerts);
+    problems.requests = problems.requests.filter(x => !/\/api\/settings 400$/.test(x)); problems.console = problems.console.filter(x => !/status of 400/.test(x));      // that one refusal was the point
+  }
+
   // ================= Calm =================
   await page.evaluate(() => dockGo("overview")); await sleep(300);
   await page.evaluate(() => toggleCalm(true)); await sleep(700);
@@ -239,6 +252,16 @@ try {
     if (madeDir) fs.rmSync(dd, {recursive: true, force: true});
   }
 
+  // ---- notes: the New note and Brain dump boxes stop at 1000 characters, and Edit on a note focuses its box without an error ----
+  if (MODE === "real") {
+    await page.evaluate(async () => { await post("/api/capture", {text: "a note to edit"}); await tick(); go("notes"); }); await here("#note-new", 15000);
+    ok("the New note and Brain dump boxes stop at 1000 characters, as the Edit box does", await page.evaluate(() => document.querySelector("#note-new").getAttribute("maxlength") === "1000" && /<sl-input id="cap-in"[^>]*maxlength="1000"/.test(homeNow())));
+    const errs0 = problems.console.length + problems.page.length;
+    await page.locator("sl-button, button", {hasText: /^\s*Edit\s*$/}).first().click(); await here("#note-edit", 5000); await sleep(600);
+    ok("Edit on a note puts the focus in its edit box and logs no error", await page.evaluate(() => { const e = document.querySelector("#note-edit"); return !!e && (document.activeElement === e || e.matches(":focus-within")); }) && problems.console.length + problems.page.length === errs0, JSON.stringify(problems));
+    await page.evaluate(() => noteEditStop());
+  }
+
   // ================= a phone, and the dark theme =================
   await page.setViewportSize({width: 390, height: 844}); await sleep(500);
   const phone = {};
@@ -254,7 +277,44 @@ try {
   await page.evaluate(() => { openProjects(); }); await sleep(500); await shot("11-projects-dark");
   await page.evaluate(n => openProject(n), A); await sleep(700); await shot("12-project-dark");
   await page.evaluate(() => setTheme("auto")); await sleep(200);
+  // ---- small things: link-style buttons are 24 px tall, Create it is never under a toast, the agent source examples wrap in Calm at 375 px ----
+  if (MODE === "real") {
+    const short = [];
+    for (const v of ["overview", "projects", "missions", "settings"]) {
+      await page.evaluate(x => go(x), v); await sleep(700);
+      short.push(...await page.evaluate(vv => [...document.querySelectorAll("#view .mlink, #view a.link, #view button.link")].filter(e => e.checkVisibility() && e.getBoundingClientRect().width > 0)
+        .map(e => ({v: vv, t: e.textContent.trim().slice(0, 24), h: Math.round(e.getBoundingClientRect().height)})).filter(x => x.h < 24), v));
+    }
+    ok("link-style buttons and links on Home, Projects, Missions and Settings are at least 24 px tall", short.length === 0, JSON.stringify(short.slice(0, 6)));
+    await page.evaluate(() => openAttach()); await here("#nw-name", 10000);
+    const create = page.locator("#dbody sl-button", {hasText: /^\s*Create it\s*$/});
+    await create.scrollIntoViewIfNeeded(); await create.click(); await sleep(600);
+    const cr = await page.evaluate(() => {
+      const b = [...document.querySelectorAll("#dbody sl-button")].find(x => x.textContent.trim() === "Create it"), r = b.getBoundingClientRect(), top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      const n = document.querySelector("#nw-name");
+      return {onButton: !!top && (top === b || b.contains(top)), top: top ? top.localName : null, say: n.helpText, flagged: n.hasAttribute("data-error"), toasts: document.querySelectorAll("sl-alert[variant=danger]").length};
+    });
+    ok("Create it with no name says so at the Name field, and no toast sits over the button", cr.onButton && /name/i.test(cr.say) && cr.flagged && cr.toasts === 0, JSON.stringify(cr));
+    await page.evaluate(() => closeDrawer()); await sleep(500);
+    await page.setViewportSize({width: 375, height: 800}); await page.evaluate(() => { toggleCalm(true); go("connections"); }); await sleep(1200);
+    const pre = await page.evaluate(() => [...document.querySelectorAll(".as-preset")].map(b => Math.round(b.getBoundingClientRect().right)));
+    ok("Calm at 375 px: the agent source example buttons wrap inside the screen", pre.length > 0 && pre.every(x => x <= 375), JSON.stringify(pre));
+    await page.evaluate(() => toggleCalm(false)); await page.setViewportSize({width: 1280, height: 1000}); await sleep(300);
+  }
   ok("no console error, no page error, no failed request", problems.console.length === 0 && problems.page.length === 0 && problems.requests.length === 0, JSON.stringify(problems));
+
+  // ---- last: a second tab in the same browser pairs with a newer link, so this tab's key no longer matches (reads still work, writes are refused) ----
+  if (MODE === "real" && process.env.QD_LINK2) {
+    const tabB = await ctx.newPage(); await tabB.goto("about:blank"); await tabB.goto(process.env.QD_LINK2);
+    await tabB.waitForFunction(() => document.querySelector("#view") && document.querySelector("#view").children.length > 0, null, {timeout: 20000}).catch(() => null);
+    const st = await page.evaluate(async () => {
+      const r = await post("/api/capture", {text: "written from a tab that was overtaken"});
+      const al = [...document.querySelectorAll("sl-alert")].map(a => a.textContent).join(" ");
+      return {r, shown: !document.getElementById("unpaired").hidden, why: document.getElementById("unpaired-why").textContent, toast: /forbidden/i.test(al), way: /qtdeck dashboard link/.test(document.getElementById("unpaired").textContent)};
+    });
+    ok("a write from a tab whose key was replaced by a newer link shows the disconnected screen, not a toast that says only forbidden", st.r === null && st.shown && /disconnected/.test(st.why) && !st.toast, JSON.stringify(st));
+    ok("  that screen shows the way back: the command for a new link", st.shown && st.way);
+  }
 } catch (e) {
   bad++; console.log("FAIL " + TAG + "the page test crashed | " + String(e && e.stack || e).split("\n").slice(0, 4).join(" / "));
   try { await page.screenshot({path: path.join(SHOTS, MODE + "-zz-stopped.png")}); } catch (e2) { /* none */ }

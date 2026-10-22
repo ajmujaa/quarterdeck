@@ -2776,6 +2776,36 @@ with _tf.TemporaryDirectory() as _sc:
     except ValueError:
         _miss = True
     check("scan: a folder that does not exist is refused", _miss)
+    # #161: a folder of projects is refused; a project that holds sub-repos, and an empty folder, are not
+    _mp = Path(_sc) / "many"
+    for _n in ("alpha", "beta", "gamma", "delta"):
+        (_mp / _n).mkdir(parents=True); (_mp / _n / ".git").mkdir()
+    (_mp / "notes").mkdir(); (_mp / ".hidden" / "x").mkdir(parents=True); (_mp / ".hidden" / "x" / "package.json").write_text("{}")
+    try:
+        _scan.scan(_mp); _mpe = ""
+    except ValueError as e:
+        _mpe = str(e)
+    check("scan: a folder with no marker of its own and two or more projects inside is refused like the home folder, naming up to three", "is a whole folder of projects, not one project. Choose the project's own folder inside it" in _mpe
+          and "alpha, beta, delta" in _mpe and "gamma" not in _mpe and "notes" not in _mpe and ".hidden" not in _mpe, _mpe)
+    _mp2 = Path(_sc) / "many2"
+    for _n in ("web", "api"):
+        (_mp2 / _n).mkdir(parents=True); (_mp2 / _n / "go.mod").write_text("module x\n")
+    try:
+        _scan.scan(_mp2); _mpe2 = ""
+    except ValueError as e:
+        _mpe2 = str(e)
+    check("scan: sub-folders that only carry a project file count the same", "web, api" in _mpe2 or "api, web" in _mpe2, _mpe2)
+    _mp3 = Path(_sc) / "monorepo"
+    for _n in ("one", "two"):
+        (_mp3 / "vendor-like" / _n).mkdir(parents=True); (_mp3 / _n).mkdir(); (_mp3 / _n / ".git").mkdir()
+    (_mp3 / "package.json").write_text("{}")
+    _mp4 = Path(_sc) / "gitroot"
+    (_mp4 / ".git").mkdir(parents=True)
+    for _n in ("one", "two"):
+        (_mp4 / _n).mkdir(); (_mp4 / _n / ".git").mkdir()
+    check("scan: a real project (a manifest, or a git repository) that holds sub-repositories is still scanned", _scan.scan(_mp3)["name"] == "monorepo" and _scan.scan(_mp4)["name"] == "gitroot")
+    (Path(_sc) / "one-inside").mkdir(); (Path(_sc) / "one-inside" / "only").mkdir(); (Path(_sc) / "one-inside" / "only" / ".git").mkdir()
+    check("scan: one project inside is not a folder of projects, and an empty folder is unchanged", _scan.scan(Path(_sc) / "one-inside")["name"] == "one-inside" and _scan.scan(_empty)["languages"] == [])
     _src = (ROOT / "bin" / "scan.py").read_text()
     check("scan: no network, no shell, no model", not any(w in _src for w in ("urllib", "socket", "subprocess", "os.system", "claude_run", "requests")))
 

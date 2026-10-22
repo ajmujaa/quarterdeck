@@ -678,4 +678,12 @@ STUB
   lenv "$REAL/bin/qtdeck" dashboard stop >/dev/null 2>&1
 else st_skip "S4 pairing link (macOS open only)"; fi
 
+# ---- #161: a folder that holds several projects is not one project (the scan refuses it, so `qtdeck attach` does too) ------------------------------------
+MP="$T/many161"; mkdir -p "$MP/api" "$MP/web" "$MP/notes" "$T/mp161data"; git -C "$MP/api" init -q; git -C "$MP/web" init -q
+mp_out=$(QUARTERDECK_HOME="$T/mp161data" python3 "$REAL/bin/attach.py" "$MP" --name many --apply 2>&1); mp_rc=$?
+ck "#161 attach refuses a folder of projects, naming them, and registers nothing" '[ "$mp_rc" != 0 ] && grep -q "is a whole folder of projects, not one project" <<<"$mp_out" && grep -q "api, web" <<<"$mp_out" && ! { [ -f "$T/mp161data/config/projects.json" ] && grep -q many "$T/mp161data/config/projects.json"; }'
+git -C "$MP" init -q
+mp_out=$(QUARTERDECK_HOME="$T/mp161data" python3 "$REAL/bin/attach.py" "$MP" 2>&1); mp_rc=$?
+ck "#161 the same folder, once it is a git repository itself, is scanned as one project" '[ "$mp_rc" = 0 ] && ! grep -q "whole folder of projects" <<<"$mp_out"'
+
 st_done

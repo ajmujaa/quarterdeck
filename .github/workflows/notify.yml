@@ -1,0 +1,40 @@
+name: notify
+
+# Sends one message when a full CI run finishes (main, nightly, manual) or any run fails.
+# Does nothing until the repository secrets below exist.
+#   Telegram: TELEGRAM_TOKEN and TELEGRAM_CHAT
+#   Slack:    SLACK_WEBHOOK
+
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.event != 'pull_request' || github.event.workflow_run.conclusion == 'failure'
+    steps:
+      - name: Send message
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT: ${{ secrets.TELEGRAM_CHAT }}
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          RESULT: ${{ github.event.workflow_run.conclusion }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          EVENT: ${{ github.event.workflow_run.event }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          case "$RESULT" in success) icon="✅" ;; *) icon="❌" ;; esac
+          msg="$icon quarterdeck ci $RESULT ($EVENT on $BRANCH, ${SHA:0:7})
+          $URL"
+          if [ -n "$TELEGRAM_TOKEN" ] && [ -n "$TELEGRAM_CHAT" ]; then
+            curl -fsS "https://api.telegram.org/bot$TELEGRAM_TOKEN/sendMessage" \
+              --data-urlencode "chat_id=$TELEGRAM_CHAT" --data-urlencode "text=$msg" >/dev/null
+          fi
+          if [ -n "$SLACK_WEBHOOK" ]; then
+            jq -n --arg t "$msg" '{text:$t}' | curl -fsS -X POST -H 'Content-type: application/json' --data @- "$SLACK_WEBHOOK" >/dev/null
+          fi

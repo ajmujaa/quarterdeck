@@ -51,6 +51,7 @@ import safegit as _safegit
 import projectroots as _projroots                       # where a project folder may live, shared with `qtdeck attach` (bin/projectroots.py)
 import addons as _addons                              # add-ons in the data folder: which files may load, and `qtdeck addon` (bin/addons.py)
 import packs as _packs_mod                              # stack and infrastructure packs (bin/packs.py)
+import limits as _limits                                # the three spend limits you can set (bin/limits.py)
 import spend as _spend                                  # where the tokens went: the Spend view and `qtdeck spend` share it (bin/spend.py)
 
 ROOT = Path(__file__).resolve().parent.parent           # the program: bin/, duties/, crew/, dashboard/
@@ -3912,7 +3913,20 @@ def settings_view():
         "projects": len(read_json(PROJECTS_FILE, {}) or {}),
         "packs": [{k: x[k] for k in ("id", "label", "status")} for x in _packs_mod.load()],
         "billing": _billing.summary(),                   # modes, caps and whether the API key is stored; never the key
+        "limits": limits_view(),
     }
+
+
+def limits_view():
+    """The three spend limits as they are now, the shipped default of each, and today's spend, so the page can show a limit that was loosened."""
+    shipped = {k: env_flag_in(ROOT, n) for k, n in _limits.NAMES.items()}
+    return {"spent_today": round(spent_today(), 2),
+            "limits": {k: {"value": env_flag(n, "") or None, "default": shipped[k]} for k, n in _limits.NAMES.items()}}
+
+
+def env_flag_in(base, name):
+    """One config file's own value for a setting, ignoring your data folder's and the environment's."""
+    return _projroots.env_flag(name, "", (base,))
 
 
 def settings_api(b):
@@ -3932,6 +3946,20 @@ def settings_api(b):
             cfg["duties" if action == "billing" else "seats"][name] = mode
             _billing.save(cfg)
             result = {"billing": _billing.mode(name) if action == "billing" else mode}
+        elif action == "limits":
+            lim = b.get("limits")
+            if not isinstance(lim, dict) or not lim or any(k not in _limits.NAMES for k in lim):
+                return 400, {"error": "limits names call, cycle or day, each an amount in dollars or null for the default"}
+            want = {k: (None if v is None else _limits.amount(v)) for k, v in lim.items()}
+            if any(v is None and lim[k] is not None for k, v in want.items()):
+                return 400, {"error": "A limit is an amount in dollars, like 12.50: above zero, below one million, cents at most."}
+            after = {k: (env_flag(n, "") or None) for k, n in _limits.NAMES.items()}
+            after.update({k: (v if v is not None else env_flag_in(ROOT, _limits.NAMES[k]) or None) for k, v in want.items()})
+            problem = _limits.check(after)
+            if problem:
+                return 400, {"error": problem}
+            _limits.write(HOME, want)
+            result = limits_view()
         elif action == "cap":
             usd = b.get("usd")
             if usd is not None and _billing._usd(usd) is None:
@@ -3949,7 +3977,7 @@ def settings_api(b):
             _billing.save(cfg)
             result = {"caps": _billing.load()["caps"]}
         else:
-            return 400, {"error": "action must be api_key, billing, seat or cap"}
+            return 400, {"error": "action must be api_key, billing, seat, cap or limits"}
     except ValueError as e:
         return 400, {"error": str(e)}
     except OSError as e:

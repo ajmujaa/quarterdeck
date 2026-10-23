@@ -2695,6 +2695,7 @@ function viewSettings(){
       + row("Voice", esc(d.voice) + ", speed " + esc(d.voice_speed), "Speech recognition and the voice run on this computer.")
       + row("Attention timeline", d.attention ? "On" : "Off", "Counts and times only, from your registered projects.")
       + `<p class="sub" style="margin-top:12px">To change any of these, edit <code>${esc((d.env_files[1] || d.env_files[0] || "config/quarterdeck.env"))}</code> and restart the dashboard.</p>`)
+    + sec("Spend limits", limitsCard(d))
     + sec("Billing: your plan or an API key", billingCard(d.billing))
     + sec("Packs", (d.packs || []).map(x => row(x.label, `<code>${esc(x.id)}</code> ${packPill(x.status)}`, "")).join("")
       + ((d.packs || []).some(x => x.status === "experimental") ? `<p class="sub" style="margin-top:12px">${esc(PACK_NOTE)}</p>` : ""))
@@ -2707,16 +2708,12 @@ function viewSettings(){
 function billingCard(b){
   if(!b) return "";
   const store = b.key_store === "keychain" ? "the macOS Keychain" : "the private file on this computer";
-  const cap = b.caps && b.caps.daily_usd != null ? b.caps.daily_usd : "";
   const duties = (b.duties || []).map(x => `<div class="set-row"><span class="set-k">${esc(x.duty)}</span><span class="set-v"><div style="max-width:220px">${slSelect({id: `bill-${x.duty}`, label: "Billing for " + x.duty, cls: "nolabel", value: x.billing, size: "small", options: [["plan", "Your plan"], ["api", "API key"]], change: actOn("change", "setBilling", x.duty, T.sel)})}</div></span></div>`).join("");
   return `<p class="sub">Each duty runs on your Claude sign-in (your plan) unless you choose the API key for it. A duty set to the API key never falls back to your plan: with no key stored, or at a cap, it stops and asks you.</p>
     <form class="conn-cred" ${actOn("submit", "seq", ["setKeySave"], ["preventDefault"])}>
       ${slInput({id: "set-apikey", label: "Anthropic API key", type: "password", password: true, placeholder: b.key_present ? "Enter a new key to replace it" : "Paste the key here",
         help: b.key_present ? `Stored in ${store}. It is never shown again.` : "Not stored."})}
       <div class="btns">${btn("Save", {size: "small", attrs: 'type="submit"'})}${b.key_present ? btn("Remove", {size: "small", click: act("setKeyRemove")}) : ""}</div></form>
-    <form class="conn-cred" ${actOn("submit", "seq", ["setCapSave"], ["preventDefault"])}>
-      ${slInput({id: "set-capday", label: "Daily cap for the API key, in dollars", type: "number", value: cap, placeholder: "No cap", attrs: 'step="any" min="0"', help: `Billed to the key today: ${usd(b.api_spent_today || 0)}. Empty means no daily cap.`})}
-      <div class="btns">${btn("Save cap", {size: "small", attrs: 'type="submit"'})}</div></form>
     ${duties}`;
 }
 async function setKeySave(){
@@ -2736,11 +2733,35 @@ async function setBilling(duty, mode){
   if(j) toast(`${duty}: ${mode === "api" ? "billed to the API key" : "billed to your plan"}.`);
   loadSettings(true);
 }
-async function setCapSave(){
+// The dollar limits a person can set. A limit that is empty is the program's default; one above the default is marked, so a loosened limit is never a surprise.
+const LIMIT_ROWS = [["call", "Per model call", "The most one call may spend. A call past this has gone wrong."],
+                    ["cycle", "Per cycle", "The most one cycle may spend. It cannot be less than the per-call limit."],
+                    ["day", "Per day, automatic work", "Queued and scheduled work starts nothing new once today's spend reaches this. A run you start by hand is never stopped by it."]];
+function limitsCard(d){
+  const L = d.limits || {limits: {}, spent_today: 0}, capNow = d.billing && d.billing.caps && d.billing.caps.daily_usd != null ? d.billing.caps.daily_usd : "";
+  const fields = LIMIT_ROWS.map(([k, label, why]) => {
+    const x = L.limits[k] || {}, loose = x.value != null && x.default != null && Number(x.value) > Number(x.default);
+    const note = (x.value == null ? "No limit is set. " : (x.value === x.default ? `The default, ${usd(x.default)}. ` : `The default is ${usd(x.default)}. `)) + why;
+    return `<div class="set-row">${slInput({id: "set-lim-" + k, label: label + ", in dollars", type: "number", value: x.value == null ? "" : x.value, placeholder: x.default == null ? "No limit" : x.default, attrs: 'step="0.01" min="0.01"', help: note})}${loose ? '<span class="pill warn">above the default</span>' : ""}</div>`;
+  }).join("");
+  return `<p class="sub">Dollars as the Claude CLI counts them. On a plan, they measure how much of your usage a run takes. Spent today: ${usd(L.spent_today || 0)}. Leave a box empty to use the default.</p>
+    <form class="conn-cred" ${actOn("submit", "seq", ["setLimitsSave"], ["preventDefault"])}>${fields}
+      <div class="set-row">${slInput({id: "set-capday", label: "Daily cap for the API key, in dollars", type: "number", value: capNow, placeholder: "No cap", attrs: 'step="any" min="0"', help: `Counts only calls billed to the API key (${usd((d.billing && d.billing.api_spent_today) || 0)} today). It is separate from the per-day limit above. Empty means no cap.`})}</div>
+      <div class="btns">${btn("Save limits", {size: "small", attrs: 'type="submit"'})}</div></form>`;
+}
+async function setLimitsSave(){
+  const lim = {};
+  for(const [k] of LIMIT_ROWS){
+    const el = document.getElementById("set-lim-" + k), v = el ? String(el.value || "").trim() : "";
+    if(v !== "" && !(Number(v) > 0)) return fieldError(el, "Enter an amount in dollars above zero, like 12.50, or leave it empty for the default.");
+    lim[k] = v === "" ? null : v;
+  }
   const el = document.getElementById("set-capday"), v = el ? String(el.value || "").trim() : "";
   if(v !== "" && !(Number(v) >= 0)) return fieldError(el, "Enter an amount in dollars, like 12.50, or leave it empty for no cap.");
-  const j = await post("/api/settings", {action: "cap", scope: "daily", usd: v === "" ? null : Number(v), confirm: true});
-  if(j){ toast("Saved."); loadSettings(true); }
+  const j = await post("/api/settings", {action: "limits", limits: lim, confirm: true});
+  if(!j) return;
+  const c = await post("/api/settings", {action: "cap", scope: "daily", usd: v === "" ? null : Number(v), confirm: true});
+  if(c){ toast("Saved. New runs use these limits."); loadSettings(true); }
 }
 function viewOperations(){
   const {fixing, live} = liveOperations();
@@ -5624,7 +5645,7 @@ const ACTIONS = {
   openScope, openAttach, openAttention, openCard, openCycleDialog, openDoc, openFocusDrawer, openFullLog, openMission, openMissionPage, openPalette, openPanel, openShowcase,
   openWhatChanged, palGo, pickCase, planAct, planMove, projSwitch, proposeMissionPlan, publishShowcase, queueAction, replayStep, restartDemo, rhythmScope,
   rowClick, rowKey, runHarbourmaster, runNext, saveFocus, saveMissionDraft, saveMissionEdit, saveShowcaseDraft, saveShowcaseEdit, schedAction,
-  selectAddon, selectPlace, selectProject, setBilling, setBrainMode, setCapSave, setFleetView, setHandsFree, setKeyRemove, setKeySave, setLens, setSizeBy, setTheme, sgSpeakToggle, showGuardrails, showLog, showPrivacy,
+  selectAddon, selectPlace, selectProject, setBilling, setBrainMode, setLimitsSave, setFleetView, setHandsFree, setKeyRemove, setKeySave, setLens, setSizeBy, setTheme, sgSpeakToggle, showGuardrails, showLog, showPrivacy,
   setHideHandled, dismissedToggle, oldToggle, dismissMission, markMerged, closeIssueFor, retryMission,
   startCycle, startMissionPanel, stopRun, talkSubmit, thinkToggle, tlClick, tlHover, tlSet, toggleCalm, toggleDemo, toggleLedger,
   toggleMissionForm, toggleMobileMenu, toggleOld, toggleReplay, toggleSched, toggleSel, toggleShowcaseForm, unpublishShowcase, unqueue, workOn,

@@ -18,9 +18,9 @@ def env_flag(name, default="", bases=None):
     for base in dict.fromkeys(bases or (_home.resolve(), ROOT)):
         try:
             text = (base / "config" / "quarterdeck.env").read_text()
-            m = re.search(rf'^{name}="\$\{{{name}:-([^}}]*)\}}"', text, re.M)
+            m = re.search(rf'^{name}="(?:\$\{{{name}:-([^}}]*)\}}|([^"$]*))"', text, re.M)   # the shipped form, or a plain line in your own file
             if m:
-                return os.environ.get(name, m.group(1))
+                return os.environ.get(name, m.group(1) if m.group(1) is not None else m.group(2))
         except Exception:
             continue
     return os.environ.get(name, default)

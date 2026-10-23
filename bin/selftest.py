@@ -3426,6 +3426,31 @@ with _tf.TemporaryDirectory() as _bd:
         check("billing: a duty is switched to the API key and caps are set from the Settings API; a duty that does not exist is refused",
               _r3[0] == 200 and _r4[0] == 400 and _r5[0] == 200 and _r6[0] == 200 and _bl.mode("shipwright") == "api" and _bl.mode("surveyor") == "plan"
               and _sv1["billing"]["caps"] == {"daily_usd": 12.5, "duty_usd": {"shipwright": 4.0}} and _sv1["billing"]["key_present"] is True, (_r3, _r4, _r5, _r6))
+        # spend limits: written as plain lines to the owner's own env file, validated, read back, and honoured by the shell
+        _lh, _lenv = _bd / "limhome", {k: _os.environ.pop(k, None) for k in ("QUARTERDECK_CALL_BUDGET", "QUARTERDECK_CYCLE_BUDGET", "QUARTERDECK_DAILY_BUDGET")}
+        (_lh / "config").mkdir(parents=True); _ohome, d.HOME = d.HOME, _lh
+        try:
+            _l0 = d.settings_view()["limits"]
+            _bad = [d.settings_api({"action": "limits", "limits": x, "confirm": True})[0] for x in
+                    ({"day": "0"}, {"day": "-5"}, {"day": "1e3"}, {"day": '5"; rm -rf ~; "'}, {"day": True}, {"nope": "5"}, {}, {"call": "9", "cycle": "4"}, {"call": "99"})]
+            _lfile = _lh / "config" / "quarterdeck.env"
+            check("limits: zero, negative, exponent, shell text, a boolean, an unknown name, nothing, a call limit above the cycle limit: all refused, nothing written",
+                  _bad == [400] * 9 and not _lfile.exists(), (_bad, _lfile.exists()))
+            _l1 = d.settings_api({"action": "limits", "limits": {"day": "80", "call": 2.5}, "confirm": True})
+            check("limits: a good change is written as plain lines to the data folder's file, 0600, and read back with its default beside it",
+                  _l1[0] == 200 and _lfile.read_text().splitlines()[1:] == ['QUARTERDECK_DAILY_BUDGET="80"', 'QUARTERDECK_CALL_BUDGET="2.5"']
+                  and oct(_lfile.stat().st_mode & 0o777) == "0o600" and _l1[1]["limits"]["day"] == {"value": "80", "default": "120"}
+                  and _l1[1]["limits"]["call"]["value"] == "2.5" and _l1[1]["limits"]["cycle"]["value"] == "15", _l1)
+            _sh = _sp.run(["bash", "-c", f'source "{ROOT}/config/quarterdeck.env"; source "{_lfile}"; echo "$QUARTERDECK_DAILY_BUDGET $QUARTERDECK_CALL_BUDGET $QUARTERDECK_CYCLE_BUDGET"'],
+                                 capture_output=True, text=True, env={"PATH": _os.environ["PATH"]}).stdout.split()
+            check("limits: the shell that runs the agents sees the new values, and the untouched one keeps its default", _sh == ["80", "2.5", "15"], _sh)
+            d.settings_api({"action": "limits", "limits": {"day": None}, "confirm": True})
+            check("limits: null goes back to the default and removes only that line",
+                  d.settings_view()["limits"]["limits"]["day"]["value"] == "120" and "DAILY" not in _lfile.read_text() and "CALL_BUDGET" in _lfile.read_text())
+        finally:
+            d.HOME = _ohome
+            for _k, _v in _lenv.items():
+                if _v is not None: _os.environ[_k] = _v
         _seen = _json.dumps([_sv0, _sv1, _r0, _r1, _r2, _r3, _r4, _r5, _r6, d.spend_summary(), _bl.summary(), _bl.doctor_lines()])
         _logs = "".join(p.read_text(errors="replace") for p in (_bd / "home").rglob("*") if p.is_file() and p.name != "integrations.env")
         check("billing: the key is in no Settings, spend or doctor answer, no log and no file of the data folder", _bk not in _seen and _bk not in _logs)

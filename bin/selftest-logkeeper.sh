@@ -164,6 +164,50 @@ st_noreplies; st_reply default "$REC"; panel tp-ruling-only discipline-x; jq '.m
 st_duty logkeeper --panel tp-ruling-only --apply
 ck "a panel that is not a decision panel is refused" '[ "$RC" != 0 ] && grep -q "not a decision panel" <<<"$OUT"'
 
+# your own notes instead of a panel: the same pipeline, the same checks
+printf 'Use SQLite for local state\nWe chose SQLite over a JSON file because two agents write at once.\n' > "$T/notes.txt"
+st_noreplies; st_reply default "$REC"; rm -f "$T/gh-calls"
+st_duty logkeeper --text "$T/notes.txt"
+ck "--text: notes become a proposed record with no panel, nothing is written without --apply, and the notes reach the model as fenced data" \
+   '[ "$(last_verdict)" = DRY-RUN ] && no_gh_writes && grep -q "two agents write at once" "$T/claude-calls" && grep -q "owner.s notes on a decision" "$T/claude-calls"'
+st_duty logkeeper --text "$T/notes.txt" --apply
+tb=$(git -C "$T/origin.git" for-each-ref --format='%(refname:short)' "refs/heads/decision/*" | grep -v -e 0004 -e 0005 -e forged | tail -1)
+ck "--text --apply: one new file on its own branch, a pull request, the trunk untouched, and the record names the notes by hash" \
+   '[ -n "$tb" ] && [ "$(git -C "$T/origin.git" diff --name-only main "$tb" | wc -l | tr -d " ")" = 1 ] && git -C "$T/origin.git" show "$tb:$(git -C "$T/origin.git" diff --name-only main "$tb")" | grep -qE "^Panel: text-[0-9a-f]{12}$"'
+rm -f "$T/gh-calls"; st_duty logkeeper --text "$T/notes.txt" --apply
+ck "the same notes again, while that pull request waits, are refused and open nothing" '[ "$(last_verdict)" = ERROR ] && grep -q "already proposed" <<<"$(last_detail)" && ! grep -q "^gh pr create" "$T/gh-calls" 2>/dev/null'
+: > "$T/empty.txt"; ln -sf "$T/notes.txt" "$T/link.txt"; head -c 20001 /dev/zero | tr '\0' 'a' > "$T/big.txt"
+for bad in "--text $T/empty.txt" "--text $T/link.txt" "--text $T/big.txt" "--text $T/missing.txt" "--text $T/notes.txt --panel tp-decision-1"; do
+  rm -f "$T/gh-calls"; st_duty logkeeper $bad --apply
+  ck "refused, nothing written: logkeeper $bad" '[ "$RC" != 0 ] && no_gh_writes' 
+done
+
+# ---- the sweep: which pull requests a schedule reviews --------------------------------------------------------------------------------
+CLEAN_R='FINDINGS_JSON: []
+ADR: searched 0001, 0002, 0003; none contradicted
+VERDICT: CLEAN'
+st_pr 7 feat-draft src/d.ts $'d\n'; st_pr 8 feat-bot src/b.ts $'b\n'; st_pr 9 feat-stranger src/s.ts $'s\n'
+jq -n '[{number:5,isDraft:false,author:{login:"mujahid",is_bot:false},authorAssociation:"OWNER",updatedAt:"2026-10-01T10:00:00Z"},
+        {number:6,isDraft:false,author:{login:"sam",is_bot:false},authorAssociation:"COLLABORATOR",updatedAt:"2026-10-02T10:00:00Z"},
+        {number:7,isDraft:true,author:{login:"mujahid",is_bot:false},authorAssociation:"OWNER",updatedAt:"2026-10-03T10:00:00Z"},
+        {number:8,isDraft:false,author:{login:"dependabot[bot]",is_bot:true},authorAssociation:"NONE",updatedAt:"2026-10-04T10:00:00Z"},
+        {number:9,isDraft:false,author:{login:"stranger",is_bot:false},authorAssociation:"NONE",updatedAt:"2026-10-05T10:00:00Z"}]' > "$T/ghdata/pr-list.json"
+sweep() { st_noreplies; st_reply default "$CLEAN_R"; rm -f "$T/gh-calls" "$T"/body-*; [ "${KEEP_SEEN:-0}" = 1 ] || echo '{}' > "$T/state/reviewed.json"; st_duty surveyor --apply; }
+commented() { grep -o "^gh pr comment [0-9]*" "$T/gh-calls" 2>/dev/null | awk '{print $4}' | sort -n | tr '\n' ' '; }
+sweep
+ck "a sweep reviews trusted authors' pull requests only: not the draft, the bot or the stranger" '[ "$(commented)" = "5 6 " ]'
+QUARTERDECK_REVIEW_AUTHORS=all sweep
+ck "QUARTERDECK_REVIEW_AUTHORS=all also reviews the stranger, but still not the draft or the bot" '[ "$(commented)" = "5 6 9 " ]'
+QUARTERDECK_REVIEW_AUTHORS=everybody sweep
+ck "any other value is refused and nothing is reviewed" '[ "$RC" != 0 ] && [ -z "$(commented)" ]'
+QUARTERDECK_MAX_ITEMS=1 sweep
+ck "the cap is per run, newest activity first: one review, of #6" '[ "$(commented)" = "6 " ]'
+KEEP_SEEN=1 QUARTERDECK_MAX_ITEMS=1 sweep
+ck "the next run skips what was reviewed and takes the next: #5, so old reviewed pull requests never use up the slots" '[ "$(commented)" = "5 " ]'
+KEEP_SEEN=1 sweep
+ck "and when everything is reviewed at its head, nothing is reviewed again" '[ -z "$(commented)" ]'
+rm -f "$T/ghdata/pr-list.json"
+
 # ---- structure -------------------------------------------------------------------------------------------------------------------------------
 ck "the duty is read whole before it runs" 'grep -q "^# quarterdeck: read-whole-file$" "$REAL/duties/logkeeper.sh" && [ "$(tail -c 3 "$REAL/duties/logkeeper.sh" | tr -d "\n")" = "}" ]'
 ck "the only push is to the record's own decision branch, never the trunk, never forced" '[ "$(grep -c "push -q" "$REAL/duties/logkeeper.sh")" = 1 ] && grep -q "push -q origin \"HEAD:refs/heads/\$BR\"" "$REAL/duties/logkeeper.sh" && ! grep -E "push.*(--force|-f |refs/heads/\\\$BASE|refs/heads/main)" "$REAL/duties/logkeeper.sh" | grep -v "^#" | grep -q .'

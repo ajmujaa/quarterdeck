@@ -13,6 +13,7 @@
 #
 #   qtdeck run <p> logkeeper --panel <decision-panel-id>            report only
 #   qtdeck run <p> logkeeper --panel <decision-panel-id> --apply    branch decision/NNNN-slug and a pull request
+#   qtdeck run <p> logkeeper --text <file> [--apply]                 the same, from your own notes on a decision (no panel needed)
 #
 # Contract:
 #   RECORD_JSON: {"title","chosen","rejected":[{"option","cost"}],"hard_to_reverse":[],"wrong_if":[],"paths":[],"keywords":[]}
@@ -37,22 +38,34 @@ ADR_PY="${ADR_PY:-$QUARTERDECK_DIR/bin/adr.py}"
 # Writing a record from a ruling is routine work, not a hard call.
 export QUARTERDECK_MODEL_PERSONA="${QUARTERDECK_MODEL_LOGKEEPER:-claude-sonnet-5}"
 
-APPLY=0 PANEL=""
+APPLY=0 PANEL="" TEXTFILE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --apply) APPLY=1 ;;
     --panel) PANEL="${2:-}"; shift ;;
+    --text) TEXTFILE="${2:-}"; shift ;;
     *) die "logkeeper: unknown argument '$1'" ;;
   esac
   shift
 done
 [ "${QUARTERDECK_DRY_RUN:-1}" = 0 ] && APPLY=1
-[[ "$PANEL" =~ ^[A-Za-z0-9._-]+$ ]] || die "logkeeper needs a decision panel: --panel <id>"
-TX="$QUARTERDECK_HOME/state/panels/$PANEL.json"
-[ -f "$TX" ] || die "logkeeper: no panel called $PANEL"
-[ "$(jq -r .project "$TX")" = "$PROJECT" ] || die "logkeeper: $PANEL belongs to another project"
-[ "$(jq -r '.mode // .discipline // ""' "$TX")" = decision ] || die "logkeeper: $PANEL is not a decision panel"
-[ "$(jq '.ruling | length' "$TX")" -gt 0 ] || die "logkeeper: $PANEL has not ruled yet"
+if [ -n "$TEXTFILE" ]; then
+  # Your own notes on a decision. The file is read here, once; its name is the hash of what it says, so asking twice records it once.
+  [ -z "$PANEL" ] || die "logkeeper: give --panel or --text, not both"
+  [ -f "$TEXTFILE" ] && [ ! -L "$TEXTFILE" ] || die "logkeeper: --text needs a plain file: $TEXTFILE"
+  [ "$(wc -c <"$TEXTFILE" | tr -d ' ')" -le 20000 ] || die "logkeeper: the notes are over 20000 bytes; cut them to the decision itself"
+  NOTES=$(cat "$TEXTFILE"); [ -n "${NOTES//[[:space:]]/}" ] || die "logkeeper: the notes file is empty"
+  PANEL="text-$(printf %s "$NOTES" | shasum -a 256 | cut -c1-12)"
+  SRC_WORDS="notes on a decision (\`$PANEL\`)"
+else
+  [[ "$PANEL" =~ ^[A-Za-z0-9._-]+$ ]] || die "logkeeper needs a decision panel (--panel <id>) or your own notes (--text <file>)"
+  TX="$QUARTERDECK_HOME/state/panels/$PANEL.json"
+  [ -f "$TX" ] || die "logkeeper: no panel called $PANEL"
+  [ "$(jq -r .project "$TX")" = "$PROJECT" ] || die "logkeeper: $PANEL belongs to another project"
+  [ "$(jq -r '.mode // .discipline // ""' "$TX")" = decision ] || die "logkeeper: $PANEL is not a decision panel"
+  [ "$(jq '.ruling | length' "$TX")" -gt 0 ] || die "logkeeper: $PANEL has not ruled yet"
+  SRC_WORDS="the ruling of Quarterdeck panel \`$PANEL\`"
+fi
 
 acquire_lock "logkeeper-$PROJECT-$PANEL"
 export QUARTERDECK_RUN_ID="$(tr '/' '_' <<<"$REPO")-logkeeper-$PANEL"
@@ -69,7 +82,8 @@ if safe_git -C "$SOURCE_REPO_DIR" grep -qE "^Panel: $PANEL\$" "$ref" -- docs/dec
   exit 0
 fi
 
-subject=$(jq -r '.subject' "$TX"); headline=$(jq -r '.headline // ""' "$TX")
+if [ -n "${NOTES:-}" ]; then subject=$(printf %s "$NOTES" | grep -m1 '[^[:space:]]' | cut -c1-100); headline=""
+else subject=$(jq -r '.subject' "$TX"); headline=$(jq -r '.headline // ""' "$TX"); fi
 working_on "decision: $subject"
 say "quarterdeck: logkeeper on $PANEL — $subject"
 
@@ -79,11 +93,12 @@ You are keeping the project's log of decisions. A decision panel has ruled on th
 that decision from the ruling and nothing else: do not add options the panel did not weigh, and do not soften what it
 said was expensive to reverse.
 
-$({ printf 'THE QUESTION\n%s\n' "$subject"
+$(if [ -n "${NOTES:-}" ]; then printf 'THE DECISION, IN THE OWNER'"'"'S OWN WORDS (notes; write the record from these and nothing else)\n%s\n' "$NOTES" | untrusted "owner's notes on a decision"
+else { printf 'THE QUESTION\n%s\n' "$subject"
   [ -n "$headline" ] && printf '\nTHE ANSWER OF THE PANEL, IN ONE LINE\n%s\n' "$headline"
   printf '\nTHE RULING (items the panel kept; each has an area such as decision, option rejected, consequence, risk, reversibility)\n'
   jq -r '.ruling[] | "- [\(.area // "?")] \(.title): \(.claim) Where: \(.where). Why it matters: \(.why). \(if (.note // "") != "" then "Ruling note: " + .note else "" end)"' "$TX"
-} | untrusted "decision panel ruling")
+} | untrusted "decision panel ruling"; fi)
 
 Return the parts of the record as data. The harness renders the file, so do not write markdown headings.
 - title: what was chosen, as a short phrase (at most 100 characters).
@@ -145,7 +160,7 @@ fi
 # Already proposed? The same panel must not open a second pull request while the first waits.
 guard 120 "${SAFE_GIT[@]}" -C "$SOURCE_REPO_DIR" fetch -q origin '+refs/heads/decision/*:refs/remotes/origin/decision/*' 2>>"$LOG_FILE" || true
 for b in $(safe_git -C "$SOURCE_REPO_DIR" for-each-ref --format='%(refname)' refs/remotes/origin/decision 2>/dev/null); do
-  if safe_git -C "$SOURCE_REPO_DIR" log -1 --format=%B "$b" 2>/dev/null | grep -qF "Quarterdeck panel $PANEL."; then
+  if safe_git -C "$SOURCE_REPO_DIR" log -1 --format=%B "$b" 2>/dev/null | grep -qF -e "Quarterdeck panel $PANEL." -e "($PANEL)."; then
     say "quarterdeck: $PANEL is already proposed as ${b#refs/remotes/origin/} — merge or close that pull request first"
     record_run "$PROJECT" logkeeper ERROR "$PANEL — already proposed as ${b#refs/remotes/origin/}"
     exit 0
@@ -188,9 +203,9 @@ render > "$WT/$FILE"
   || { record_run "$PROJECT" logkeeper ERROR "$PANEL — the commit would hold more than $FILE"; die "logkeeper: the working tree holds more than the record; nothing committed"; }
 safe_git -C "$WT" add -- "$FILE"
 commit_identity "$PROJECT" "$WT" || die "no commit identity for $PROJECT: GitHub could not be asked for the account's no-reply address and the checkout has no user.email (set \"git\": {\"name\", \"email\"} in the registry)"
-safe_git -C "$WT" ${COMMIT_ID[@]+"${COMMIT_ID[@]}"} commit -q -m "$(printf 'decision %s: %s\n\nRecord of the ruling of Quarterdeck panel %s.\n\nOpened by the Quarterdeck logkeeper.\n' "$num" "$(jq -r .title <<<"$rec")" "$PANEL")" || die "commit failed"
+safe_git -C "$WT" ${COMMIT_ID[@]+"${COMMIT_ID[@]}"} commit -q -m "$(printf 'decision %s: %s\n\nRecord of %s.\n\nOpened by the Quarterdeck logkeeper.\n' "$num" "$(jq -r .title <<<"$rec")" "${SRC_WORDS//\`/}")" || die "commit failed"
 safe_git_guard 180 -C "$WT" push -q origin "HEAD:refs/heads/$BR" 2>>"$LOG_FILE" || { record_run "$PROJECT" logkeeper ERROR "$PANEL push failed"; die "push failed"; }
-pr_body="Record of a decision, written from the ruling of Quarterdeck panel \`$PANEL\`.
+pr_body="Record of a decision, written from $SRC_WORDS.
 
 **$(jq -r .title <<<"$rec")**
 

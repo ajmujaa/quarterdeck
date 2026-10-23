@@ -18,3 +18,7 @@ Nothing below has been run. Each step is yours to take.
 5. After either, `qtdeck setup` is the first command a newcomer runs; the dashboard's first-run screen then lists what is missing.
 
 `bin/release.py` refuses a malformed version and a missing tarball, uses no network, and never runs git push, npm or brew.
+
+## npm from CI
+
+`.github/workflows/publish.yml` publishes `qtdeck` to npm when a tag like `v0.1.1` is pushed (the tag must be on main). It stores no token: on npmjs.com, open the package, then Settings, Trusted Publisher, GitHub Actions, and enter user `ajmujaa`, repository `quarterdeck`, workflow `publish.yml`. Running the workflow by hand from the Actions tab does a dry run that publishes nothing.

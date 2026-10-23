@@ -1,0 +1,52 @@
+name: publish
+
+# Publishes the npm package `qtdeck` when a version tag (v1.2.3) is pushed.
+# No token is stored: npm "trusted publishing" lets this workflow sign in with its GitHub identity.
+# Setup once on npmjs.com: package qtdeck > Settings > Trusted Publisher > GitHub Actions,
+#   organization or user: ajmujaa, repository: quarterdeck, workflow filename: publish.yml
+# Run it by hand (Actions > publish > Run workflow) for a dry run that publishes nothing.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  npm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+      - name: Work out the version and refuse a tag that is not on main
+        id: v
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            ver="${GITHUB_REF_NAME#v}"
+            git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "tag $GITHUB_REF_NAME is not on main"; exit 1; }
+          else
+            ver="0.0.0-dryrun"
+          fi
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+      - name: Build the package
+        run: |
+          python3 bin/release.py "${{ steps.v.outputs.version }}" --npm --out dist/release
+          jq 'del(.private)' dist/release/npm/package.json > dist/release/npm/package.json.new
+          mv dist/release/npm/package.json.new dist/release/npm/package.json
+          cd dist/release/npm && npm pack --dry-run
+      - name: Publish
+        working-directory: dist/release/npm
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then npm publish --provenance --access public
+          else echo "dry run: nothing published"; fi

@@ -52,8 +52,17 @@ fi
 if [ -n "$PR" ]; then
   targets="$PR"
 else
-  targets=$(guard 60 "$GH" pr list -R "$REPO" --state open --limit "${QUARTERDECK_MAX_ITEMS:-5}" --json number --jq '.[].number' 2>>"$LOG_FILE")
+  # A sweep reviews what a person would want reviewed, newest activity first: not drafts, not bots (dependency updates have their own checks), and
+  # only pull requests from people with a stake in the repository (owner, member, collaborator) unless QUARTERDECK_REVIEW_AUTHORS=all. A review
+  # costs money, and on a public repository anyone can open a pull request. Merged and closed ones are not listed at all.
+  case "${QUARTERDECK_REVIEW_AUTHORS:-trusted}" in all) everyone=true ;; trusted) everyone=false ;; *) die "surveyor: QUARTERDECK_REVIEW_AUTHORS is trusted or all" ;; esac
+  targets=$(guard 60 "$GH" pr list -R "$REPO" --state open --limit 100 --json number,isDraft,author,authorAssociation,updatedAt \
+    --jq "[.[] | select((.isDraft // false) | not) | select(((.author.is_bot // false) or ((.author.login // \"\") | endswith(\"[bot]\"))) | not)
+          | select($everyone or ((.authorAssociation // \"\") | IN(\"OWNER\",\"MEMBER\",\"COLLABORATOR\")))]
+          | sort_by(.updatedAt // \"\") | reverse | .[].number" 2>>"$LOG_FILE")
 fi
+MAXN="${QUARTERDECK_MAX_ITEMS:-5}"; [[ "$MAXN" =~ ^[0-9]+$ ]] && [ "$MAXN" -gt 0 ] || MAXN=5
+reviewed_n=0
 [ -n "${targets:-}" ] || { say "quarterdeck: no open pull requests on $REPO"; log "$PROJECT: nothing to review"; exit 0; }
 
 SEEN="$QUARTERDECK_HOME/state/reviewed.json"
@@ -75,6 +84,9 @@ for num in $targets; do
     log "$PROJECT#$num: already reviewed at $sha"; continue
   fi
 
+  # A sweep stops after MAXN reviews a run, counted after the ones already reviewed are skipped, so old reviewed pull requests never use up the slots.
+  if [ -z "$PR" ] && [ "$reviewed_n" -ge "$MAXN" ]; then log "$PROJECT: reached $MAXN reviews this run; the rest wait for the next"; break; fi
+  reviewed_n=$((reviewed_n + 1))
   working_on "PR #$num — $title"
   say "quarterdeck: reviewing $REPO#$num — $title"
   export QUARTERDECK_RUN_ID="$(tr '/' '_' <<<"$REPO")-${num}-${sha:0:8}"

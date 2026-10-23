@@ -1,11 +1,10 @@
-# Homebrew formula for Quarterdeck. A tap keeps only this file.
+# Homebrew formula for Quarterdeck @VERSION@ (the version comes from the URL). A tap keeps only this file.
 # The three @...@ words are filled in by bin/release.py from a real tarball; nothing here is published until the owner does it (packaging/README.md).
 class Qtdeck < Formula
-  desc "A local dashboard and crew of agents for your software projects"
+  desc "Local dashboard and crew of agents for your software projects"
   homepage "https://github.com/ajmujaa/quarterdeck"
   url "@URL@"
   sha256 "@SHA256@"
-  version "@VERSION@"
   license "Apache-2.0"
 
   depends_on "gh"
@@ -18,7 +17,7 @@ class Qtdeck < Formula
     libexec.install Dir["*"]
     (bin/"qtdeck").write <<~EOS
       #!/bin/bash
-      PATH="#{Formula["python@3.12"].opt_libexec}/bin:$PATH" exec "#{libexec}/bin/qtdeck" "$@"
+      PATH="#{formula_opt_libexec("python@3.12")}/bin:$PATH" exec "#{libexec}/bin/qtdeck" "$@"
     EOS
     chmod 0755, bin/"qtdeck"
   end

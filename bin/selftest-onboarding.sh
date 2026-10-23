@@ -46,7 +46,7 @@ chk = lambda label, cond, extra="": print(("ok " if cond else "FAIL ") + label +
 body = re.sub(r"<<~(\w+)\n.*?\n\s*\1\n", "<<~HEREDOC\n", t, flags=re.S)         # a heredoc's text is not code
 openers = len(re.findall(r"^\s*(?:class|def)\b|\bdo(?:\s*\|[^|]*\|)?\s*$", body, flags=re.M))
 ends = len(re.findall(r"^\s*end\s*$", body, flags=re.M))
-chk("the formula is class Qtdeck with desc, homepage, license Apache-2.0 and a url, sha256 and version", bool(re.search(r"^class Qtdeck < Formula$", t, re.M)) and all(re.search(r'^\s*%s "' % k, t, re.M) for k in ("desc", "homepage", "url", "sha256", "version")) and 'license "Apache-2.0"' in t)
+chk("the formula is class Qtdeck with desc, homepage, license Apache-2.0 and a url and sha256 (the version comes from the url)", bool(re.search(r"^class Qtdeck < Formula$", t, re.M)) and all(re.search(r'^\s*%s "' % k, t, re.M) for k in ("desc", "homepage", "url", "sha256")) and 'license "Apache-2.0"' in t)
 chk("  do/def/class and end are balanced", openers == ends and openers >= 4, (openers, ends))
 chk("  each placeholder (@URL@, @SHA256@, @VERSION@) is present exactly once, and there are no others", all(t.count(x) == 1 for x in ("@URL@", "@SHA256@", "@VERSION@")) and sorted(set(re.findall(r"@[A-Z0-9_]+@", t))) == ["@SHA256@", "@URL@", "@VERSION@"])
 chk("  it depends on python@3.12, jq, gh and git", all(('depends_on "%s"' % d) in t for d in ("python@3.12", "jq", "gh", "git")))
@@ -83,7 +83,7 @@ env = dict(os.environ, PATH=T + "/spy:" + os.environ["PATH"])
 out = T + "/rel1"
 r = subprocess.run(rel + ["9.9.9", "--tarball", tb, "--out", out], capture_output=True, text=True, env=env)
 f = open(out + "/homebrew/qtdeck.rb").read() if r.returncode == 0 else ""
-chk("release.py fills a COPY of the formula: the default URL pattern, the sha256 of the given tarball and the version, no placeholder left", r.returncode == 0 and "https://github.com/ajmujaa/quarterdeck/archive/refs/tags/v9.9.9.tar.gz" in f and sha in f and 'version "9.9.9"' in f and not re.search(r"@[A-Z0-9_]+@", f), r.stdout + r.stderr)
+chk("release.py fills a COPY of the formula: the default URL pattern, the sha256 of the given tarball and the version, no placeholder left", r.returncode == 0 and "https://github.com/ajmujaa/quarterdeck/archive/refs/tags/v9.9.9.tar.gz" in f and sha in f and "Quarterdeck 9.9.9" in f and 'version "' not in f and not re.search(r"@[A-Z0-9_]+@", f), r.stdout + r.stderr)
 chk("  the source formula is untouched", open(R + "/packaging/homebrew/qtdeck.rb").read().count("@URL@") == 1)
 r2 = subprocess.run(rel + ["9.9.9", "--tarball", tb, "--url", "https://example.invalid/x.tgz", "--out", T + "/rel2"], capture_output=True, text=True, env=env)
 chk("  --url is used instead of the pattern", r2.returncode == 0 and 'url "https://example.invalid/x.tgz"' in open(T + "/rel2/homebrew/qtdeck.rb").read())

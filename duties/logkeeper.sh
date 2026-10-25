@@ -258,7 +258,7 @@ worktree_at "$SOURCE_REPO_DIR" "$WT" "$ref" || die "could not create a worktree 
 safe_git -C "$WT" checkout -q -B "$BR" 2>>"$LOG_FILE" || die "could not create branch $BR"
 mkdir -p "$WT/docs/decisions"
 render > "$WT/$FILE"
-[ "$(safe_git -C "$WT" status --porcelain | wc -l | tr -d ' ')" = 1 ] && safe_git -C "$WT" status --porcelain | grep -qF "$FILE" \
+[ "$(safe_git -C "$WT" status --porcelain --untracked-files=all | wc -l | tr -d ' ')" = 1 ] && safe_git -C "$WT" status --porcelain --untracked-files=all | grep -qF "$FILE" \
   || { record_run "$PROJECT" logkeeper ERROR "$PANEL — the commit would hold more than $FILE"; die "logkeeper: the working tree holds more than the record; nothing committed"; }
 safe_git -C "$WT" add -- "$FILE"
 commit_identity "$PROJECT" "$WT" || die "no commit identity for $PROJECT: GitHub could not be asked for the account's no-reply address and the checkout has no user.email (set \"git\": {\"name\", \"email\"} in the registry)"

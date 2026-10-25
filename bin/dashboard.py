@@ -4655,7 +4655,101 @@ def ready_view(project):
     v["last_error"] = {"prove": _ready_error(project, "prove"), "docs": _ready_error(project, "draft") or _ready_error(project, "apply")}
     v["has_repo"] = bool(ent.get("repo"))
     v["default_branch"] = ent.get("default_branch") or "main"
+    v["decisions"] = decisions_view(project)
     return v
+
+
+def decisions_view(project):
+    """The logkeeper's suggestions kept for the project (bin/duties/logkeeper.sh --suggest), whether it is working, and why the last run made nothing. Read only."""
+    sug = read_json(STATE / "projects" / project / "adr-suggestions.json", [])
+    clip1 = lambda x, n: " ".join(str(x or "").split())[:n]
+    shown = [{"title": clip1(x.get("title"), 100), "decision": clip1(x.get("decision"), 600), "files": [clip1(f, 100) for f in (x.get("evidence") or [])[:5]],
+              "question": clip1(x.get("question"), 200), "alternatives": [clip1(a, 200) for a in (x.get("alternatives") or [])[:3]]}
+             for x in (sug if isinstance(sug, list) else [])[:6] if isinstance(x, dict)]
+    return {"suggestions": shown, "running": _decisions_running(project), "error": _decisions_error(project)}
+
+
+def _decisions_running(project):
+    return any(n.startswith(f"logkeeper-{project}-") for n in running_locks()) or _ready_job_alive(project, "suggest") or _ready_job_alive(project, "pick")
+
+
+def _decisions_error(project):
+    """Why the last logkeeper run this dashboard started made nothing, in one sentence, or ""."""
+    with TICKET_LOCK:
+        jobs = [READY_JOBS.get((project, k)) for k in ("suggest", "pick")]
+    jobs = [j for j in jobs if j]
+    if not jobs or any(j["popen"].poll() is None for j in jobs):
+        return ""
+    at = max(j["at"] for j in jobs)
+    rows = [r for r in read_json(STATE / "runs.json", []) if isinstance(r, dict) and r.get("project") == project and r.get("duty") == "logkeeper" and isinstance(r.get("at"), str) and r["at"] >= at]
+    row = rows[-1] if rows else None
+    if row and row.get("verdict") in ("SUGGESTED", "RECORD", "DRY-RUN"):
+        return ""
+    if row and row.get("verdict") == "NOTHING":
+        return "The logkeeper found nothing it could tie to a file in your project."
+    detail = " ".join(str(row.get("detail") or "").split()) if row else ""
+    return plain_failure(detail)[:300] if detail else "The logkeeper stopped without a result, perhaps at a usage limit. Try again later."
+
+
+def decisions_suggest_api(b):
+    """POST /api/decisions/suggest {project, confirm}: the logkeeper reads the code and lists the decisions it implies. Read only; it costs a few cents."""
+    no_demo("suggest decisions")
+    if b.get("confirm") is not True:
+        return 400, {"error": "confirm is required: this asks the model, which costs a few cents"}
+    project = b.get("project")
+    try:
+        ent = _ticket_entry(project)
+        if _decisions_running(project):
+            return 409, {"error": f"the logkeeper is already working on {project}: wait for it to finish"}
+        if not (Path(os.path.expanduser(str(ent.get("path") or ""))) / ".git").exists():
+            return 400, {"error": "that project's folder is not a git checkout"}
+        bud = daily_budget()
+        if bud is not None and spent_today() >= bud:
+            return 409, {"error": f"today's budget is spent (${spent_today():.2f} of ${bud:.2f}); it would stop at once"}
+        if "logkeeper" not in (ent.get("duties") or []):
+            import attach as _attach
+            _attach.set_duties(project, add=["logkeeper"])          # the owner confirmed this in the dialog, which says so
+    except ValueError as e:
+        return 400, {"error": str(e)}
+    except OSError as e:
+        return 500, {"error": integrations_common.why_not_saved(e)}
+    try:
+        _ready_start(project, "suggest", [str(ROOT / "bin" / "qtdeck"), "run", project, "logkeeper", "--suggest"])
+    except OSError as e:
+        return 500, {"error": "could not start the logkeeper: " + type(e).__name__}
+    _ticket_log("decisions-suggest", project)
+    return 200, {"started": True}
+
+
+def decisions_pick_api(b):
+    """POST /api/decisions/pick {project, n, why, confirm}: record suggestion n, with the owner's reason, as a pull request the owner merges."""
+    import docs as _docs
+    no_demo("record a decision")
+    if b.get("confirm") is not True:
+        return 400, {"error": "confirm is required: this opens a pull request with a new decision record"}
+    project, n, why = b.get("project"), b.get("n"), b.get("why")
+    if not isinstance(n, int) or isinstance(n, bool) or not 1 <= n <= 6:
+        return 400, {"error": "n is the number of a suggestion"}
+    if not isinstance(why, str) or not why.strip() or len(why) > 2000:
+        return 400, {"error": "say the reason, in up to 2000 characters: it is the one part the code cannot show"}
+    if _docs._credential(why):
+        return 400, {"error": "your reason looks like it holds a password or a key, so nothing was sent. Take it out and try again."}
+    try:
+        ent = _ticket_entry(project)
+        if not ent.get("repo"):
+            return 400, {"error": "a pull request needs a GitHub repo for this project"}
+        if _decisions_running(project):
+            return 409, {"error": f"the logkeeper is already working on {project}: wait for it to finish"}
+        if n > len(decisions_view(project)["suggestions"]):
+            return 400, {"error": "there is no such suggestion: ask for new ones"}
+    except ValueError as e:
+        return 400, {"error": str(e)}
+    try:
+        _ready_start(project, "pick", [str(ROOT / "bin" / "qtdeck"), "run", project, "logkeeper", "--pick", str(n), "--why", " ".join(why.split()), "--apply"])
+    except OSError as e:
+        return 500, {"error": "could not start the logkeeper: " + type(e).__name__}
+    _ticket_log("decisions-pick", project)
+    return 200, {"started": True}
 
 
 def _ready_start(project, kind, argv):
@@ -6567,7 +6661,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(code, json.dumps(body))
 
         for path_, fn_ in (("/api/ticket/draft", ticket_draft_api), ("/api/ticket/file", ticket_file_api), ("/api/ticket/discard", ticket_discard_api), ("/api/repo", repo_api),
-                         ("/api/ready/prove", ready_prove_api), ("/api/ready/prove-stop", ready_prove_stop_api), ("/api/docs/draft", docs_draft_api), ("/api/docs/apply", docs_apply_api), ("/api/project/duties", project_duties_api), ("/api/project/verify", project_verify_api),
+                         ("/api/ready/prove", ready_prove_api), ("/api/ready/prove-stop", ready_prove_stop_api), ("/api/docs/draft", docs_draft_api), ("/api/docs/apply", docs_apply_api), ("/api/decisions/suggest", decisions_suggest_api), ("/api/decisions/pick", decisions_pick_api), ("/api/project/duties", project_duties_api), ("/api/project/verify", project_verify_api),
                          ("/api/project/guardrails", project_guardrails_api)):
             if u.path == path_:
                 code, body = fn_(b)

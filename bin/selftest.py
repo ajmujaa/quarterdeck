@@ -4723,6 +4723,37 @@ check("decisions: the survey counts only NNNN-slug.md files under docs/decisions
       and _rd9._decisions_item("p", _none9)["state"] == "todo" and _rd9._decisions_item("p", _none9)["action"] == "qtdeck run p logkeeper --suggest"
       and _rd9._decisions_item("p", {"docs": {"present": {"readme": []}, "missing": {}}})["state"] == "unknown" and _rd9._decisions_item("p", None)["state"] == "unknown")
 
+# the decisions card: what the page is shown, and what the two buttons refuse
+_dcd = Path(tempfile.mkdtemp(prefix="qd-dc-"))
+_dc_sv = (d.STATE, d.PROJECTS_FILE, d._ready_start, d.running_locks)
+d.STATE, d.PROJECTS_FILE = _dcd / "state", _dcd / "p.json"
+(d.STATE / "projects" / "app").mkdir(parents=True)
+(_dcd / "repo" / ".git").mkdir(parents=True)
+d.write_json(d.PROJECTS_FILE, {"app": {"path": str(_dcd / "repo"), "repo": "x/app", "duties": ["logkeeper"]}, "norepo": {"path": str(_dcd / "repo"), "duties": []}})
+d.write_json(d.STATE / "projects" / "app" / "adr-suggestions.json", [{"title": "Keys stay local", "decision": "Keys only under lib/crypto.", "evidence": ["lib/crypto/key.ts"], "alternatives": ["A key service"], "question": "Why?", "extra": "ignored"}, "junk"])
+_dc_started = []
+d._ready_start = lambda project, kind, argv: _dc_started.append((project, kind, argv))
+d.running_locks = lambda: {}
+_dv = d.decisions_view("app")
+_pk = lambda **k: d.decisions_pick_api({"project": "app", "n": 1, "why": "Keys are regulated.", "confirm": True, **k})
+_r_ok = _pk()
+check("decisions card: the page is shown the kept suggestions (trimmed, junk skipped), and a pick starts the logkeeper with the number and the reason, applying",
+      [x["title"] for x in _dv["suggestions"]] == ["Keys stay local"] and "extra" not in _dv["suggestions"][0] and _dv["running"] is False
+      and _r_ok[0] == 200 and _dc_started and _dc_started[-1][1] == "pick" and _dc_started[-1][2][-6:] == ["logkeeper", "--pick", "1", "--why", "Keys are regulated.", "--apply"])
+_n0 = len(_dc_started)
+_refused = [_pk(confirm=False), _pk(n=0), _pk(n=7), _pk(n=True), _pk(n=2), _pk(why=""), _pk(why="x" * 2001), _pk(why="my key is sk-ant-api03-" + "a" * 40), _pk(project="norepo"), _pk(project="nope")]
+check("decisions card: a pick is refused without confirm, for a number that is not a suggestion, with no reason or a reason that holds a key, without a GitHub repo, or for an unknown project; nothing starts",
+      all(r[0] in (400,) for r in _refused) and len(_dc_started) == _n0, [r[0] for r in _refused])
+d.running_locks = lambda: {"logkeeper-app-suggest": {}}
+check("decisions card: while the logkeeper works, both buttons answer 409 and start nothing",
+      d.decisions_view("app")["running"] is True and _pk()[0] == 409 and d.decisions_suggest_api({"project": "app", "confirm": True})[0] == 409 and len(_dc_started) == _n0)
+d.running_locks = lambda: {}
+check("decisions card: suggest needs confirm, starts a read-only run of qtdeck run <p> logkeeper --suggest",
+      d.decisions_suggest_api({"project": "app"})[0] == 400 and d.decisions_suggest_api({"project": "app", "confirm": True})[0] == 200
+      and _dc_started[-1][1] == "suggest" and _dc_started[-1][2][-3:] == ["app", "logkeeper", "--suggest"] and "--apply" not in _dc_started[-1][2])
+d.STATE, d.PROJECTS_FILE, d._ready_start, d.running_locks = _dc_sv
+shutil.rmtree(_dcd, ignore_errors=True)
+
 print()
 if FAILS:
     print(f"  {len(FAILS)} check(s) failed")

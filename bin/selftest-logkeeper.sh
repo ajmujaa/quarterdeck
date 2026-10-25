@@ -3,7 +3,7 @@
 # records a review is shown. Run against stand-ins for the model and gh and a real git repository of invented files:
 # the record selection (paths, keywords, caps), the review duties' ADR contract, and the duty that proposes a record.
 source "$(dirname "${BASH_SOURCE[0]}")/selftest-lib.sh"
-st_init logkeeper surveyor inspector
+st_init logkeeper surveyor inspector shipwright
 cp "$REAL/bin/adr.py" "$T/bin/"
 st_repo
 rec() { # rec <n> <slug> <title> <status> <paths> <keywords> <body>
@@ -206,6 +206,13 @@ for bad in "--pick 9" "--pick 0" "--pick x" "--pick 1 --panel tp-decision-1" "--
 done
 rm -f "$SUGG_FILE"; st_duty logkeeper --pick 1
 ck "--pick before any --suggest says to run --suggest first" '[ "$RC" != 0 ] && grep -q -e "--suggest" <<<"$OUT"'
+
+# ---- a builder is shown the records that match its ticket, and told not to build against one ------------------------------------------
+st_issue 11 "Make the offline cache banner show" "The banner is wrong when the cache is empty."
+st_noreplies; st_reply default 'RESULT: NO_CHANGE nothing'; rm -f "$T/claude-calls"
+st_duty shipwright --issue 11
+ck "the shipwright's prompt carries the record whose keywords the issue uses (ADR 0002), and says a builder must not contradict one" \
+   'grep -q "ADR 0002: The app works offline first" "$T/claude-calls" && grep -q "You are building, not reviewing" "$T/claude-calls" && ! grep -q "ADR 0001:" "$T/claude-calls"'
 
 # ---- the sweep: which pull requests a schedule reviews --------------------------------------------------------------------------------
 CLEAN_R='FINDINGS_JSON: []

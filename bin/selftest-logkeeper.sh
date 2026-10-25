@@ -243,4 +243,11 @@ rm -f "$T/ghdata/pr-list.json"
 # ---- structure -------------------------------------------------------------------------------------------------------------------------------
 ck "the duty is read whole before it runs" 'grep -q "^# quarterdeck: read-whole-file$" "$REAL/duties/logkeeper.sh" && [ "$(tail -c 3 "$REAL/duties/logkeeper.sh" | tr -d "\n")" = "}" ]'
 ck "the only push is to the record's own decision branch, never the trunk, never forced" '[ "$(grep -c "push -q" "$REAL/duties/logkeeper.sh")" = 1 ] && grep -q "push -q origin \"HEAD:refs/heads/\$BR\"" "$REAL/duties/logkeeper.sh" && ! grep -E "push.*(--force|-f |refs/heads/\\\$BASE|refs/heads/main)" "$REAL/duties/logkeeper.sh" | grep -v "^#" | grep -q .'
+# a project with no docs/ folder at all (the usual first record): git reports one new folder, not one new file, and the record must still go through
+(cd "$T/work" && git fetch -q origin && git checkout -q main && git merge -q --no-edit origin/main 2>/dev/null; git rm -rq docs && git commit -q -m "no docs" && git push -q origin main)
+printf 'Use plain JavaScript with no build step\nWe chose it because nobody here maintains a bundler.\n' > "$T/notes-nodocs.txt"
+st_noreplies; st_reply default "$REC"; rm -f "$T/gh-calls"
+st_duty logkeeper --text "$T/notes-nodocs.txt" --apply
+ck "a first record in a project that has no docs/ folder at all still opens its branch and pull request" '[ "$(last_verdict)" = RECORD ] && grep -q "^gh pr create" "$T/gh-calls"'
+
 st_done

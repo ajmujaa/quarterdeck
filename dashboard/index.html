@@ -1969,13 +1969,13 @@ function repoOptionsCard(project){
    readyCard(project) and readyItemsHtml(items) each return a string and read their data from RD (GET /api/ready), so a later page can move them whole.
    The writes are POSTs with confirm:true (bin/dashboard.py, "the ready checklist, the scribe's docs and the crew's switches"): /api/ready/prove (the verify
    command, once, in the sandbox), /api/docs/draft, /api/docs/apply (a NEW branch or a pull request, never the default branch), /api/project/duties. */
-const RD = {project: "", data: null, at: 0, loading: false, show: false, busy: "", error: "", how: false, open: {}};
+const RD = {project: "", data: null, at: 0, loading: false, show: false, busy: "", error: "", how: false, open: {}, why: {}};
 const RD_OFFER = {repo: 1, docs: 1, agents: 1, cycle: 1};            // offers, said calmly: never a blocker
 const rdData = project => RD.data && RD.data.project === project ? RD.data : null;
 function rdScope(p){        // a different project starts with a clean card
   if(RD.project === p) return;
   if(live) live.liveStop("prove", true);
-  Object.assign(RD, {project: p, data: null, at: 0, show: false, busy: "", error: "", how: false, open: {}});
+  Object.assign(RD, {project: p, data: null, at: 0, show: false, busy: "", error: "", how: false, open: {}, why: {}});
 }
 async function loadReady(force){
   const p = sel;
@@ -2043,10 +2043,10 @@ function decisionsHtml(d){        // the logkeeper's suggestions: what the code 
   let h = dc.error ? `<p class="sub">${esc(dc.error)}</p>` : "";
   if(dc.running) h += `<p class="sub">The logkeeper is working. This can take a minute.</p>`;
   if(dc.suggestions.length) h += `<p class="sub">Choices the code already makes. Nothing is written to your project. Give the reason for the ones you want on record; each becomes a pull request that you merge.</p>
-    <div class="rd-draft">${dc.suggestions.map((x, k) => `<details class="rd-file"><summary>${esc(x.title)}</summary>
+    <div class="rd-draft">${dc.suggestions.map((x, k) => `<details class="rd-file"${RD.open["dc" + k] ? " open" : ""}><summary ${act("rdToggle", "dc" + k)}>${esc(x.title)}</summary>
       <p>${esc(x.decision)}</p><p class="sub">Files: ${esc(x.files.join(", "))}</p>
       ${x.alternatives.length ? `<p class="sub">It could instead have been (guesses, not known to have been weighed): ${esc(x.alternatives.join("; "))}</p>` : ""}
-      ${slTextarea({id: "dc-why-" + (k + 1), label: x.question, rows: 2, placeholder: "Your reason, in your words"})}
+      ${slTextarea({id: "dc-why-" + (k + 1), label: x.question, rows: 2, value: RD.why[k + 1] || "", placeholder: "Your reason, in your words", attrs: actOn("input", "dcWhy", k + 1, T.value)})}
       <div class="btns">${btn("Record this", {size: "small", click: act("dcPick", k + 1), disabled: busy || !d.has_repo})}</div></details>`).join("")}</div>`;
   return h + `<div class="btns">${btn(dc.suggestions.length ? "Suggest again" : "Suggest decisions", {size: "small", click: act("dcSuggest"), disabled: busy})}</div>
     <p class="sub">Costs a few cents and is read only. ${d.has_repo ? "" : "Recording one needs a GitHub repo for this project."}</p>`;
@@ -2171,6 +2171,7 @@ async function rdApply(){
   RD.busy = "apply"; RD.error = ""; RD.at = 0;
   announce("Putting the drafted files on a new branch."); render(); loadReady(true);
 }
+function dcWhy(n, v){ RD.why[n] = String(v ?? ""); }          // the reason being typed is kept here: the page redraws when a run ends
 async function dcSuggest(){
   if(RD.busy) return;
   const p = sel;
@@ -2182,7 +2183,7 @@ async function dcSuggest(){
 }
 async function dcPick(n){
   if(RD.busy) return;
-  const p = sel, why = (document.getElementById("dc-why-" + n)?.value || "").trim();
+  const p = sel, why = String(RD.why[n] ?? document.getElementById("dc-why-" + n)?.value ?? "").trim();
   if(!why){ toast("Write the reason first. It is the one part the code cannot show."); return; }
   if(!await confirmDlg(`This opens a pull request on GitHub that adds one decision record for ${p}, written from the code and your reason. Nothing is merged; you merge it.`, {title: "Open a pull request?", ok: "Open a pull request"})) return;
   const j = await post("/api/decisions/pick", {project: p, n, why, confirm: true});
@@ -5690,7 +5691,7 @@ const ACTIONS = {
   startCycle, startMissionPanel, stopRun, talkSubmit, thinkToggle, tlClick, tlHover, tlSet, toggleCalm, toggleDemo, toggleLedger,
   toggleMissionForm, toggleMobileMenu, toggleOld, toggleReplay, toggleSched, toggleSel, toggleShowcaseForm, unpublishShowcase, unqueue, workOn,
   grEdit, grNew, grAdd, grRemove, grMove, grSave, openProject, openProjects, addonNeeds, homeDay, finToggle, trajToggle, tkRequest, tkDraft, tkFile, tkDiscard, tkRepoName, tkRepoSave, tkRepoCreate, tkMission,
-  rdShow, rdToggle, rdNext, rdProve, rdDraft, rdApply, dcSuggest, dcPick, rdTurnOn, rdCycle, rdProveStop, rdUseVerify,
+  rdShow, rdToggle, rdNext, rdProve, rdDraft, rdApply, dcSuggest, dcPick, dcWhy, rdTurnOn, rdCycle, rdProveStop, rdUseVerify,
   ...EXT.actions,                                   // an add-on's own (assets/ext-*.js), by name
 };
 

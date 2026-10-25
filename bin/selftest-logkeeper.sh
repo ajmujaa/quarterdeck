@@ -188,7 +188,7 @@ SUG='SUGGESTIONS_JSON: [{"title":"Keys never leave the device","decision":"Key m
 st_noreplies; st_reply default "$SUG"; rm -f "$T/gh-calls" "$SUGG_FILE"; decisions_before=$(git -C "$T/origin.git" for-each-ref "refs/heads/decision/*" | wc -l)
 st_duty logkeeper --suggest
 ck "--suggest: the model reads only; the list is kept in the data folder (0600), not in the project, and opens nothing" \
-   '[ "$(last_verdict)" = SUGGESTED ] && no_gh_writes && [ "$(git -C "$T/origin.git" for-each-ref "refs/heads/decision/*" | wc -l)" = "$decisions_before" ] && jq -e ".tools == \"Read,Grep,Glob\" and (.deny | contains(\"Write\"))" "$T/claude-calls" >/dev/null && [ "$(stat -f %Lp "$SUGG_FILE" 2>/dev/null || stat -c %a "$SUGG_FILE")" = 600 ]'
+   '[ "$(last_verdict)" = SUGGESTED ] && no_gh_writes && [ "$(git -C "$T/origin.git" for-each-ref "refs/heads/decision/*" | wc -l)" = "$decisions_before" ] && jq -e ".tools == \"Read,Grep,Glob\" and (.deny | contains(\"Write\"))" "$T/claude-calls" >/dev/null && [ "$(stat -c %a "$SUGG_FILE" 2>/dev/null || stat -f %Lp "$SUGG_FILE")" = 600 ]'
 ck "  a choice whose evidence is not a real file (or climbs out) is dropped by the harness; the real one stays" '[ "$(jq length "$SUGG_FILE")" = 1 ] && [ "$(jq -r ".[0].title" "$SUGG_FILE")" = "Keys never leave the device" ]'
 cp "$SUGG_FILE" "$T/sugg-kept.json"; st_noreplies; st_reply default 'Here are some ideas.'
 st_duty logkeeper --suggest

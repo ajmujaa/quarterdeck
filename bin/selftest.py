@@ -4712,6 +4712,17 @@ check("simultaneous write_json calls on one file all succeed and leave no temp f
       not _wj_errs and json.loads((_wj_dir / "same.json").read_text()).get("n") is not None and not list(_wj_dir.glob("*.tmp")), str(_wj_errs[:1]))
 shutil.rmtree(_wj_dir, ignore_errors=True)
 
+# decision records: the survey counts the ones the injector would read, and the checklist says what to do when there are none
+import survey as _sv9, ready as _rd9
+_pr9, _ms9 = _sv9.docs_of(["README.md", "docs/decisions/0001-keys.md", "docs/decisions/0002-queue.md", "docs/decisions/notes.md", "docs/decisions/0003-Bad_Name.md", "src/a.py"], [])
+_pn9, _ = _sv9.docs_of(["README.md", "src/a.py"], [])
+_none9 = {"docs": {"present": _pn9, "missing": {}}}
+check("decisions: the survey counts only NNNN-slug.md files under docs/decisions, and a project with none gets a todo whose action only reads the code (nothing is written)",
+      _pr9["decisions"] == ["docs/decisions/0001-keys.md", "docs/decisions/0002-queue.md"] and _pn9["decisions"] == []
+      and _rd9._decisions_item("p", {"docs": {"present": _pr9, "missing": {}}})["state"] == "done"
+      and _rd9._decisions_item("p", _none9)["state"] == "todo" and _rd9._decisions_item("p", _none9)["action"] == "qtdeck run p logkeeper --suggest"
+      and _rd9._decisions_item("p", {"docs": {"present": {"readme": []}, "missing": {}}})["state"] == "unknown" and _rd9._decisions_item("p", None)["state"] == "unknown")
+
 print()
 if FAILS:
     print(f"  {len(FAILS)} check(s) failed")

@@ -290,6 +290,19 @@ def _docs_item(name, sv, draft, branch=None, entry=None):
             "action": f"qtdeck docs {name}", "missing": sorted(miss)}
 
 
+def _decisions_item(name, sv):
+    if not sv:
+        return {"key": "decisions", "label": "Decisions", "state": "unknown", "detail": "The project has not been surveyed, so its decision records are not known.", "action": ""}
+    recs = sv["docs"]["present"].get("decisions")
+    if recs is None:
+        return {"key": "decisions", "label": "Decisions", "state": "unknown", "detail": "This survey is from before decision records were checked. Attach the folder again to look.", "action": ""}
+    if recs:
+        return {"key": "decisions", "label": "Decisions", "state": "done", "detail": f"{len(recs)} decision record(s) in docs/decisions. Every review is shown the ones that match what it touches.", "action": ""}
+    return {"key": "decisions", "label": "Decisions", "state": "todo",
+            "detail": "No decision records. The logkeeper can read the code and list the decisions it implies; you pick which to keep and give the reason, and each becomes a pull request. Nothing is written to your project until you say so.",
+            "action": f"qtdeck run {name} logkeeper --suggest"}
+
+
 def _agents_item(name, entry, record):
     reasons = (record or {}).get("duty_reasons") or {}
     on = [d for d in entry.get("duties", [])]
@@ -326,7 +339,7 @@ def build(name, entry, sv, record=None, vrec=None, draft=None, path=None, previe
     """The items, in order. `entry` is the registry entry (or the proposal's entry for a preview); nothing here reads a file but through the arguments."""
     path = path or entry.get("path", "")
     return [_scan_item(name, sv, path, preview), _verify_item(name, entry, sv, vrec, path, preview), _repo_item(name, entry),
-            _docs_item(name, sv, draft, branch, entry), _agents_item(name, entry, record), _cycle_item(name, entry)]
+            _docs_item(name, sv, draft, branch, entry), _agents_item(name, entry, record), _cycle_item(name, entry), _decisions_item(name, sv)]
 
 
 def next_action(name, entry, items, tk=None, path=None):

@@ -2050,6 +2050,7 @@ function rdItemBody(i, d){
     if((i.suggested || []).length) b += `<p class="sub">These fit this project and are off:</p><ul class="rd-agents">${i.suggested.map(a =>
       `<li><b>${esc(a.duty)}</b> <span class="sub">${esc(a.why)}</span> ${btn("Turn on", {size: "small", click: act("rdTurnOn", a.duty), attrs: `aria-label="Turn on the ${esc(a.duty)}"`})}</li>`).join("")}</ul>`;
   }
+  if(i.key === "decisions" && i.state === "todo" && i.action) b += `<p class="sub">Read-only, costs a few cents: <code class="tk-sel">${esc(i.action)}</code></p>`;
   if(i.key === "cycle" && i.state === "todo") b += `<div class="btns">${btn("Allow cycles", {size: "small", click: act("rdCycle")})}</div>`;
   return b;
 }

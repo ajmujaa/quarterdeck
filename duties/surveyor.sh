@@ -92,11 +92,12 @@ for num in $targets; do
   export QUARTERDECK_RUN_ID="$(tr '/' '_' <<<"$REPO")-${num}-${sha:0:8}"
 
   # The harness picks the records of decisions this review is shown, from the paths in the diff and the words in the title.
-  ADR_SPEC=""; ADR_NOTE=""
+  ADR_SPEC=""; ADR_NOTE=""; GRAPH_BLOCK=""
   if [ "$ADR_ON" = 1 ]; then
-    adr_block "$PROJECT" "$(project_get "$PROJECT" default_branch main)" \
-      "$(guard 60 "$GH" pr diff "$num" -R "$REPO" --name-only 2>>"$LOG_FILE" || true)" "$title"
+    names="$(guard 60 "$GH" pr diff "$num" -R "$REPO" --name-only 2>>"$LOG_FILE" || true)"
+    adr_block "$PROJECT" "$(project_get "$PROJECT" default_branch main)" "$names" "$title"
     ADR_SPEC=$'ADR: <cites ADR n | matches ADR n | searched <records>>\n'
+    graph_block "$PROJECT" "$(project_get "$PROJECT" default_branch main)" "$names"
   fi
 
   prompt="$(preamble "$PROJECT")
@@ -109,7 +110,7 @@ security or data-integrity hole, a broken contract with another part of the
 system. Pre-existing debt, style preference and refactor wishes are not
 findings. Prefer three real findings over ten padded ones; zero is a normal and
 good outcome.
-${ADR_BLOCK:-}
+${ADR_BLOCK:-}${GRAPH_BLOCK:-}
 $(pr_diff_text "$REPO" "$num" | untrusted "diff of pull request #$num")
 
 End your reply with exactly these lines and nothing after them:

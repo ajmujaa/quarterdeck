@@ -43,3 +43,31 @@ These records are decisions the project already made. Check the change against t
 
 # The line a review must end with. Returns the line when it is one of the three allowed forms.
 adr_line() { grep -E '^ADR: (cites ADR [0-9]+|matches ADR [0-9]+|searched .+)' <<<"$1" | tail -1; }
+
+# What else a change could break. Source this file, then:
+#   graph_block <project> <base-branch> <changed-files-text>      sets GRAPH_BLOCK (empty when the project has no graph or nothing depends on the change)
+# bin/depgraph.py works the graph out from the base branch each time (package.json dependencies, and docs/architecture/dependencies.json when
+# the project keeps one), so there is no file to go stale. The block only ever lists parts of the project; the model still has to read the code.
+GRAPH_PY="${GRAPH_PY:-$QUARTERDECK_DIR/bin/depgraph.py}"
+GRAPH_BLOCK=""
+graph_block() { # graph_block <project> <base> <changed-files-text>
+  local repo t txt; GRAPH_BLOCK=""
+  [ -f "$GRAPH_PY" ] || return 0
+  repo="${QUARTERDECK_WORKDIR:-$(project_path "$1")}"
+  t=$(mktemp); printf '%s\n' "$3" > "$t"
+  txt=$(python3 "$GRAPH_PY" text --repo "$repo" --base "$2" --files "$t" 2>/dev/null) || txt=""
+  rm -f "$t"
+  [ -n "$txt" ] || return 0
+  GRAPH_BLOCK="
+--- WHAT DEPENDS ON THIS CHANGE ---
+
+Worked out by the harness from the project's own dependency declarations on the base branch.
+$txt
+
+How to use it:
+- For each part listed, ask whether this diff could break it: a changed signature, a renamed or removed export, a changed message
+  or route, a changed default. If it could, say which part and what breaks, and put the finding on the changed line.
+- The list is a lead, not a verdict. It can be incomplete or out of date: read the code before you claim a break.
+- A part that is listed but not affected needs no mention.
+"
+}

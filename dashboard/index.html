@@ -2002,8 +2002,15 @@ function rdLive(j){        // a run that was started before this page was opened
   if(live && j.running.prove && !live.liveRunning("prove")) live.liveStart("prove", "prove:" + j.project, {onEnd: () => loadReady(true)});
 }
 function rdSettle(j){        // something this page started has ended: say how it went, once
-  if(!RD.busy || j.running.prove || j.running.docs) return false;
+  if(!RD.busy || j.running.prove || j.running.docs || (j.decisions && j.decisions.running)) return false;
   const kind = RD.busy; RD.busy = "";
+  if(kind === "suggest" || kind === "pick"){
+    RD.error = j.decisions.error;
+    if(RD.error) announce(RD.error);
+    else if(kind === "suggest"){ RD.open.decisions = true; toast("Suggestions are ready to read. Nothing was written to your project."); }
+    else toast("A pull request with the decision record was opened. You merge it.");
+    return true;
+  }
   const v = j.items.find(i => i.key === "verify"), docsErr = j.last_error.docs;
   if(kind === "prove"){
     RD.error = j.last_error.prove;
@@ -2031,6 +2038,19 @@ function rdDraftHtml(d){
     <div class="btns">${btn(label, {size: "small", click: act("rdApply"), disabled: busy, attrs: 'id="rd-apply"'})}
       <span class="sub">${d.has_repo ? "Pushes a new branch only and opens a pull request." : "Makes a new local branch."} Never ${esc(d.default_branch)}.</span></div></div>`;
 }
+function decisionsHtml(d){        // the logkeeper's suggestions: what the code already decides, each waiting for the owner's reason
+  const dc = d.decisions || {suggestions: [], running: false, error: ""}, busy = !!RD.busy || dc.running;
+  let h = dc.error ? `<p class="sub">${esc(dc.error)}</p>` : "";
+  if(dc.running) h += `<p class="sub">The logkeeper is working. This can take a minute.</p>`;
+  if(dc.suggestions.length) h += `<p class="sub">Choices the code already makes. Nothing is written to your project. Give the reason for the ones you want on record; each becomes a pull request that you merge.</p>
+    <div class="rd-draft">${dc.suggestions.map((x, k) => `<details class="rd-file"><summary>${esc(x.title)}</summary>
+      <p>${esc(x.decision)}</p><p class="sub">Files: ${esc(x.files.join(", "))}</p>
+      ${x.alternatives.length ? `<p class="sub">It could instead have been (guesses, not known to have been weighed): ${esc(x.alternatives.join("; "))}</p>` : ""}
+      ${slTextarea({id: "dc-why-" + (k + 1), label: x.question, rows: 2, placeholder: "Your reason, in your words"})}
+      <div class="btns">${btn("Record this", {size: "small", click: act("dcPick", k + 1), disabled: busy || !d.has_repo})}</div></details>`).join("")}</div>`;
+  return h + `<div class="btns">${btn(dc.suggestions.length ? "Suggest again" : "Suggest decisions", {size: "small", click: act("dcSuggest"), disabled: busy})}</div>
+    <p class="sub">Costs a few cents and is read only. ${d.has_repo ? "" : "Recording one needs a GitHub repo for this project."}</p>`;
+}
 function rdItemBody(i, d){
   let b = `<p>${esc(i.detail)}</p>`;
   if(i.key === "verify" && i.action && i.state !== "done") b += `<p class="sub">${i.state === "todo" ? "Runs only when you click. " : ""}<code class="tk-sel">${esc(i.action)}</code></p>`;
@@ -2050,7 +2070,7 @@ function rdItemBody(i, d){
     if((i.suggested || []).length) b += `<p class="sub">These fit this project and are off:</p><ul class="rd-agents">${i.suggested.map(a =>
       `<li><b>${esc(a.duty)}</b> <span class="sub">${esc(a.why)}</span> ${btn("Turn on", {size: "small", click: act("rdTurnOn", a.duty), attrs: `aria-label="Turn on the ${esc(a.duty)}"`})}</li>`).join("")}</ul>`;
   }
-  if(i.key === "decisions" && i.state === "todo" && i.action) b += `<p class="sub">Read-only, costs a few cents: <code class="tk-sel">${esc(i.action)}</code></p>`;
+  if(i.key === "decisions" && i.state === "todo") b += decisionsHtml(d);
   if(i.key === "cycle" && i.state === "todo") b += `<div class="btns">${btn("Allow cycles", {size: "small", click: act("rdCycle")})}</div>`;
   return b;
 }
@@ -2150,6 +2170,25 @@ async function rdApply(){
   if(!j) return;
   RD.busy = "apply"; RD.error = ""; RD.at = 0;
   announce("Putting the drafted files on a new branch."); render(); loadReady(true);
+}
+async function dcSuggest(){
+  if(RD.busy) return;
+  const p = sel;
+  if(!await confirmDlg(`The logkeeper reads the code of ${p} and lists the decisions it already makes. It costs a few cents and is read only: nothing is written to your project. It turns the logkeeper on for this project if it is off.`, {title: "Suggest decisions?", ok: "Suggest"})) return;
+  const j = await post("/api/decisions/suggest", {project: p, confirm: true});
+  if(!j) return;
+  RD.busy = "suggest"; RD.error = ""; RD.at = 0;
+  announce("The logkeeper is reading the code. This can take a minute and costs a few cents."); render(); loadReady(true);
+}
+async function dcPick(n){
+  if(RD.busy) return;
+  const p = sel, why = (document.getElementById("dc-why-" + n)?.value || "").trim();
+  if(!why){ toast("Write the reason first. It is the one part the code cannot show."); return; }
+  if(!await confirmDlg(`This opens a pull request on GitHub that adds one decision record for ${p}, written from the code and your reason. Nothing is merged; you merge it.`, {title: "Open a pull request?", ok: "Open a pull request"})) return;
+  const j = await post("/api/decisions/pick", {project: p, n, why, confirm: true});
+  if(!j) return;
+  RD.busy = "pick"; RD.error = ""; RD.at = 0;
+  announce("The logkeeper is writing the record. This can take a minute."); render(); loadReady(true);
 }
 async function rdTurnOn(duty){
   const j = await post("/api/project/duties", {project: sel, add: [duty], confirm: true});
@@ -5651,7 +5690,7 @@ const ACTIONS = {
   startCycle, startMissionPanel, stopRun, talkSubmit, thinkToggle, tlClick, tlHover, tlSet, toggleCalm, toggleDemo, toggleLedger,
   toggleMissionForm, toggleMobileMenu, toggleOld, toggleReplay, toggleSched, toggleSel, toggleShowcaseForm, unpublishShowcase, unqueue, workOn,
   grEdit, grNew, grAdd, grRemove, grMove, grSave, openProject, openProjects, addonNeeds, homeDay, finToggle, trajToggle, tkRequest, tkDraft, tkFile, tkDiscard, tkRepoName, tkRepoSave, tkRepoCreate, tkMission,
-  rdShow, rdToggle, rdNext, rdProve, rdDraft, rdApply, rdTurnOn, rdCycle, rdProveStop, rdUseVerify,
+  rdShow, rdToggle, rdNext, rdProve, rdDraft, rdApply, dcSuggest, dcPick, rdTurnOn, rdCycle, rdProveStop, rdUseVerify,
   ...EXT.actions,                                   // an add-on's own (assets/ext-*.js), by name
 };
 

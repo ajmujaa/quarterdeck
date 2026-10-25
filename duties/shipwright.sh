@@ -195,6 +195,14 @@ $body"
 You are building, not reviewing. Do not write a change that contradicts a record above. If the task cannot be done without
 contradicting one, make no change and finish with RESULT: NEEDS_HUMAN naming the record by number."
 fi
+# A project that keeps a declared dependency graph keeps it in step with the code: the same change that adds or removes a call between its
+# parts updates the file, so a reader of the pull request sees the new dependency. The harness checks this before it commits (below).
+GRAPH_BUILD=""
+if [ -f "$QUARTERDECK_DIR/bin/depgraph.py" ] && python3 "$QUARTERDECK_DIR/bin/depgraph.py" graph --repo "$SOURCE_REPO_DIR" --base "$BASE" 2>/dev/null | jq -e '.declared' >/dev/null 2>&1; then
+  GRAPH_BUILD="
+This project keeps docs/architecture/dependencies.json: for each part of the project, the other parts it calls and how. If your change makes
+one part call another, or stops it doing so, update that file in the same change. Do not touch it otherwise."
+fi
 prompt="$(preamble "$PROJECT")
 
 $WHAT_TO_DO
@@ -203,7 +211,7 @@ $WHAT_TO_DO
 $SUBJECT_BLOCK
 === END ===
 
-${ADR_BUILD:-}
+${ADR_BUILD:-}${GRAPH_BUILD:-}
 ${PLAN_TEXT:+=== THE RULING OF THE DEV PANEL — IMPLEMENT THIS ===
 A dev panel argued this out and the dockmaster ruled. It is a decision that has
 already been made, not a suggestion: implement it. If you find while building
@@ -322,6 +330,19 @@ if ! why=$(post_checks_gate "$PROJECT" "$WT" "$INPUTS_BEFORE" "$changed" "$PLAN"
   say "  REFUSED: $why"
   record_run "$PROJECT" shipwright REFUSED "$REF: $why"
   die "refused: $why"
+fi
+# A change that makes the declared dependency graph disagree with the code, where it agreed before, is not committed. Problems that were
+# already there are not this change's to fix. The staged tree is made into a commit object that no branch points at, as the review below does.
+if [ -f "$QUARTERDECK_DIR/bin/depgraph.py" ]; then
+  g_tree=$(safe_git -C "$WT" write-tree 2>/dev/null) && g_head=$(safe_git -C "$WT" -c user.name=quarterdeck -c user.email=quarterdeck@example.com commit-tree "$g_tree" -p HEAD -m "graph check of $REF" 2>/dev/null) || g_head=""
+  if [ -n "$g_head" ] && ! g_out=$(python3 "$QUARTERDECK_DIR/bin/depgraph.py" newproblems --repo "$WT" --base "origin/$BASE" --head "$g_head" 2>/dev/null); then
+    say ""
+    say "  REFUSED: the change makes the dependency graph disagree with the code"
+    jq -r '.problems[] | "    " + .' <<<"$g_out" >&2
+    say "  update docs/architecture/dependencies.json in the change (qtdeck graph $PROJECT --suggest lists what it is missing)"
+    record_run "$PROJECT" shipwright REFUSED "$REF: dependency graph disagrees with the code"
+    die "refused: the dependency graph disagrees with the code"
+  fi
 fi
 REGRESSIONS="$(check_regressions "$BASE_CHECKS" "$AFTER_CHECKS")"
 if [ "$(jq length <<<"$REGRESSIONS")" != 0 ]; then

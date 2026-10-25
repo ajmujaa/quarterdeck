@@ -107,11 +107,12 @@ guard 180 "${SAFE_GIT[@]}" -C "$SOURCE_REPO_DIR" fetch -q origin "pull/$PR/head"
 worktree_at "$SOURCE_REPO_DIR" "$WT" FETCH_HEAD || die "could not create a worktree at $WT"
 SEATS=$(crew_by_discipline security | tr '\n' ' '); SEATS="$(xargs <<<"$SEATS")"
 [ -n "$SEATS" ] || die "marshal: no crew sits on the security panel (see: qtdeck crew)"
-ADR_SPEC=""
+ADR_SPEC=""; GRAPH_BLOCK=""
 if [ "$ADR_ON" = 1 ]; then
   adr_block "$PROJECT" "$BASE" "$changed" "$title
 $body"
   ADR_SPEC=$'ADR: <cites ADR n | matches ADR n | searched <records>>\n'
+  graph_block "$PROJECT" "$BASE" "$changed"
 fi
 
 DIFF_TEXT="$(wt_diff "$WT" "origin/$BASE")"
@@ -144,7 +145,7 @@ Read the change and the code around it from your own side only. The other seats 
 diff introduces that weaken security or privacy, not pre-existing debt and not style. At most $PER_SEAT findings, fewer
 if that is the honest number; zero is a normal and good outcome. You never need a real secret to judge code: if you
 meet one, say where it is and do not repeat it.
-${ADR_BLOCK:-}
+${ADR_BLOCK:-}${GRAPH_BLOCK:-}
 End your reply with exactly these lines and nothing after them:
 FINDINGS_JSON: <one-line JSON array; [] when clean. Each item: {\"file\":\"path from repo root\",\"line\":<line on the new side>,\"severity\":\"critical|major|minor\",\"title\":\"one short claim\",\"body\":\"markdown: the exact failure, then the fix\"}>
 ${ADR_SPEC}VERDICT: CLEAN

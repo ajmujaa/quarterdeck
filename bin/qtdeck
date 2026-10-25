@@ -69,6 +69,8 @@ Usage: qtdeck <command>
                               the scribe drafts the README and the architecture overview the survey found missing, from the survey's facts, and
                               keeps the draft (nothing is written to your project). --apply puts them on a NEW branch (a pull request when the
                               project has a GitHub repo); never on the default branch, never over a file that exists.
+  graph <project> [--check|--suggest]    which parts of the project depend on which (package.json, and docs/architecture/dependencies.json when kept), worked out from
+                              the default branch each time. --check lists where the declared graph and the code disagree; --suggest lists the calls the declared graph is missing. Reviews are shown what depends on a change.
   guardrail <project> list|add|remove|move   the rules every agent is given for a project; three are locked (see: list)
   enable <project> <duty>... | cycle      turn duties on; "cycle" also allows full cycles and turns on the purser and the panel
   disable <project> <duty>... | cycle     turn duties off
@@ -518,6 +520,13 @@ case "$cmd" in
     [ -d "$wdir/.git" ] || [ -f "$wdir/.git" ] || die "no git checkout at $wdir"
     export QUARTERDECK_PROJECT="$dproject" QUARTERDECK_WORKDIR="$wdir"
     exec bash "$QUARTERDECK_DIR/duties/scribe.sh" "$@" ;;
+
+  graph)
+    gproject="${1:-}"; [ $# -gt 0 ] && shift
+    [ -n "$gproject" ] || die "usage: qtdeck graph <project> [--check|--suggest]"
+    project_exists "$gproject" || die "unknown project '$gproject' (see: qtdeck projects)"
+    gmode=graph; for a in "$@"; do case "$a" in --check) gmode=check ;; --suggest) gmode=suggest ;; *) die "graph: unknown argument '$a'" ;; esac; done
+    exec python3 "$QUARTERDECK_DIR/bin/depgraph.py" "$gmode" --repo "$(project_path "$gproject")" --base "$(project_get "$gproject" default_branch main)" ;;
 
   enable|disable)
     exec python3 "$QUARTERDECK_DIR/bin/attach.py" "$cmd" "$@" ;;

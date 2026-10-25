@@ -137,11 +137,12 @@ CI_PENDING=$(ci '["PENDING","IN_PROGRESS","QUEUED","WAITING","EXPECTED"]' | jq -
 CI_PASSING=$(ci '["SUCCESS","NEUTRAL","SKIPPED"]' | jq -r 'length')
 say "  checks on GitHub: $CI_PASSING passing${CI_FAILING:+, failing: $(tr '\n' ';' <<<"$CI_FAILING")}${CI_PENDING:+, still running: $CI_PENDING}"
 
-ADR_SPEC=""
+ADR_SPEC=""; GRAPH_BLOCK=""
 if [ "$ADR_ON" = 1 ]; then
-  adr_block "$PROJECT" "$(project_get "$PROJECT" default_branch main)" \
-    "$(guard 60 "$GH" pr diff "$PR" -R "$REPO" --name-only 2>>"$LOG_FILE" || true)" "$claim"
+  names="$(guard 60 "$GH" pr diff "$PR" -R "$REPO" --name-only 2>>"$LOG_FILE" || true)"
+  adr_block "$PROJECT" "$(project_get "$PROJECT" default_branch main)" "$names" "$claim"
   ADR_SPEC=$'ADR: <cites ADR n | matches ADR n | searched <records>>\n'
+  graph_block "$PROJECT" "$(project_get "$PROJECT" default_branch main)" "$names"
 fi
 
 prompt="$(preamble "$PROJECT")
@@ -192,7 +193,7 @@ or not this PR contains it. Use the repo's existing test style and name a real
 path. If the change genuinely does not warrant a test, say so with exists=true
 and explain in \"then\".
 
-${ADR_BLOCK:-}
+${ADR_BLOCK:-}${GRAPH_BLOCK:-}
 End your reply with exactly these lines and nothing after them:
 TEST_JSON: <one-line JSON object {\"exists\":true|false,\"name\":\"what the test is called\",\"given\":\"the starting state\",\"when\":\"the action\",\"then\":\"the assertion\",\"where\":\"the file it belongs in\"}>
 ${ADR_SPEC}RESULT: PROVEN <one line> | UNPROVEN <one line> | BROKEN <one line>"

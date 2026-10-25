@@ -182,6 +182,31 @@ for bad in "--text $T/empty.txt" "--text $T/link.txt" "--text $T/big.txt" "--tex
   ck "refused, nothing written: logkeeper $bad" '[ "$RC" != 0 ] && no_gh_writes' 
 done
 
+# ---- suggest: the decisions the code implies, then a pick with the owner's reason ------------------------------------------------------
+SUGG_FILE="$T/state/projects/tp/adr-suggestions.json"
+SUG='SUGGESTIONS_JSON: [{"title":"Keys never leave the device","decision":"Key material is only handled under lib/crypto.","evidence":["docs/decisions/0001-keys-stay-local.md"],"alternatives":["A hosted key service"],"question":"Why not a hosted key service?"},{"title":"Invented choice","decision":"Points at a file that is not there.","evidence":["src/nothere.ts","../../etc/passwd"],"alternatives":[],"question":"Is this real?"}]'
+st_noreplies; st_reply default "$SUG"; rm -f "$T/gh-calls" "$SUGG_FILE"; decisions_before=$(git -C "$T/origin.git" for-each-ref "refs/heads/decision/*" | wc -l)
+st_duty logkeeper --suggest
+ck "--suggest: the model reads only; the list is kept in the data folder (0600), not in the project, and opens nothing" \
+   '[ "$(last_verdict)" = SUGGESTED ] && no_gh_writes && [ "$(git -C "$T/origin.git" for-each-ref "refs/heads/decision/*" | wc -l)" = "$decisions_before" ] && jq -e ".tools == \"Read,Grep,Glob\" and (.deny | contains(\"Write\"))" "$T/claude-calls" >/dev/null && [ "$(stat -f %Lp "$SUGG_FILE" 2>/dev/null || stat -c %a "$SUGG_FILE")" = 600 ]'
+ck "  a choice whose evidence is not a real file (or climbs out) is dropped by the harness; the real one stays" '[ "$(jq length "$SUGG_FILE")" = 1 ] && [ "$(jq -r ".[0].title" "$SUGG_FILE")" = "Keys never leave the device" ]'
+cp "$SUGG_FILE" "$T/sugg-kept.json"; st_noreplies; st_reply default 'Here are some ideas.'
+st_duty logkeeper --suggest
+ck "--suggest with an unparseable reply: refused, and the earlier list is untouched" '[ "$RC" != 0 ] && cmp -s "$SUGG_FILE" "$T/sugg-kept.json"'
+st_noreplies; st_reply default "$REC"; rm -f "$T/gh-calls"
+st_duty logkeeper --pick 1 --why "Keys are regulated, we never hold them."
+ck "--pick: the choice and the owner's reason reach the model as fenced notes, with the alternatives marked as guesses; nothing is written without --apply" \
+   '[ "$(last_verdict)" = DRY-RUN ] && no_gh_writes && grep -q "we never hold them" "$T/claude-calls" && grep -q "guesses by the code reader" "$T/claude-calls" && grep -q "owner.s notes on a decision" "$T/claude-calls"'
+st_duty logkeeper --pick 1 --why "Keys are regulated, we never hold them." --apply
+pb=$(git -C "$T/origin.git" for-each-ref --format='%(refname:short)' "refs/heads/decision/*" | grep -v -e 0004 -e 0005 -e forged | tail -1)
+ck "--pick --apply: one new file on its own branch and a pull request, as the --text path does" '[ "$(last_verdict)" = RECORD ] && grep -q "^gh pr create" "$T/gh-calls"'
+for bad in "--pick 9" "--pick 0" "--pick x" "--pick 1 --panel tp-decision-1" "--pick 1 --text $T/notes.txt" "--suggest --pick 1"; do
+  rm -f "$T/gh-calls"; st_duty logkeeper $bad --apply
+  ck "refused, nothing written: logkeeper $bad" '[ "$RC" != 0 ] && no_gh_writes'
+done
+rm -f "$SUGG_FILE"; st_duty logkeeper --pick 1
+ck "--pick before any --suggest says to run --suggest first" '[ "$RC" != 0 ] && grep -q -e "--suggest" <<<"$OUT"'
+
 # ---- the sweep: which pull requests a schedule reviews --------------------------------------------------------------------------------
 CLEAN_R='FINDINGS_JSON: []
 ADR: searched 0001, 0002, 0003; none contradicted

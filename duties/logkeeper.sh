@@ -14,6 +14,8 @@
 #   qtdeck run <p> logkeeper --panel <decision-panel-id>            report only
 #   qtdeck run <p> logkeeper --panel <decision-panel-id> --apply    branch decision/NNNN-slug and a pull request
 #   qtdeck run <p> logkeeper --text <file> [--apply]                 the same, from your own notes on a decision (no panel needed)
+#   qtdeck run <p> logkeeper --suggest                               read the code and list the decisions it implies; writes nothing to the project
+#   qtdeck run <p> logkeeper --pick N [--why "..."] [--apply]        record suggestion N, with your reason, as the --text path does
 #
 # Contract:
 #   RECORD_JSON: {"title","chosen","rejected":[{"option","cost"}],"hard_to_reverse":[],"wrong_if":[],"paths":[],"keywords":[]}
@@ -38,17 +40,74 @@ ADR_PY="${ADR_PY:-$QUARTERDECK_DIR/bin/adr.py}"
 # Writing a record from a ruling is routine work, not a hard call.
 export QUARTERDECK_MODEL_PERSONA="${QUARTERDECK_MODEL_LOGKEEPER:-claude-sonnet-5}"
 
-APPLY=0 PANEL="" TEXTFILE=""
+APPLY=0 PANEL="" TEXTFILE="" SUGGEST=0 PICK="" WHY=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --apply) APPLY=1 ;;
     --panel) PANEL="${2:-}"; shift ;;
     --text) TEXTFILE="${2:-}"; shift ;;
+    --suggest) SUGGEST=1 ;;
+    --pick) PICK="${2:-}"; shift ;;
+    --why) WHY="${2:-}"; shift ;;
     *) die "logkeeper: unknown argument '$1'" ;;
   esac
   shift
 done
 [ "${QUARTERDECK_DRY_RUN:-1}" = 0 ] && APPLY=1
+SUGG="$QUARTERDECK_HOME/state/projects/$PROJECT/adr-suggestions.json"
+if [ "$SUGGEST" = 1 ]; then
+  # Read the code, list the decisions it implies. Nothing is written to the project: the list is kept in the data folder for you to pick from.
+  [ -z "$PANEL$TEXTFILE$PICK" ] || die "logkeeper: --suggest stands alone"
+  acquire_lock "logkeeper-$PROJECT-suggest"; trap 'release_lock' EXIT
+  ref="origin/$BASE"; safe_git -C "$SOURCE_REPO_DIR" rev-parse -q --verify "$ref" >/dev/null || ref="$BASE"
+  have=$(safe_git -C "$SOURCE_REPO_DIR" ls-tree --name-only "$ref" docs/decisions/ 2>/dev/null | sed 's#.*/##' | head -40)
+  working_on "suggesting decisions"
+  say "quarterdeck: logkeeper reading $PROJECT for the decisions its code implies"
+  prompt="$(preamble "$PROJECT")
+
+You are looking at a project to find the decisions its code already makes, so the owner can put the important ones on record.
+Name the 3 to 6 choices a newcomer would most need to know before changing anything: how the parts are split, how data is stored, how the
+project is built and tested, what it depends on, what it deliberately avoids.
+
+Rules:
+- Each choice must be visible in the files. Name the files (evidence). A choice you cannot point at in a file is not listed.
+- State what the code does. You cannot see the reasons and must not invent them. For each, put the one question only the owner can answer.
+- alternatives are what could plausibly have been chosen instead. They are guesses, and are labelled as guesses later.
+- Skip anything already on record. Records on file: ${have:-none}.
+
+End your reply with exactly this line and nothing after it:
+SUGGESTIONS_JSON: <one-line JSON array [{\"title\":\"\",\"decision\":\"\",\"evidence\":[\"path\"],\"alternatives\":[\"\"],\"question\":\"\"}]>"
+  result=$(claude_run "$SOURCE_REPO_DIR" "$prompt" "Read,Grep,Glob"); rc=$?
+  [ $rc = 2 ] && { say "quarterdeck: usage limit reached — nothing written"; exit 0; }
+  [ $rc = 0 ] && [ -n "$result" ] || { record_run "$PROJECT" logkeeper ERROR "suggest run failed"; die "logkeeper run failed"; }
+  raw=$(grep -o '^SUGGESTIONS_JSON: .*' <<<"$result" | tail -1 | sed 's/^SUGGESTIONS_JSON: //')
+  list=$(jq -c '
+    def one: if type == "string" then gsub("[\r\n\t]+"; " ") | gsub("  +"; " ") | sub("^ "; "") | sub(" $"; "") else empty end;
+    if type == "array" then [.[] | select(type == "object") |
+      {title: (.title | one), decision: (.decision | one), question: (.question | one),
+       evidence: [(.evidence // [])[] | one | select(test("^[A-Za-z0-9._/-]+$") and (contains("..") | not) and (startswith("/") | not))][:5],
+       alternatives: [(.alternatives // [])[] | one | select(length >= 1 and length <= 200)][:3]}
+      | select((.title | length) >= 1 and (.title | length) <= 100 and (.decision | length) >= 1 and (.decision | length) <= 600 and (.question | length) >= 1 and (.question | length) <= 200)][:6] else empty end' <<<"$raw" 2>/dev/null) || list=""
+  [ -n "$list" ] || { record_run "$PROJECT" logkeeper ERROR "suggest: unparseable contract"; die "contract did not parse — nothing written"; }
+  # A choice that points at no real file is dropped: the harness checks the evidence, the model does not get to vouch for it.
+  real=$(jq -r '.[].evidence[]' <<<"$list" | sort -u | while read -r p; do [ -e "$SOURCE_REPO_DIR/$p" ] && printf '%s\n' "$p"; done | jq -R . | jq -sc .)
+  list=$(jq -c --argjson ok "${real:-[]}" '[.[] | .evidence |= map(select(. as $p | $ok | index($p))) | select(.evidence | length >= 1)]' <<<"$list")
+  [ "$(jq length <<<"$list")" -gt 0 ] || { record_run "$PROJECT" logkeeper NOTHING "no suggestion pointed at a real file"; say "  nothing to suggest: no choice could be tied to a file"; exit 0; }
+  ( umask 077; mkdir -p "$(dirname "$SUGG")"; tmp=$(mktemp "$SUGG.XXXXXX") && printf '%s\n' "$list" > "$tmp" && mv -f "$tmp" "$SUGG" ) || die "logkeeper: could not keep the suggestions"
+  say ""; jq -r 'to_entries[] | "\(.key + 1). \(.value.title)\n   The code: \(.value.decision)\n   Files: \(.value.evidence | join(", "))\n   Only you know: \(.value.question)\n"' <<<"$list" >&2
+  say "quarterdeck: nothing was written to $PROJECT. Pick one: qtdeck run $PROJECT logkeeper --pick N --why \"your reason\" [--apply]"
+  record_run "$PROJECT" logkeeper SUGGESTED "$(jq length <<<"$list") decision(s) the code implies"
+  exit 0
+fi
+if [ -n "$PICK" ]; then
+  [ -z "$PANEL$TEXTFILE" ] || die "logkeeper: --pick takes neither --panel nor --text"
+  [[ "$PICK" =~ ^[1-9][0-9]{0,1}$ ]] || die "logkeeper: --pick needs the number from the list"
+  [ "${#WHY}" -le 2000 ] || die "logkeeper: --why is over 2000 characters; keep to the reason itself"
+  [ -f "$SUGG" ] || die "logkeeper: no suggestions yet; run: qtdeck run $PROJECT logkeeper --suggest"
+  pick=$(jq -c --argjson n "$PICK" '.[$n - 1] // empty' "$SUGG" 2>/dev/null); [ -n "$pick" ] || die "logkeeper: there is no suggestion $PICK"
+  PICKFILE=$(mktemp) && TEXTFILE="$PICKFILE"
+  jq -r --arg why "${WHY:-not given}" '"A decision found in the code, and chosen by the owner to be put on record.\nTHE CODE DOES THIS: \(.decision)\nFILES: \(.evidence | join(", "))\nTHE OWNER'"'"'S REASON: \($why)\nOTHER OPTIONS (guesses by the code reader, not known to have been weighed; say so in the record): \(.alternatives | join("; "))"' <<<"$pick" > "$PICKFILE"
+fi
 if [ -n "$TEXTFILE" ]; then
   # Your own notes on a decision. The file is read here, once; its name is the hash of what it says, so asking twice records it once.
   [ -z "$PANEL" ] || die "logkeeper: give --panel or --text, not both"
@@ -70,7 +129,7 @@ fi
 acquire_lock "logkeeper-$PROJECT-$PANEL"
 export QUARTERDECK_RUN_ID="$(tr '/' '_' <<<"$REPO")-logkeeper-$PANEL"
 WT="$QUARTERDECK_HOME/workspace/wt-logkeeper-${PROJECT}-${PANEL}"
-cleanup() { [ "${BASH_SUBSHELL:-0}" = 0 ] || return 0; safe_git -C "$SOURCE_REPO_DIR" worktree remove --force "$WT" >/dev/null 2>&1 || true; }
+cleanup() { [ "${BASH_SUBSHELL:-0}" = 0 ] || return 0; [ -z "${PICKFILE:-}" ] || rm -f "$PICKFILE"; safe_git -C "$SOURCE_REPO_DIR" worktree remove --force "$WT" >/dev/null 2>&1 || true; }
 trap 'cleanup; release_lock' EXIT
 
 guard 120 "${SAFE_GIT[@]}" -C "$SOURCE_REPO_DIR" fetch -q origin "$BASE" 2>>"$LOG_FILE" || log "fetch failed; using local $BASE"

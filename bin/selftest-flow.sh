@@ -421,8 +421,8 @@ def wait(pred, limit=90):
         time.sleep(0.4)
     return ready()
 st, j = get("/api/ready?project=" + P)
-chk("GET /api/ready: the project, six items in order, the one next action, ready, the waiting draft, what runs, the repo and the default branch", st == 200 and j["project"] == P
-    and [i["key"] for i in j["items"]] == ["scan", "verify", "repo", "docs", "agents", "cycle"] and set(j["next"]) == {"kind", "text", "command"} and j["ready"] in (True, False)
+chk("GET /api/ready: the project, seven items in order, the one next action, ready, the waiting draft, what runs, the repo and the default branch", st == 200 and j["project"] == P
+    and [i["key"] for i in j["items"]] == ["scan", "verify", "repo", "docs", "agents", "cycle", "decisions"] and set(j["next"]) == {"kind", "text", "command"} and j["ready"] in (True, False)
     and set(j["running"]) == {"prove", "docs"} and j["has_repo"] is False and j["default_branch"] == "main" and set(j["last_error"]) == {"prove", "docs"} and "draft" in j, j)
 chk("  every item is {key, label, state, detail, action} with a state from the four, and the agents item lists what is on and what is suggested, each with a reason",
     all({"key", "label", "state", "detail", "action"} <= set(i) and i["state"] in ("done", "todo", "unknown", "blocked") for i in j["items"])
@@ -493,7 +493,7 @@ chk("  and gh was never called", ghcalls() == [])
 # Demo mode: invented data, every write refuses and does nothing
 post("/api/demo", {"on": True})
 st, j = get("/api/ready?project=saltpan-blog")
-chk("in Demo mode /api/ready answers with invented data, built by the real checklist code, flagged demo", st == 200 and j.get("demo") is True and [i["key"] for i in j["items"]] == ["scan", "verify", "repo", "docs", "agents", "cycle"] and get("/api/ready?project=nosuch")[0] == 400, (st, j))
+chk("in Demo mode /api/ready answers with invented data, built by the real checklist code, flagged demo", st == 200 and j.get("demo") is True and [i["key"] for i in j["items"]] == ["scan", "verify", "repo", "docs", "agents", "cycle", "decisions"] and get("/api/ready?project=nosuch")[0] == 400, (st, j))
 dw = [post(p, {"project": "saltpan-blog", "which": "readme", "add": ["joiner"], "confirm": True}) for p, _ in W]
 chk("  and each of the four writes answers: Demo mode: nothing is run, drafted or changed.", all(st == 400 and j["error"] == "Demo mode: nothing is run, drafted or changed." for st, j in dw), dw)
 post("/api/demo", {"on": False})
@@ -558,8 +558,8 @@ part6_survey() {
   $QD projects >/dev/null 2>&1; touch "$T/stamp6"; sleep 1
   before=$(datasnap)
   OUT=$($QD attach "$D" 2>&1); RC=$?; after=$(datasnap)
-  ck "dry run: the stack, the documents present and missing, the commands, the crew with its reasons, and the checklist as it would be" '[ "$RC" = 0 ] && grep -q "React 18 with Vite" <<<"$OUT" && grep -qE "docs +present: none; missing: README, architecture overview" <<<"$OUT" && grep -qE "surveyor \(reads pull requests\)" <<<"$OUT" && grep -qE "^ +joiner +React is a UI framework" <<<"$OUT" && grep -q "the checklist as it would be right after you attach" <<<"$OUT" && [ "$(nlines "^  \[.\] " "$OUT")" = 6 ]'
-  ck "  the checklist items come in order: scan, verify, repo, docs, agents, cycles" '[ "$(grep -E "^  \[.\] " <<<"$OUT" | cut -c7-21 | sed -E "s/ +$//" | tr "\n" ",")" = "Scan,Verify command,GitHub repo,Docs,Agents,Cycles," ]'
+  ck "dry run: the stack, the documents present and missing, the commands, the crew with its reasons, and the checklist as it would be" '[ "$RC" = 0 ] && grep -q "React 18 with Vite" <<<"$OUT" && grep -qE "docs +present: none; missing: README, architecture overview" <<<"$OUT" && grep -qE "surveyor \(reads pull requests\)" <<<"$OUT" && grep -qE "^ +joiner +React is a UI framework" <<<"$OUT" && grep -q "the checklist as it would be right after you attach" <<<"$OUT" && [ "$(nlines "^  \[.\] " "$OUT")" = 7 ]'
+  ck "  the checklist items come in order: scan, verify, repo, docs, agents, cycles, decisions" '[ "$(grep -E "^  \[.\] " <<<"$OUT" | cut -c7-21 | sed -E "s/ +$//" | tr "\n" ",")" = "Scan,Verify command,GitHub repo,Docs,Agents,Cycles,Decisions," ]'
   ck "  it says nothing was changed, and the one next command is the same one with --apply" 'grep -q "nothing was changed" <<<"$OUT" && [ "$(nlines "^  next: " "$OUT")" = 1 ] && grep -qF "next: qtdeck attach $D --apply" <<<"$OUT"'
   ck "  it writes nothing: the data folder is byte for byte the same, there is no survey folder, and the project, its .git included, is untouched" '[ "$before" = "$after" ] && [ ! -e "$T/state/projects/sample-doc" ] && [ -z "$(find "$D" -newer "$T/stamp6" ! -path "$D" 2>/dev/null | head -1)" ]'
   ck "  the project has no node_modules and its verify command is its own tool, so the dry run says to run npm install first or set a command that needs none" 'grep -q "run npm install first" <<<"$OUT" && grep -q "needs no install" <<<"$OUT"'
@@ -820,7 +820,7 @@ part9_ready() {
   $QD attach "$R" --verify "node --test" --apply >/dev/null 2>&1
   before=$(datasnap)
   OUT=$($QD ready sample-ready 2>&1); RC=$?; after=$(datasnap)
-  ck "ready, a verify command that was never run: six lines in order, and exactly one next step: prove it" '[ "$RC" = 0 ] && [ "$(nlines "^  \[.\] " "$OUT")" = 6 ] && [ "$(nlines "^  next: " "$OUT")" = 1 ] && grep -qF "next: Run it once to prove it: qtdeck ready sample-ready --prove" <<<"$OUT" && [ "$(tail -1 <<<"$OUT" | cut -c1-8)" = "  next: " ]'
+  ck "ready, a verify command that was never run: seven lines in order, and exactly one next step: prove it" '[ "$RC" = 0 ] && [ "$(nlines "^  \[.\] " "$OUT")" = 7 ] && [ "$(nlines "^  next: " "$OUT")" = 1 ] && grep -qF "next: Run it once to prove it: qtdeck ready sample-ready --prove" <<<"$OUT" && [ "$(tail -1 <<<"$OUT" | cut -c1-8)" = "  next: " ]'
   ck "  ready without --prove writes nothing at all (the data folder is byte for byte the same) and runs nothing" '[ "$before" = "$after" ] && [ ! -e "$T/state/projects/sample-ready/verify.json" ]'
   ck "  the verify item is a to do, the scan is done, and plain ASCII marks are used when stdout is not a terminal" 'grep -qE "^  \[ \] Verify command +node --test is set. It has not been run yet" <<<"$OUT" && grep -qE "^  \[x\] Scan " <<<"$OUT"'
   OUT2=$(QUARTERDECK_MARKS=unicode $QD ready sample-ready 2>&1)

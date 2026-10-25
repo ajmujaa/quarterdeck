@@ -221,6 +221,7 @@ def docs_of(files, dirs):
         "changelog": sorted(f for f in top if low(f).startswith(("changelog", "changes", "history")))[:3],
         "agents": sorted(f for f in top if f in ("AGENTS.md", "CLAUDE.md", "GEMINI.md"))[:3],
         "docs_folder": [clip(f, 100) for f in docs[:MAX_DOCS]],
+        "decisions": [f for f in docs if re.fullmatch(r"docs/decisions/\d{4}-[a-z0-9-]+\.md", f)][:MAX_DOCS],   # the records bin/adr.py shows to reviews
     }
     present = {k: [clip(x, 100) for x in v] for k, v in present.items()}
     missing = {}

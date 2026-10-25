@@ -1,6 +1,6 @@
 # Quarterdeck guide
 
-The full guide. The short version is the [README](README.md).
+The full guide. The short version is the [README](README.md); a step-by-step walk from nothing installed to a reviewed pull request is [SETUP.md](SETUP.md).
 
 **A calm, local-first control room for AI software-development agents.**
 
@@ -72,7 +72,7 @@ Every model call uses your own account and your own usage limits. Quarterdeck ne
 
 ## First run
 
-Ways to install: today you clone (above). A Homebrew formula (`brew install ajmujaa/quarterdeck/qtdeck`) and an npm wrapper (`npm install -g qtdeck`) are prepared in `packaging/` and will be the macOS path and the Node path once they are published; `packaging/README.md` says how. Neither is published yet.
+Ways to install: Homebrew (`brew tap ajmujaa/quarterdeck && brew install qtdeck`), npm (`npm install -g qtdeck`) or a clone (above). [SETUP.md](SETUP.md) is the step-by-step version of this guide.
 
 ```bash
 bin/qtdeck dashboard              # or --no-open to print the link without opening a browser

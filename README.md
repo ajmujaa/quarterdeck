@@ -25,6 +25,8 @@ One dashboard for all your projects. A built-in crew of agents takes an issue to
 
 ## Quick start
 
+New here? **[SETUP.md](SETUP.md)** walks you from nothing installed to a reviewed pull request, step by step, with what you should see at each step. The short version:
+
 Pick one:
 
 ```bash
@@ -47,6 +49,9 @@ That is the whole path today: the dashboard opens with a first-run screen that s
 
 - **The model thinks, the harness acts.** Agents never hold credentials or write tools. A script does the privileged step, only with an explicit `--apply`.
 - **Safe by test.** 701 real runs against planted prompt injections: none obeyed. 400 control runs without the guard: 2 obeyed.
+- **Every pull request reviewed.** The surveyor reviews each new pull request once per commit, on a timer you set, including ones other collaborators open. Drafts, bots and strangers are skipped unless you say otherwise. The model only reads; a script posts the comment; merging stays yours.
+- **Decisions the agents follow.** Attach a project with no `docs/decisions` and the logkeeper reads the code and suggests the decisions it already makes. You give the reason, and each record you choose becomes a pull request. Reviewers are shown the records that match what a change touches, and builders are shown the ones that match their ticket.
+- **Your limits.** Set the most one call, one cycle and one day of automatic work may spend, in Settings, Spend limits.
 - **Calm.** One next action on Home. Calm mode shows one column of larger text.
 - **Home is you, Projects is where the work is.** Home holds your day, your notes, the fleet timeline and the day's budget; Projects opens on every project together and filters to one when you open it. The project scope lives in the address.
 - **Yours.** No keystrokes, screen, apps, clipboard or location, ever. A test scans the code for the APIs that would do it.
@@ -67,4 +72,4 @@ Guardrails, the rules every agent is given for a project, are editable on the pr
 
 Early. Built and used daily on macOS. The Linux sandbox is run in CI only. Read [SECURITY.md](SECURITY.md) before you trust it with anything you care about.
 
-[Guide](GUIDE.md) · [Security](SECURITY.md) · [Threat model](THREAT-MODEL.md) · [Apache-2.0](LICENSE) · [Licensing](LICENSING.md)
+[Setup](SETUP.md) · [Guide](GUIDE.md) · [Security](SECURITY.md) · [Threat model](THREAT-MODEL.md) · [Apache-2.0](LICENSE) · [Licensing](LICENSING.md)

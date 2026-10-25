@@ -22,6 +22,8 @@ set -uo pipefail
 # last line of this file.
 {
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)/lib.sh"
+ADR_BLOCK=""
+[ -f "$QUARTERDECK_DIR/bin/decisions.sh" ] && source "$QUARTERDECK_DIR/bin/decisions.sh"
 
 PROJECT="${QUARTERDECK_PROJECT:?run me through: qtdeck run <project> shipwright --issue <n>}"
 SOURCE_REPO_DIR="${QUARTERDECK_WORKDIR:?}"
@@ -185,6 +187,14 @@ after it has checked your work."
   SUBJECT_HEAD="$REPO#$ISSUE"
   SUBJECT_BLOCK=$(printf '%s\n\n%s\n' "$title" "$body" | untrusted "issue text")
 fi
+# The harness picks the project's decision records that match the words of the ticket; a builder must not quietly build against one.
+if declare -F adr_block >/dev/null; then
+  adr_block "$PROJECT" "$BASE" "" "$title
+$body"
+  ADR_BUILD="${ADR_BLOCK}
+You are building, not reviewing. Do not write a change that contradicts a record above. If the task cannot be done without
+contradicting one, make no change and finish with RESULT: NEEDS_HUMAN naming the record by number."
+fi
 prompt="$(preamble "$PROJECT")
 
 $WHAT_TO_DO
@@ -193,6 +203,7 @@ $WHAT_TO_DO
 $SUBJECT_BLOCK
 === END ===
 
+${ADR_BUILD:-}
 ${PLAN_TEXT:+=== THE RULING OF THE DEV PANEL — IMPLEMENT THIS ===
 A dev panel argued this out and the dockmaster ruled. It is a decision that has
 already been made, not a suggestion: implement it. If you find while building

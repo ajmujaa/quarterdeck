@@ -335,7 +335,7 @@ fi
 # already there are not this change's to fix. The staged tree is made into a commit object that no branch points at, as the review below does.
 if [ -f "$QUARTERDECK_DIR/bin/depgraph.py" ]; then
   g_tree=$(safe_git -C "$WT" write-tree 2>/dev/null) && g_head=$(safe_git -C "$WT" -c user.name=quarterdeck -c user.email=quarterdeck@example.com commit-tree "$g_tree" -p HEAD -m "graph check of $REF" 2>/dev/null) || g_head=""
-  if [ -n "$g_head" ] && ! g_out=$(python3 "$QUARTERDECK_DIR/bin/depgraph.py" newproblems --repo "$WT" --base "origin/$BASE" --head "$g_head" 2>/dev/null); then
+  if [ -n "$g_head" ] && ! g_out=$(python3 "$QUARTERDECK_DIR/bin/depgraph.py" newproblems --repo "$WT" --base "$BASE" --head "$g_head" 2>/dev/null); then
     say ""
     say "  REFUSED: the change makes the dependency graph disagree with the code"
     jq -r '.problems[] | "    " + .' <<<"$g_out" >&2

@@ -103,4 +103,6 @@ ckn "shipwright: a change that fixes a problem the base already had is not refus
 st_file docs/architecture/dependencies.json 'not json'; st_commit "unreadable"
 ship "$EDIT_SRC"
 ckn "shipwright: a project whose declared file is unreadable has no declared graph, so the builder is not told to keep it" '! grep -q "keeps docs/architecture/dependencies.json" "$T/claude-calls"'
+ck "shipwright: the gate names the base as the project does (\$BASE, which depgraph resolves to origin/\$BASE or the local branch), so a checkout with no origin is still checked" \
+   '! grep -q "depgraph.py\" newproblems.*origin/" "$REAL/duties/shipwright.sh"'
 st_done

@@ -105,6 +105,7 @@ if [ "$APPLY" = 1 ]; then
     record_run "$PROJECT" scribe ERROR "the branch did not hold exactly the drafted files; it was removed"
     die "scribe: the branch held more than the drafted files ($changed); it was removed"
   fi
+  export QUARTERDECK_RUN_FILES="$written"
   files_txt=$(tr '\n' ',' <<<"$written" | sed 's/,$//; s/,/, /g')
   if [ -n "$REPO" ] && [ -n "$(safe_git -C "$SOURCE_REPO_DIR" remote get-url origin 2>/dev/null)" ]; then
     # a repo: push THIS BRANCH ONLY (an explicit refspec), then open the pull request through the gated helper

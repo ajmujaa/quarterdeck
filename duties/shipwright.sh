@@ -378,6 +378,7 @@ fi
 say ""
 if [ -n "$TICKET" ]; then say "── $PROJECT ticket #$TICKET: $summary ──"; else say "── $REPO#$ISSUE: $summary ──"; fi
 safe_git -C "$WT" --no-pager diff --cached --stat | sed 's/^/  /' >&2
+export QUARTERDECK_RUN_FILES; QUARTERDECK_RUN_FILES=$(safe_git -C "$WT" diff --cached --name-only 2>/dev/null || true)   # the run row says what this build changed
 
 if [ "$APPLY" != 1 ]; then
   say ""

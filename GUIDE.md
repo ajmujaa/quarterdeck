@@ -30,7 +30,7 @@ Prefer the terminal? `bin/qtdeck setup` checks the tools and prints the install 
 - **Run**: one execution of a duty, with a one-line verdict kept in the ledger.
 - **Ledger**: the record of every run, what it cost and what it said.
 - **Panel**: several crew members looking at the same thing from different angles, with a chair who rules.
-- **Brain**: the map of your projects, agents and connected services.
+- **Brain**: the map of your projects, agents and connected services. A recent run on it shows which files that agent changed (the builder and the scribe record them; the pull request has the diff itself).
 - **Helm**: the optional voice assistant.
 - **Calm mode**: a switch that shows one column of larger text and only what needs you.
 

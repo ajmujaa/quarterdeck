@@ -72,7 +72,8 @@ printf '# 0003. A rule with nothing to match\n' > "$CK/docs/decisions/0003-no-ma
 printf 'index\n' > "$CK/docs/decisions/README.md"
 git -C "$CK" add -A; git -C "$CK" commit -q -m records
 j=$($ADRPY check --repo "$CK" --ref HEAD); rc=$?
-ck "check: records with their own numbers, in either heading style, and a README beside them, have no defects" '[ $rc = 0 ] && [ "$(jq ".problems | length" <<<"$j")" = 0 ]'
+ck "check: records with their own numbers, in either heading style, and a README beside them, have no defects, and it counts them" '[ $rc = 0 ] && [ "$(jq ".problems | length" <<<"$j")" = 0 ] && [ "$(jq .records <<<"$j")" = 3 ]'
+ck "check: a repository with no docs/decisions says it found 0 records, so a clean answer is never mistaken for a checked one" '[ "$($ADRPY check --repo "$T/work" --ref nonexistent | jq -c "[.records, (.problems | length)]")" = "[0,0]" ]'
 printf '# 0003. Another take\n' > "$CK/docs/decisions/0003-another-take.md"
 printf '# 0004. Heading and name disagree\n' > "$CK/docs/decisions/0005-disagree.md"
 printf '# 0006. Wrong case in the name\n' > "$CK/docs/decisions/0006-Bad_Name.md"

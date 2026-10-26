@@ -181,7 +181,8 @@ def main(argv=None):
         print(next_number(a.repo, a.base))
     elif a.cmd == "check":
         d = check(a.repo, a.ref)
-        print(json.dumps({"problems": d}))
+        out = git(a.repo, "ls-tree", "-r", "--name-only", a.ref, DIR + "/") or ""
+        print(json.dumps({"problems": d, "records": sum(1 for ln in out.splitlines() if NAME.match(ln.strip()))}))
         return 1 if d else 0
     elif a.cmd == "stale":
         print(json.dumps(stale(a.repo, a.base)))

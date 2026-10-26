@@ -536,7 +536,7 @@ case "$cmd" in
     [ $# -eq 0 ] || die "records: unknown argument '$1'"
     rrepo=$(project_path "$rproject"); rbase=$(project_get "$rproject" default_branch main)
     rref="origin/$rbase"; safe_git -C "$rrepo" rev-parse -q --verify "$rref" >/dev/null 2>&1 || rref="$rbase"
-    python3 "$QUARTERDECK_DIR/bin/adr.py" check --repo "$rrepo" --ref "$rref" | jq -r '(.problems | if length == 0 then "records: no defects" else "records: defects\n" + (map("  - " + .) | join("\n")) end)'
+    python3 "$QUARTERDECK_DIR/bin/adr.py" check --repo "$rrepo" --ref "$rref" | jq -r 'if .records == 0 and (.problems | length) == 0 then "records: none found in docs/decisions/ (a project that keeps them elsewhere has none that Quarterdeck can read)" elif (.problems | length) == 0 then "records: \(.records) found, no defects" else "records: defects\n" + (.problems | map("  - " + .) | join("\n")) end'
     rc=${PIPESTATUS[0]}
     python3 "$QUARTERDECK_DIR/bin/adr.py" stale --repo "$rrepo" --base "$rbase" | jq -r 'if length == 0 then "stale leads: none" else "stale leads (read them; each may still be right):\n" + (map("  - " + .n + " " + .title + ": " + .why) | join("\n")) end'
     exit "$rc" ;;

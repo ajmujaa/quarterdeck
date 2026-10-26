@@ -3,7 +3,7 @@
 Status: accepted
 Date: 2026-10-26
 Panel: text-3174218d5474
-Paths: GUIDE.md
+Paths: bin/dashboard.py
 Keywords: dashboard, loopback, 127.0.0.1, pairing, one-time link, login, session, remote access, authentication
 
 ## What was chosen

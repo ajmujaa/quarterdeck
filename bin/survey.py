@@ -32,6 +32,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import scan as _scan
 import safegit as _safegit
+import adr as _adr   # where a project keeps its records of decisions
 
 SCHEMA = 1
 MAX_LAYOUT = 40
@@ -221,9 +222,11 @@ def docs_of(files, dirs):
         "changelog": sorted(f for f in top if low(f).startswith(("changelog", "changes", "history")))[:3],
         "agents": sorted(f for f in top if f in ("AGENTS.md", "CLAUDE.md", "GEMINI.md"))[:3],
         "docs_folder": [clip(f, 100) for f in docs[:MAX_DOCS]],
-        "decisions": [f for f in docs if re.fullmatch(r"docs/decisions/\d{4}-[a-z0-9-]+\.md", f)][:MAX_DOCS],   # the records bin/adr.py shows to reviews
     }
+    adr_dir, adr_recs = _adr.locate(files)   # a folder named decisions, adr or adrs, anywhere in the project: the records bin/adr.py shows to reviews
+    present["decisions"] = adr_recs[:MAX_DOCS]
     present = {k: [clip(x, 100) for x in v] for k, v in present.items()}
+    present["decisions_dir"], present["decisions_count"] = clip(adr_dir, 100), len(adr_recs)
     missing = {}
     if not present["readme"]:
         missing["readme"] = "There is no README, so a newcomer has nothing that says what this project is or how to run it."

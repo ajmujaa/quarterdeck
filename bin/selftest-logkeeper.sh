@@ -68,7 +68,7 @@ CK="$T/adrchk"; rm -rf "$CK"; mkdir -p "$CK/docs/decisions" "$CK/src/sync"; git 
 printf 'x\n' > "$CK/src/sync/q.ts"
 printf '# 0001. Offline first\n\nPaths: src/sync/\nKeywords: offline\n' > "$CK/docs/decisions/0001-offline-first.md"
 printf '# ADR 0002: Keys stay local\n\nPaths: src/crypto/\n' > "$CK/docs/decisions/0002-keys-stay-local.md"
-printf '# 0003. A rule with nothing to match\n' > "$CK/docs/decisions/0003-no-match.md"
+printf '# 0003. A rule with nothing to match\n' > "$CK/docs/decisions/0003-nope.md"
 printf 'index\n' > "$CK/docs/decisions/README.md"
 git -C "$CK" add -A; git -C "$CK" commit -q -m records
 j=$($ADRPY check --repo "$CK" --ref HEAD); rc=$?
@@ -85,13 +85,41 @@ ck "check: two records with one number, a heading that disagrees with its file n
 ck "check: it reads names and headings, not what a record decides, and opens no file" '! sed -n "/^def check/,/^def stale/p" "$REAL/bin/adr.py" | grep -qE "open\(|read_text"'
 j=$($ADRPY stale --repo "$CK" --base main)
 ck "stale: a record whose Paths exist is not called out; one whose Paths are gone is, naming them; one with no Paths and no Keywords is, saying why" \
-   '! jq -e ".[] | select(.n == \"0001\")" <<<"$j" >/dev/null && jq -e ".[] | select(.n == \"0002\" and (.why | test(\"src/crypto/\")))" <<<"$j" >/dev/null && jq -e ".[] | select(.n == \"0003\" and (.why | test(\"no Paths\")))" <<<"$j" >/dev/null'
+   '! jq -e ".[] | select(.n == \"0001\")" <<<"$j" >/dev/null && jq -e ".[] | select(.n == \"0002\" and (.why | test(\"src/crypto/\")))" <<<"$j" >/dev/null && jq -e ".[] | select(.n == \"0003\" and (.why | test(\"names no Paths\")))" <<<"$j" >/dev/null'
 for i in $(seq 1 21); do echo "$i" >> "$CK/src/sync/q.ts"; git -C "$CK" commit -qam "sync $i"; done
 j=$($ADRPY stale --repo "$CK" --base main)
 ck "stale: a record whose Paths changed 20 or more times since the record last changed is a lead, with the count" 'jq -e ".[] | select(.n == \"0001\" and (.why | test(\"21 commits\")))" <<<"$j" >/dev/null'
 printf '# 0001. Offline first\n\nStatus: superseded by 0002\nPaths: src/sync/\n' > "$CK/docs/decisions/0001-offline-first.md"; git -C "$CK" commit -qam supersede
 j=$($ADRPY stale --repo "$CK" --base main)
 ck "stale: a superseded record is not called out" '! jq -e ".[] | select(.n == \"0001\")" <<<"$j" >/dev/null'
+
+# ---- records kept elsewhere, in another format (a monorepo that keeps them under docs/architecture): found, read, and matched without Paths: lines ------------------------
+KN="$T/adrmono"; rm -rf "$KN"; mkdir -p "$KN/docs/architecture/decisions" "$KN/packages/sandbox/src" "$KN/apps/web/src"; git -C "$KN" init -q -b main; git -C "$KN" config user.email t@t; git -C "$KN" config user.name t
+printf 'x\n' > "$KN/packages/sandbox/src/run.ts"; printf 'x\n' > "$KN/apps/web/src/page.ts"
+printf '# ADR 0001: Least-privilege sandbox boundary\n\n## Status\n\n**Accepted, 2026-09-04.** Nothing else.\n\nThe runner lives in `packages/sandbox/` and nothing in `no/such/folder` matters.\n' > "$KN/docs/architecture/decisions/0001-least-privilege-sandbox-boundary.md"
+printf '# ADR 0002: Offline reading cache\n\n## Status\n\n**Superseded by ADR 0003.**\n\nSee `apps/web/`.\n' > "$KN/docs/architecture/decisions/0002-offline-reading-cache.md"
+printf '# ADR 0003: Session storage rules\n\nStatus: accepted\n\nNames no path at all.\n' > "$KN/docs/architecture/decisions/0003-session-storage-rules.md"
+git -C "$KN" add -A; git -C "$KN" commit -q -m records
+ck "records kept in docs/architecture/decisions are found there, counted, and the folder is named" '[ "$($ADRPY dir --repo "$KN" --base main | jq -c "[.dir, .count]")" = "[\"docs/architecture/decisions\",3]" ] && [ "$($ADRPY check --repo "$KN" --ref HEAD | jq -r .dir)" = docs/architecture/decisions ]'
+ck "  a status written as a ## Status section is read (superseded is skipped); a Status: line still works" '[ "$(printf "# ADR 0002: x\n\n## Status\n\n**Superseded by ADR 0003.**\n" > "$T/st.md"; $ADRPY parse "$T/st.md" | jq -r .status)" = "superseded by adr 0003." ]'
+printf 'packages/sandbox/src/run.ts\n' > "$T/f"; printf 'tidy\n' > "$T/c"
+j=$($ADRPY select --repo "$KN" --base main --files "$T/f" --context "$T/c")
+ck "a record with no Paths: line is matched by a real path its text names in backticks; a path that does not exist is ignored" '[ "$(jq -r ".records[0].n" <<<"$j")" = 0001 ] && [ "$(jq ".records | length" <<<"$j")" = 1 ]'
+printf 'apps/web/src/page.ts\n' > "$T/f"
+j=$($ADRPY select --repo "$KN" --base main --files "$T/f" --context "$T/c")
+ck "  a superseded record is not shown even when its path matches" '[ "$(jq ".records | length" <<<"$j")" = 0 ]'
+printf 'README.md\n' > "$T/f"; printf 'the session storage rules for the sandbox\n' > "$T/c"
+j=$($ADRPY select --repo "$KN" --base main --files "$T/f" --context "$T/c")
+ck "  with no path to go on, the words of the file name must appear twice (session and storage), one word is not enough" '[ "$(jq -r ".records[0].n" <<<"$j")" = 0003 ]'
+printf 'the sandbox only\n' > "$T/c"
+j=$($ADRPY select --repo "$KN" --base main --files "$T/f" --context "$T/c")
+ck "  one word of a file name is too loose: nothing is shown" '[ "$(jq ".records | length" <<<"$j")" = 0 ]'
+ck "the scan (survey.docs_of) reports the folder and the number of records wherever they are, not only the first twenty it lists" '[ "$(cd "$REAL/bin" && python3 -c "
+import survey, json
+files = [\"README.md\"] + [\"docs/architecture/decisions/%04d-r%d.md\" % (i, i) for i in range(1, 31)] + [\"docs/architecture/decisions/README.md\"]
+p, _ = survey.docs_of(files, [])
+print(json.dumps([p[\"decisions_dir\"], p[\"decisions_count\"], len(p[\"decisions\"])]))")" = "[\"docs/architecture/decisions\", 30, 20]" ]'
+ck "the next number is taken from the records wherever they are kept" '[ "$($ADRPY next --repo "$KN" --base main)" = 0004 ]'
 
 # ---- the prompt block and the ADR line -----------------------------------------------------------------------------------------
 source "$T/bin/decisions.sh"

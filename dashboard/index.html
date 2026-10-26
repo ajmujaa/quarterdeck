@@ -5300,7 +5300,8 @@ function brainGraph(){
   [...(S.runs || [])].sort((x, y) => String(y.at).localeCompare(String(x.at))).slice(0, 10).forEach(r => {
     add(`r:${r.project}:${r.duty}:${r.at}`, `${r.duty}: ${r.verdict}`, "ops", "recent run", {
       parent: ids.has("p:" + r.project) ? "p:" + r.project : undefined,
-      state: BAD.includes(r.verdict) ? "attn" : "idle", sub: clip(r.detail, 160), lines: [`${r.project} · ${ago(r.at)}`],
+      state: BAD.includes(r.verdict) ? "attn" : "idle", sub: clip(r.detail, 160),
+      lines: [`${r.project} · ${ago(r.at)}`, ...(Array.isArray(r.files) && r.files.length ? [`changed ${r.nfiles || r.files.length} file${(r.nfiles || r.files.length) === 1 ? "" : "s"}: ${r.files.slice(0, 4).map(f => clip(f, 48)).join(", ")}${(r.nfiles || r.files.length) > 4 ? `, and ${(r.nfiles || r.files.length) - 4} more` : ""}`] : [])],
       ref: {run: {at: r.at, project: r.project, duty: r.duty}},
       actions: [...(r.url ? [{label: "Open", url: r.url}] : []), {label: "Open ledger", go: "ledger", project: r.project}]});
   });

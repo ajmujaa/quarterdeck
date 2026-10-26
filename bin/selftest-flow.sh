@@ -211,6 +211,7 @@ part3_cycle_cli() {
   ck "  no remote exists and nothing was pushed (no remote at all, no remote-tracking ref)" '[ -z "$(git -C "$P" remote)" ] && [ -z "$(git -C "$P" for-each-ref refs/remotes)" ]'
   ck "  the gh stand-in log has no issue, pr or repo call (it is empty)" '[ "$(ghn "^gh (issue|pr|repo)")" = 0 ] && nogh'
   ck "  the verify command ran before and after the build, and its result is in the shipwright detail: checks: verify exit 0" 'grep -q "baselining local checks" <<<"$OUT" && grep -q "re-running local checks" <<<"$OUT" && grep -qF "checks: verify exit 0" <<<"$(stg shipwright .detail)" && [ "$(stg shipwright .verdict)" = BRANCH ]'
+  ck "  the shipwright row in the ledger names the files the build changed: src/todos.js and src/todos.test.mjs, 2 in all" 'jq -e "[.[] | select(.duty == \"shipwright\" and .verdict == \"BRANCH\")] | last | (.files == [\"src/todos.js\", \"src/todos.test.mjs\"] and .nfiles == 2)" "$T/state/runs.json" >/dev/null'
   mkdir -p "$T/exported"; git -C "$P" archive "$BR" | tar -x -C "$T/exported"
   ck "  the built branch really passes the project's own offline check: node --test on its files passes all 6 tests, the new one among them" '[ "$(cd "$T/exported" && node --test 2>&1 | grep -cE "^# (pass 6|fail 0)$")" = 2 ]'
   ck "  the ticket is in review with its branch and the cycle id; the cycle lock is released" '[ "$(store sample-react ".tickets[0].status")" = review ] && [ "$(store sample-react ".tickets[0].cycle")" = "$ID" ] && [ ! -d "$T/state/cycle-sample-react-t1.lock" ]'

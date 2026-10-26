@@ -1215,6 +1215,8 @@ record_run() { # record_run <project> <duty> <verdict> [detail] [url]
     "surveyor "*/pull/* | "inspector "*/pull/*)
       sha=$(guard 15 "${QUARTERDECK_GH:-gh}" pr view "$url" --json headRefOid -q .headRefOid 2>/dev/null) || sha="" ;;
   esac
+  # A duty that changes files says which in QUARTERDECK_RUN_FILES (one path per line); the row keeps the first 30 and the count, so "what did this agent
+  # change" is answered from the ledger and not by opening the pull request.
   # A row written inside a fix carries that fix run's tag, so the fix can find
   # its own rows. Position cannot do it: the ledger keeps its last 200 rows,
   # and once full its length never changes. A row spawn_run started for a
@@ -1223,11 +1225,13 @@ record_run() { # record_run <project> <duty> <verdict> [detail] [url]
   _append_run_row() {
     local t; t=$(mktemp)
     jq --arg p "$proj" --arg d "$duty" --arg v "$verdict" --arg x "$detail" --arg u "$url" \
-       --arg f "${QUARTERDECK_FIX_RUN:-}" --arg s "$sha" --arg m "${QUARTERDECK_MISSION_RUN:-}" \
-       '. += [{project:$p, duty:$d, verdict:$v, detail:$x, url:$u, at:(now|todate)}
+       --arg f "${QUARTERDECK_FIX_RUN:-}" --arg s "$sha" --arg m "${QUARTERDECK_MISSION_RUN:-}" --arg fl "${QUARTERDECK_RUN_FILES:-}" \
+       '($fl | split("\n") | map(select(. != "") | .[:200])) as $fs
+        | . += [{project:$p, duty:$d, verdict:$v, detail:$x, url:$u, at:(now|todate)}
               + (if $f == "" then {} else {fixrun:$f} end)
               + (if $s == "" then {} else {sha:$s} end)
-              + (if $m == "" then {} else {mission:$m} end)] | .[-2000:]' \
+              + (if $m == "" then {} else {mission:$m} end)
+              + (if ($fs | length) == 0 then {} else {files:$fs[:30], nfiles:($fs | length)} end)] | .[-2000:]' \
        "$RUNS_LEDGER" > "$t" && mv "$t" "$RUNS_LEDGER"
   }
   with_file_lock "$RUNS_LEDGER" _append_run_row

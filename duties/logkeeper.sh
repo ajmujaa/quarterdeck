@@ -37,6 +37,9 @@ REPO=$(project_get "$PROJECT" repo)
 BASE=$(project_get "$PROJECT" default_branch main)
 GH="${QUARTERDECK_GH:-gh}"
 ADR_PY="${ADR_PY:-$QUARTERDECK_DIR/bin/adr.py}"
+# where this project keeps its records (docs/decisions when it has none yet); a new record goes beside the others
+ADR_DIR=$(python3 "$ADR_PY" dir --repo "$SOURCE_REPO_DIR" --base "$BASE" 2>/dev/null | jq -r '.dir // ""' 2>/dev/null) || ADR_DIR=""
+[ -n "$ADR_DIR" ] || ADR_DIR="docs/decisions"
 # Writing a record from a ruling is routine work, not a hard call.
 export QUARTERDECK_MODEL_PERSONA="${QUARTERDECK_MODEL_LOGKEEPER:-claude-sonnet-5}"
 
@@ -60,7 +63,7 @@ if [ "$SUGGEST" = 1 ]; then
   [ -z "$PANEL$TEXTFILE$PICK" ] || die "logkeeper: --suggest stands alone"
   acquire_lock "logkeeper-$PROJECT-suggest"; trap 'release_lock' EXIT
   ref="origin/$BASE"; safe_git -C "$SOURCE_REPO_DIR" rev-parse -q --verify "$ref" >/dev/null || ref="$BASE"
-  have=$(safe_git -C "$SOURCE_REPO_DIR" ls-tree --name-only "$ref" docs/decisions/ 2>/dev/null | sed 's#.*/##' | head -40)
+  have=$(safe_git -C "$SOURCE_REPO_DIR" ls-tree --name-only "$ref" "$ADR_DIR/" 2>/dev/null | sed 's#.*/##' | head -40)
   working_on "suggesting decisions"
   say "quarterdeck: logkeeper reading $PROJECT for the decisions its code implies"
   prompt="$(preamble "$PROJECT")
@@ -135,8 +138,8 @@ trap 'cleanup; release_lock' EXIT
 guard 120 "${SAFE_GIT[@]}" -C "$SOURCE_REPO_DIR" fetch -q origin "$BASE" 2>>"$LOG_FILE" || log "fetch failed; using local $BASE"
 # Already recorded? A record names the panel it came from, so asking twice does not write twice.
 ref="origin/$BASE"; safe_git -C "$SOURCE_REPO_DIR" rev-parse -q --verify "$ref" >/dev/null || ref="$BASE"
-if safe_git -C "$SOURCE_REPO_DIR" grep -qE "^Panel: $PANEL\$" "$ref" -- docs/decisions 2>/dev/null; then
-  say "quarterdeck: $PANEL is already on record in docs/decisions — nothing to do"
+if safe_git -C "$SOURCE_REPO_DIR" grep -qE "^Panel: $PANEL\$" "$ref" -- "$ADR_DIR" 2>/dev/null; then
+  say "quarterdeck: $PANEL is already on record in $ADR_DIR — nothing to do"
   record_run "$PROJECT" logkeeper NOTHING "$PANEL is already recorded"
   exit 0
 fi
@@ -231,12 +234,12 @@ n_base=$(python3 "$ADR_PY" next --repo "$SOURCE_REPO_DIR" --base "$BASE") || die
 n_branch=$(safe_git -C "$SOURCE_REPO_DIR" ls-remote --heads origin 'decision/*' 2>/dev/null | sed -nE 's#.*refs/heads/decision/([0-9]{4})-.*#\1#p' | sort -n | tail -1)
 # a record that someone else is proposing in an open pull request (written by hand, not on a decision/ branch) also takes its number
 n_pr=""
-[ -n "$REPO" ] && n_pr=$(guard 60 "$GH" pr list -R "$REPO" --state open --limit 100 --json files -q '.[].files[].path' 2>/dev/null | sed -nE 's#^docs/decisions/([0-9]{4})-.*#\1#p' | sort -n | tail -1)
+[ -n "$REPO" ] && n_pr=$(guard 60 "$GH" pr list -R "$REPO" --state open --limit 100 --json files -q '.[].files[].path' 2>/dev/null | sed -nE "s#^$ADR_DIR/([0-9]{4})-.*#\\1#p" | sort -n | tail -1)
 n_taken=$(( 10#${n_branch:-0} > 10#${n_pr:-0} ? 10#${n_branch:-0} : 10#${n_pr:-0} ))
 num=$(printf '%04d' $(( 10#${n_base} > n_taken + 1 ? 10#${n_base} : n_taken + 1 )))
 slug=$(jq -r '.title' <<<"$rec" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g' | cut -c1-40 | sed -E 's/-+$//')
 [ -n "$slug" ] || slug=decision
-FILE="docs/decisions/${num}-${slug}.md"
+FILE="$ADR_DIR/${num}-${slug}.md"
 BR="decision/${num}-${slug}"
 
 render() {
@@ -260,7 +263,7 @@ safe_git -C "$SOURCE_REPO_DIR" ls-remote --exit-code --heads origin "$BR" >/dev/
   && { record_run "$PROJECT" logkeeper ERROR "$PANEL — $BR is already proposed"; die "logkeeper: $BR already exists; merge or close that pull request first"; }
 worktree_at "$SOURCE_REPO_DIR" "$WT" "$ref" || die "could not create a worktree at $WT"
 safe_git -C "$WT" checkout -q -B "$BR" 2>>"$LOG_FILE" || die "could not create branch $BR"
-mkdir -p "$WT/docs/decisions"
+mkdir -p "$WT/$ADR_DIR"
 render > "$WT/$FILE"
 [ "$(safe_git -C "$WT" status --porcelain --untracked-files=all | wc -l | tr -d ' ')" = 1 ] && safe_git -C "$WT" status --porcelain --untracked-files=all | grep -qF "$FILE" \
   || { record_run "$PROJECT" logkeeper ERROR "$PANEL — the commit would hold more than $FILE"; die "logkeeper: the working tree holds more than the record; nothing committed"; }

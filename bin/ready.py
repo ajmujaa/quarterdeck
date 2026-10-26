@@ -297,7 +297,9 @@ def _decisions_item(name, sv):
     if recs is None:
         return {"key": "decisions", "label": "Decisions", "state": "unknown", "detail": "This survey is from before decision records were checked. Attach the folder again to look.", "action": ""}
     if recs:
-        return {"key": "decisions", "label": "Decisions", "state": "done", "detail": f"{len(recs)} decision record(s) in docs/decisions. Every review is shown the ones that match what it touches.", "action": ""}
+        where = sv["docs"]["present"].get("decisions_dir") or "docs/decisions"
+        n = sv["docs"]["present"].get("decisions_count") or len(recs)
+        return {"key": "decisions", "label": "Decisions", "state": "done", "detail": f"{n} decision record(s) in {where}. Every review is shown the ones that match what it touches (qtdeck records <project> checks them).", "action": ""}
     return {"key": "decisions", "label": "Decisions", "state": "todo",
             "detail": "No decision records. The logkeeper can read the code and list the decisions it implies; you pick which to keep and give the reason, and each becomes a pull request. Nothing is written to your project until you say so.",
             "action": f"qtdeck run {name} logkeeper --suggest"}

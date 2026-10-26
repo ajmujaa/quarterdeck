@@ -24,7 +24,6 @@ usage() {   # the day-one commands; `qtdeck help more` lists the rest
 Usage: qtdeck <command>
 
   setup                       check the tools you need and say how to install what is missing (installs nothing)
-  records <project>           the records of decisions: what is wrong with them, and which may be out of date
   attach <dir> [--apply]      get to know a project folder: survey, missing docs, the crew with reasons, a ready checklist; --apply registers it
   ready <project>             the checklist (scan, verify, repo, docs, agents, cycles) and the one next step; --prove runs the verify command once
   connect <service> [--account <label>]
@@ -71,6 +70,7 @@ Usage: qtdeck <command>
                               keeps the draft (nothing is written to your project). --apply puts them on a NEW branch (a pull request when the
                               project has a GitHub repo); never on the default branch, never over a file that exists.
   graph <project> [--check|--suggest]    which parts of the project depend on which (package.json, and docs/architecture/dependencies.json when kept), worked out from
+  records <project>                      the records of decisions: what is wrong with them, and which may be out of date
                               the default branch each time. --check lists where the declared graph and the code disagree; --suggest lists the calls the declared graph is missing. Reviews are shown what depends on a change.
   guardrail <project> list|add|remove|move   the rules every agent is given for a project; three are locked (see: list)
   enable <project> <duty>... | cycle      turn duties on; "cycle" also allows full cycles and turns on the purser and the panel

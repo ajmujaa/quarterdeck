@@ -89,7 +89,7 @@ ck "stale: a record whose Paths exist is not called out; one whose Paths are gon
 for i in $(seq 1 21); do echo "$i" >> "$CK/src/sync/q.ts"; git -C "$CK" commit -qam "sync $i"; done
 j=$($ADRPY stale --repo "$CK" --base main)
 ck "stale: a record whose Paths changed 20 or more times since the record last changed is a lead, with the count" 'jq -e ".[] | select(.n == \"0001\" and (.why | test(\"21 commits\")))" <<<"$j" >/dev/null'
-git -C "$CK" mv docs/decisions/0001-offline-first.md docs/decisions/0001-offline-first.md 2>/dev/null; sed -i.bak 's/^# 0001\. Offline first/# 0001. Offline first\n\nStatus: superseded by 0002/' "$CK/docs/decisions/0001-offline-first.md"; rm -f "$CK/docs/decisions/0001-offline-first.md.bak"; git -C "$CK" commit -qam supersede
+printf '# 0001. Offline first\n\nStatus: superseded by 0002\nPaths: src/sync/\n' > "$CK/docs/decisions/0001-offline-first.md"; git -C "$CK" commit -qam supersede
 j=$($ADRPY stale --repo "$CK" --base main)
 ck "stale: a superseded record is not called out" '! jq -e ".[] | select(.n == \"0001\")" <<<"$j" >/dev/null'
 

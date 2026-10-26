@@ -108,7 +108,7 @@ def health():
 def main():
     quick = "--quick" in sys.argv[1:]
     steps = [(LABELS.get(f, f), [sys.executable if f.endswith(".py") else "bash", "bin/" + f]) for f in suites() if not (quick and f in SLOW)]
-    steps += [("privacy limit", [sys.executable, "bin/forbidden_signals.py"]), ("secrets", [sys.executable, "bin/guard.py"]), ("vendor files", [sys.executable, "bin/vendor-verify.py"]), ("smoke test", [sys.executable, "bin/smoke.py"]),
+    steps += [("privacy limit", [sys.executable, "bin/forbidden_signals.py"]), ("secrets", [sys.executable, "bin/guard.py"]), ("decision records", [sys.executable, "bin/adr.py", "check", "--repo", ".", "--ref", "HEAD"]), ("vendor files", [sys.executable, "bin/vendor-verify.py"]), ("smoke test", [sys.executable, "bin/smoke.py"]),
              ("rehearsal", [sys.executable, "bin/rehearse.py"])]
     if nodeok.path():
         steps.insert(1, ("assistant test", ["node", "--no-warnings", "bin/selftest-assistant.mjs"]))

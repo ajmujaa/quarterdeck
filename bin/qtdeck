@@ -70,6 +70,7 @@ Usage: qtdeck <command>
                               keeps the draft (nothing is written to your project). --apply puts them on a NEW branch (a pull request when the
                               project has a GitHub repo); never on the default branch, never over a file that exists.
   graph <project> [--check|--suggest]    which parts of the project depend on which (package.json, and docs/architecture/dependencies.json when kept), worked out from
+  records <project>                      the records of decisions: what is wrong with them, and which may be out of date
                               the default branch each time. --check lists where the declared graph and the code disagree; --suggest lists the calls the declared graph is missing. Reviews are shown what depends on a change.
   guardrail <project> list|add|remove|move   the rules every agent is given for a project; three are locked (see: list)
   enable <project> <duty>... | cycle      turn duties on; "cycle" also allows full cycles and turns on the purser and the panel
@@ -184,7 +185,7 @@ cmd="${1:-status}"; shift || true
 case "$cmd" in
   -h|--help|help) if [ "${1:-}" = more ]; then usage_more; else usage; fi; exit 0 ;;
   setup) exec python3 "$SELF/setup.py" "$@" ;;
-  status|doctor|check|home|projects|duties|crew|add|remove|repo|run|spend|fix|cycle|plan|brief|mockup|dashboard|keys|billing|logs|runs|new|attach|connect|ticket|ready|docs|enable|disable|guardrail|fleet|addon) ;;
+  status|doctor|check|home|projects|duties|crew|add|remove|repo|run|spend|fix|cycle|plan|brief|mockup|dashboard|keys|billing|logs|runs|new|attach|connect|ticket|ready|docs|records|enable|disable|guardrail|fleet|addon) ;;
   *) { echo "qtdeck: unknown command '$cmd'"; echo; usage; } >&2; exit 2 ;;
 esac
 source "$SELF/lib.sh"
@@ -527,6 +528,18 @@ case "$cmd" in
     project_exists "$gproject" || die "unknown project '$gproject' (see: qtdeck projects)"
     gmode=graph; for a in "$@"; do case "$a" in --check) gmode=check ;; --suggest) gmode=suggest ;; *) die "graph: unknown argument '$a'" ;; esac; done
     exec python3 "$QUARTERDECK_DIR/bin/depgraph.py" "$gmode" --repo "$(project_path "$gproject")" --base "$(project_get "$gproject" default_branch main)" ;;
+
+  records)
+    rproject="${1:-}"; [ $# -gt 0 ] && shift
+    [ -n "$rproject" ] || die "usage: qtdeck records <project>"
+    project_exists "$rproject" || die "unknown project '$rproject' (see: qtdeck projects)"
+    [ $# -eq 0 ] || die "records: unknown argument '$1'"
+    rrepo=$(project_path "$rproject"); rbase=$(project_get "$rproject" default_branch main)
+    rref="origin/$rbase"; safe_git -C "$rrepo" rev-parse -q --verify "$rref" >/dev/null 2>&1 || rref="$rbase"
+    python3 "$QUARTERDECK_DIR/bin/adr.py" check --repo "$rrepo" --ref "$rref" | jq -r 'if .records == 0 and (.problems | length) == 0 then "records: none found in docs/decisions/ (a project that keeps them elsewhere has none that Quarterdeck can read)" elif (.problems | length) == 0 then "records: \(.records) found, no defects" else "records: defects\n" + (.problems | map("  - " + .) | join("\n")) end'
+    rc=${PIPESTATUS[0]}
+    python3 "$QUARTERDECK_DIR/bin/adr.py" stale --repo "$rrepo" --base "$rbase" | jq -r 'if length == 0 then "stale leads: none" else "stale leads (read them; each may still be right):\n" + (map("  - " + .n + " " + .title + ": " + .why) | join("\n")) end'
+    exit "$rc" ;;
 
   enable|disable)
     exec python3 "$QUARTERDECK_DIR/bin/attach.py" "$cmd" "$@" ;;

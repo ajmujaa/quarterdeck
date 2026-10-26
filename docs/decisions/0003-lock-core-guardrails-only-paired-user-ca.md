@@ -3,12 +3,12 @@
 Status: accepted
 Date: 2026-10-26
 Panel: text-6417ccf99523
-Paths: GUIDE.md
+Paths: bin/guardrails.py, bin/dashboard.py
 Keywords: guardrails, never merge a PR, never push to default branch, never touch secrets, locked rules, paired user, typed confirmation, dashboard override
 
 ## What was chosen
 
-The three default guardrails (never merge a PR, never push to default branch, never touch secrets) are locked for every project and cannot be edited via guardrails UI, CLI, or API. The owner decided the first two may be turned off only by the paired user, from the dashboard, per project and per rule, with a typed confirmation, never by an agent or an unpaired call. Never touch secrets stays locked for everyone so an agent can never leak a credential.
+The three default guardrails (never merge a PR, never push to default branch, never touch secrets) are the default for every project. Today they are locked: the guardrails page, the CLI and the API cannot edit them. The owner decided the first two may later be turned off only by the paired user, from the dashboard, per project and per rule, with a typed confirmation, never by an agent or an unpaired call. That dashboard setting does not exist yet; until it does, the rules are locked for everyone. Never touch secrets stays locked for everyone so an agent can never leak a credential.
 
 ## Options rejected, and what each costs
 

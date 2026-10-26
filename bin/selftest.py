@@ -3030,13 +3030,13 @@ with _tf.TemporaryDirectory() as _at:
     _rec = _json.loads((_scan.profile_dir() / "shopfront.attach.json").read_text())
     _tmps = []
     _real_replace = _os0.replace
-    _os0.replace = lambda src, dst, *x, **k: (_tmps.append(str(src)), _real_replace(src, dst, *x, **k))[1]
+    _os0.replace = lambda src, dst, *x, **k: ((_tmps.append(str(src)) if Path(str(dst)).name == "w.json" else None), _real_replace(src, dst, *x, **k))[1]  # only this file's swaps: another thread's replace must not count
     try:
         _attach.write_registry({"a": {}}, Path(_at) / "reg" / "w.json"); _attach.write_registry({"a": {}}, Path(_at) / "reg" / "w.json")
     finally:
         _os0.replace = _real_replace
     check("attach: the registry is written through a temp file of its own each time (two attaches at once must not share projects.tmp)",
-          len(_tmps) == 2 and _tmps[0] != _tmps[1] and not any(t.endswith("w.tmp") for t in _tmps) and not list((Path(_at) / "reg").glob("*.tmp")))
+          len(_tmps) == 2 and _tmps[0] != _tmps[1] and not any(t.endswith("w.tmp") for t in _tmps) and not list((Path(_at) / "reg").glob("w.json.*.tmp")))
     check("attach: --apply registers the project, keeps the profile and a record of what was proposed and approved, and leaves the project alone",
           "shopfront" in _got and _got["shopfront"]["verify"] == "npm test" and _rec["approved"] == _rec["proposed"] and (_scan.profile_dir() / "shopfront.json").exists() and _digest(_proj) == _snap)
     try:

@@ -3,12 +3,12 @@
 Status: accepted
 Date: 2026-10-26
 Panel: text-09ba8e97b078
-Paths: GUIDE.md, bin/guard.py
-Keywords: credentials, agent permissions, guard.py, --apply, contract parsing, secrets leakage, write tools
+Paths: bin/lib.sh, duties/
+Keywords: credentials, agent permissions, contract, --apply, secrets leakage, write tools, gh_post
 
 ## What was chosen
 
-Agents never receive credentials or write tools; they end replies with a machine-readable contract that bin/guard.py parses and acts on only when invoked with --apply. Chosen to prevent agents or LLM logs from capturing credentials on their own servers or leaking them into public repositories.
+Agents never receive credentials or write tools; they end replies with a machine-readable contract that the duty's own script (duties/*.sh, with the helpers in bin/lib.sh) parses and acts on, posting and pushing only with --apply. Chosen to prevent agents or LLM logs from capturing credentials on their own servers or leaking them into public repositories.
 
 ## Options rejected, and what each costs
 

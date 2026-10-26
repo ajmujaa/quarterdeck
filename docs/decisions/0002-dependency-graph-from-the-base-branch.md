@@ -1,4 +1,4 @@
-# 0001. The dependency graph is worked out from the base branch, with an optional declared file
+# 0002. The dependency graph is worked out from the base branch, with an optional declared file
 
 Paths: bin/depgraph.py, docs/architecture/dependencies.json, bin/decisions.sh
 Keywords: dependency graph, depgraph, dependencies.json, what depends on, impact

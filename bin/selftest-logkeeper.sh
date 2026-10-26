@@ -63,6 +63,35 @@ BASE=nonexistent j=$(BASE=nonexistent sel)
 ck "a repository with no docs/decisions has nothing searched, and the next record is 0001" '[ "$(jq ".searched | length" <<<"$j")" = 0 ] && [ "$($ADRPY next --repo "$T/work" --base nonexistent)" = 0001 ] && [ "$($ADRPY next --repo "$T/work" --base main)" = 0004 ]'
 ck "the injector reads git objects of the project only: no file path outside the repository is opened" '! grep -nE "open\(|read_text|expanduser|HOME" "$REAL/bin/adr.py" | grep -vE "open\(a\.(files|context|file)\)" | grep -q .'
 
+# ---- the records themselves: numbers, names, headings, and leads for the ones that may be out of date ---------------------------------------
+CK="$T/adrchk"; rm -rf "$CK"; mkdir -p "$CK/docs/decisions" "$CK/src/sync"; git -C "$CK" init -q -b main; git -C "$CK" config user.email t@t; git -C "$CK" config user.name t
+printf 'x\n' > "$CK/src/sync/q.ts"
+printf '# 0001. Offline first\n\nPaths: src/sync/\nKeywords: offline\n' > "$CK/docs/decisions/0001-offline-first.md"
+printf '# ADR 0002: Keys stay local\n\nPaths: src/crypto/\n' > "$CK/docs/decisions/0002-keys-stay-local.md"
+printf '# 0003. A rule with nothing to match\n' > "$CK/docs/decisions/0003-no-match.md"
+printf 'index\n' > "$CK/docs/decisions/README.md"
+git -C "$CK" add -A; git -C "$CK" commit -q -m records
+j=$($ADRPY check --repo "$CK" --ref HEAD); rc=$?
+ck "check: records with their own numbers, in either heading style, and a README beside them, have no defects" '[ $rc = 0 ] && [ "$(jq ".problems | length" <<<"$j")" = 0 ]'
+printf '# 0003. Another take\n' > "$CK/docs/decisions/0003-another-take.md"
+printf '# 0004. Heading and name disagree\n' > "$CK/docs/decisions/0005-disagree.md"
+printf '# 0006. Wrong case in the name\n' > "$CK/docs/decisions/0006-Bad_Name.md"
+printf 'no heading number here\n' > "$CK/docs/decisions/0007-no-heading.md"
+git -C "$CK" add -A; git -C "$CK" commit -q -m bad
+j=$($ADRPY check --repo "$CK" --ref HEAD); rc=$?
+ck "check: two records with one number, a heading that disagrees with its file name, a misnamed file and a heading without a number are each named, and the exit status says so" \
+   '[ $rc = 1 ] && grep -q "number 0003 is used by 2 records" <<<"$j" && grep -q "heading says 0004 but the file name says 0005" <<<"$j" && grep -q "0006-Bad_Name.md: not named" <<<"$j" && grep -q "0007-no-heading.md: its first heading does not start" <<<"$j"'
+ck "check: it reads names and headings, not what a record decides, and opens no file" '! sed -n "/^def check/,/^def stale/p" "$REAL/bin/adr.py" | grep -qE "open\(|read_text"'
+j=$($ADRPY stale --repo "$CK" --base main)
+ck "stale: a record whose Paths exist is not called out; one whose Paths are gone is, naming them; one with no Paths and no Keywords is, saying why" \
+   '! jq -e ".[] | select(.n == \"0001\")" <<<"$j" >/dev/null && jq -e ".[] | select(.n == \"0002\" and (.why | test(\"src/crypto/\")))" <<<"$j" >/dev/null && jq -e ".[] | select(.n == \"0003\" and (.why | test(\"no Paths\")))" <<<"$j" >/dev/null'
+for i in $(seq 1 21); do echo "$i" >> "$CK/src/sync/q.ts"; git -C "$CK" commit -qam "sync $i"; done
+j=$($ADRPY stale --repo "$CK" --base main)
+ck "stale: a record whose Paths changed 20 or more times since the record last changed is a lead, with the count" 'jq -e ".[] | select(.n == \"0001\" and (.why | test(\"21 commits\")))" <<<"$j" >/dev/null'
+git -C "$CK" mv docs/decisions/0001-offline-first.md docs/decisions/0001-offline-first.md 2>/dev/null; sed -i.bak 's/^# 0001\. Offline first/# 0001. Offline first\n\nStatus: superseded by 0002/' "$CK/docs/decisions/0001-offline-first.md"; rm -f "$CK/docs/decisions/0001-offline-first.md.bak"; git -C "$CK" commit -qam supersede
+j=$($ADRPY stale --repo "$CK" --base main)
+ck "stale: a superseded record is not called out" '! jq -e ".[] | select(.n == \"0001\")" <<<"$j" >/dev/null'
+
 # ---- the prompt block and the ADR line -----------------------------------------------------------------------------------------
 source "$T/bin/decisions.sh"
 export QUARTERDECK_WORKDIR="$T/work"; project_path() { echo "$T/work"; }
@@ -120,6 +149,11 @@ st_noreplies; st_reply default "$REC"; rm -f "$T/gh-calls" "$T"/body-*
 main_before=$(git -C "$T/origin.git" rev-parse refs/heads/main)
 st_duty logkeeper --panel tp-decision-1
 ck "report only: the record is shown, numbered after the ones on the trunk, and nothing is written" 'grep -q "docs/decisions/0004-sync-runs-on-the-device.md" <<<"$OUT" && grep -q "What would make this wrong" <<<"$OUT" && [ "$(last_verdict)" = DRY-RUN ] && no_gh_writes && [ -z "$(git -C "$T/origin.git" for-each-ref refs/heads/decision)" ]'
+mkdir -p "$T/ghdata"; echo '[{"number":41,"files":[{"path":"docs/decisions/0006-written-by-hand.md"},{"path":"src/a.ts"}]}]' > "$T/ghdata/pr-list.json"
+st_noreplies; st_reply default "$REC"
+st_duty logkeeper --panel tp-decision-1
+ck "numbering: a record that an open pull request adds by hand (not on a decision/ branch) takes its number too, so this one is 0007" 'grep -q "docs/decisions/0007-sync-runs-on-the-device.md" <<<"$OUT"'
+rm -f "$T/ghdata/pr-list.json"
 ck "  the model is read only and asked for data, not a file" 'jq -e ".tools == \"Read,Grep,Glob\" and (.deny | contains(\"Write\"))" "$T/claude-calls" >/dev/null && grep -q "The harness renders the file" "$T/claude-calls"'
 st_duty logkeeper --panel tp-decision-1 --apply
 ck "--apply: a branch decision/0004-... holds exactly one new file and the trunk did not move" '[ "$(git -C "$T/origin.git" diff --name-only main decision/0004-sync-runs-on-the-device)" = "docs/decisions/0004-sync-runs-on-the-device.md" ] && [ "$(git -C "$T/origin.git" rev-parse refs/heads/main)" = "$main_before" ]'

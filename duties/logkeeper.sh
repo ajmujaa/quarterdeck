@@ -229,7 +229,11 @@ done
 # ---- number it: after every record on the trunk and every record already proposed on a branch --------------------------
 n_base=$(python3 "$ADR_PY" next --repo "$SOURCE_REPO_DIR" --base "$BASE") || die "logkeeper: could not number the record"
 n_branch=$(safe_git -C "$SOURCE_REPO_DIR" ls-remote --heads origin 'decision/*' 2>/dev/null | sed -nE 's#.*refs/heads/decision/([0-9]{4})-.*#\1#p' | sort -n | tail -1)
-num=$(printf '%04d' $(( 10#${n_base} > 10#${n_branch:-0} + 1 ? 10#${n_base} : 10#${n_branch:-0} + 1 )))
+# a record that someone else is proposing in an open pull request (written by hand, not on a decision/ branch) also takes its number
+n_pr=""
+[ -n "$REPO" ] && n_pr=$(guard 60 "$GH" pr list -R "$REPO" --state open --limit 100 --json files -q '.[].files[].path' 2>/dev/null | sed -nE 's#^docs/decisions/([0-9]{4})-.*#\1#p' | sort -n | tail -1)
+n_taken=$(( 10#${n_branch:-0} > 10#${n_pr:-0} ? 10#${n_branch:-0} : 10#${n_pr:-0} ))
+num=$(printf '%04d' $(( 10#${n_base} > n_taken + 1 ? 10#${n_base} : n_taken + 1 )))
 slug=$(jq -r '.title' <<<"$rec" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g' | cut -c1-40 | sed -E 's/-+$//')
 [ -n "$slug" ] || slug=decision
 FILE="docs/decisions/${num}-${slug}.md"

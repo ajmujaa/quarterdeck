@@ -24,6 +24,7 @@ usage() {   # the day-one commands; `qtdeck help more` lists the rest
 Usage: qtdeck <command>
 
   setup                       check the tools you need and say how to install what is missing (installs nothing)
+  records <project>           the records of decisions: what is wrong with them, and which may be out of date
   attach <dir> [--apply]      get to know a project folder: survey, missing docs, the crew with reasons, a ready checklist; --apply registers it
   ready <project>             the checklist (scan, verify, repo, docs, agents, cycles) and the one next step; --prove runs the verify command once
   connect <service> [--account <label>]
@@ -184,7 +185,7 @@ cmd="${1:-status}"; shift || true
 case "$cmd" in
   -h|--help|help) if [ "${1:-}" = more ]; then usage_more; else usage; fi; exit 0 ;;
   setup) exec python3 "$SELF/setup.py" "$@" ;;
-  status|doctor|check|home|projects|duties|crew|add|remove|repo|run|spend|fix|cycle|plan|brief|mockup|dashboard|keys|billing|logs|runs|new|attach|connect|ticket|ready|docs|enable|disable|guardrail|fleet|addon) ;;
+  status|doctor|check|home|projects|duties|crew|add|remove|repo|run|spend|fix|cycle|plan|brief|mockup|dashboard|keys|billing|logs|runs|new|attach|connect|ticket|ready|docs|records|enable|disable|guardrail|fleet|addon) ;;
   *) { echo "qtdeck: unknown command '$cmd'"; echo; usage; } >&2; exit 2 ;;
 esac
 source "$SELF/lib.sh"
@@ -527,6 +528,18 @@ case "$cmd" in
     project_exists "$gproject" || die "unknown project '$gproject' (see: qtdeck projects)"
     gmode=graph; for a in "$@"; do case "$a" in --check) gmode=check ;; --suggest) gmode=suggest ;; *) die "graph: unknown argument '$a'" ;; esac; done
     exec python3 "$QUARTERDECK_DIR/bin/depgraph.py" "$gmode" --repo "$(project_path "$gproject")" --base "$(project_get "$gproject" default_branch main)" ;;
+
+  records)
+    rproject="${1:-}"; [ $# -gt 0 ] && shift
+    [ -n "$rproject" ] || die "usage: qtdeck records <project>"
+    project_exists "$rproject" || die "unknown project '$rproject' (see: qtdeck projects)"
+    [ $# -eq 0 ] || die "records: unknown argument '$1'"
+    rrepo=$(project_path "$rproject"); rbase=$(project_get "$rproject" default_branch main)
+    rref="origin/$rbase"; safe_git -C "$rrepo" rev-parse -q --verify "$rref" >/dev/null 2>&1 || rref="$rbase"
+    python3 "$QUARTERDECK_DIR/bin/adr.py" check --repo "$rrepo" --ref "$rref" | jq -r '(.problems | if length == 0 then "records: no defects" else "records: defects\n" + (map("  - " + .) | join("\n")) end)'
+    rc=${PIPESTATUS[0]}
+    python3 "$QUARTERDECK_DIR/bin/adr.py" stale --repo "$rrepo" --base "$rbase" | jq -r 'if length == 0 then "stale leads: none" else "stale leads (read them; each may still be right):\n" + (map("  - " + .n + " " + .title + ": " + .why) | join("\n")) end'
+    exit "$rc" ;;
 
   enable|disable)
     exec python3 "$QUARTERDECK_DIR/bin/attach.py" "$cmd" "$@" ;;

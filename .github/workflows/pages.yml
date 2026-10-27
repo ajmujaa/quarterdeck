@@ -1,11 +1,11 @@
 name: pages
 
-# Publishes site/ to GitHub Pages. It runs only when site/ changes on main.
+# Publishes site/ to GitHub Pages, with the docs pages built from the repository's markdown files. It runs only when the site, its build script or one of those files changes on main.
 # One-time setup by the owner: Settings > Pages > Source: GitHub Actions, then the custom domain.
 on:
   push:
     branches: [main]
-    paths: ['site/**', '.github/workflows/pages.yml']
+    paths: ['site/**', 'packaging/site/**', 'SETUP.md', 'GUIDE.md', 'SECURITY.md', 'THREAT-MODEL.md', '.github/workflows/pages.yml']
   workflow_dispatch:
 
 permissions:
@@ -26,6 +26,13 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Build the docs pages (written into site/docs, never committed)
+        run: |
+          pip install 'markdown==3.7'
+          python packaging/site/build_docs.py
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

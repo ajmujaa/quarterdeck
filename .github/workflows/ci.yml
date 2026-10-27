@@ -33,6 +33,27 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 2           # a pull request is checked out as a merge commit: its first parent is the base, which the next step compares against
+      # The private project name must not reach this public repository, in a file or in the words that travel with it. The names to refuse are
+      # a repository secret (PRIVATE_WORDS, a regular expression), so this public file holds none. A pull request from a fork gets no secrets and skips this step.
+      # It never skips otherwise: a pull request's title, body and commit messages become the squash commit on main, and no file check reads them.
+      - name: No private name in the files, the pull request text, the commits or the merged message
+        env:
+          PRIVATE_WORDS: ${{ secrets.PRIVATE_WORDS }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          if [ -z "$PRIVATE_WORDS" ]; then echo "No PRIVATE_WORDS secret in this run (a pull request from a fork gets none): skipped."; exit 0; fi
+          bad=0
+          git ls-files | grep -qiE -- "$PRIVATE_WORDS" && { echo "A private name is in a file name."; bad=1; }
+          git grep -I -l -i -E -- "$PRIVATE_WORDS" >/dev/null && { echo "A private name is in $(git grep -I -l -i -E -- "$PRIVATE_WORDS" | wc -l | tr -d ' ') file(s)."; bad=1; }
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            git fetch --no-tags --deepen=300 origin
+            text=$(printf '%s\n%s\n' "$PR_TITLE" "$PR_BODY"; git log --format=%B HEAD^1..HEAD^2)
+          else
+            text=$(git log -1 --format=%B)
+          fi
+          printf '%s' "$text" | grep -qiE -- "$PRIVATE_WORDS" && { echo "A private name is in the pull request title or body, or in a commit message."; bad=1; }
+          exit $bad
       # A pull request that changes only repository furniture (issue and pull request templates, the dependabot and conduct files, the licence) runs no tests.
       # The job still runs and passes, because the branch rule waits for this exact check; only its steps are skipped.
       - name: Does this change need the tests?

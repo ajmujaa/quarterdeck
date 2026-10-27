@@ -25,7 +25,7 @@ jobs:
       matrix:
         os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["ubuntu-latest","macos-latest"]') }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 70      # the macOS run takes 36 to 45 minutes depending on the runner; 45 cancelled a run that had finished its tests
     env:
       # Linux only (ignored on macOS): the pilot and lookout tests start an app a browser must reach, which on Linux needs the owner's opt-in (SECURITY.md)
       QUARTERDECK_APP_NET: ${{ matrix.os == 'ubuntu-latest' && 'share' || '' }}

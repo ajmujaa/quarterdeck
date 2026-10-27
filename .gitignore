@@ -31,3 +31,6 @@ config/speech.json
 # release files made by bin/release.py
 dist/release/
 config/agent-sources.json
+
+# Built from the markdown files by packaging/site/build_docs.py in the Pages workflow
+site/docs/

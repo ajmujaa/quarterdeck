@@ -54,7 +54,7 @@ jobs:
           fi
           printf '%s' "$text" | grep -qiE -- "$PRIVATE_WORDS" && { echo "A private name is in the pull request title or body, or in a commit message."; bad=1; }
           exit $bad
-      # A pull request that changes only repository furniture (issue and pull request templates, the dependabot and conduct files, the licence) runs no tests.
+      # A pull request that changes only repository furniture (issue and pull request templates, the dependabot and conduct files, the licence, the website in site/) runs no tests.
       # The job still runs and passes, because the branch rule waits for this exact check; only its steps are skipped.
       - name: Does this change need the tests?
         id: scope
@@ -63,13 +63,17 @@ jobs:
           skip=true
           for f in $(git diff --name-only HEAD^1 HEAD); do
             case "$f" in
-              .github/ISSUE_TEMPLATE/*|.github/PULL_REQUEST_TEMPLATE.md|.github/dependabot.yml|CODE_OF_CONDUCT.md|LICENSE) ;;
+              .github/ISSUE_TEMPLATE/*|.github/PULL_REQUEST_TEMPLATE.md|.github/dependabot.yml|CODE_OF_CONDUCT.md|LICENSE|site/*) ;;
               *) skip=false ;;
             esac
           done
           echo "skip=$skip" >> "$GITHUB_OUTPUT"
           [ "$skip" = true ] && echo "Only repository files changed: the tests are skipped."
           exit 0
+      # The website says it loads nothing from other sites. Its pages are not covered by the tests, so this is the check: no script, no stylesheet link, no import, no frame, no remote src or url().
+      - name: The website loads nothing from other sites
+        run: |
+          if grep -rnE '<script|@import|<link[^>]*stylesheet|<iframe|src="https?:|url\(https?:' site; then echo "The site must not load scripts, styles, fonts or images from other sites."; exit 1; fi
       - uses: actions/setup-python@v6
         if: steps.scope.outputs.skip != 'true'
         with:

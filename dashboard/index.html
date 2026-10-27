@@ -3603,7 +3603,7 @@ function ledgerMore(r, key, cols){
     <div class="ledger-detail">${esc(r.detail || "No detail recorded.")}</div>
     <div class="ledger-meta"><span>${esc(meta)}</span>${link}
       ${btn("Open full log", {size: "small", click: act("seq", ["stopPropagation"], ["openFullLog", ledgerKey(r)])})}
-      <button class="mlink link" data-m="${esc(runMissionId(r))}" ${act("seq", ["stopPropagation"], ["openMissionPage", runMissionId(r)])}>Open as a mission</button></div>
+      <button class="mlink link" data-m="${esc(runMissionId(r))}" ${act("seq", ["stopPropagation"], ["openMissionPage", runMissionId(r)])}>${r.url ? "Open as a mission" : "Open run details"}</button></div>
     ${log === null ? '<div class="ledger-meta">Reading the log…</div>'
       : log.lines ? `<div class="ledger-meta">${esc(log.note)}</div><pre class="ledger-log">${esc(log.lines.join("\n"))}</pre>`
       : `<div class="ledger-meta">${esc(log.note)}</div>`}

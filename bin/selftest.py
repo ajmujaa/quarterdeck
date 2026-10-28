@@ -3029,12 +3029,15 @@ with _tf.TemporaryDirectory() as _at:
     _got = _json.loads(_regf.read_text())
     _rec = _json.loads((_scan.profile_dir() / "shopfront.attach.json").read_text())
     _tmps = []
-    _real_replace = _os0.replace
-    _os0.replace = lambda src, dst, *x, **k: ((_tmps.append(str(src)) if Path(str(dst)).name == "w.json" else None), _real_replace(src, dst, *x, **k))[1]  # only this file's swaps: another thread's replace must not count
+    class _OsSpy:  # attach's own view of os only: patching the shared os module let another thread's swap or restore change this count
+        def __getattr__(self, n): return getattr(_os0, n)
+        def replace(self, src, dst, *x, **k): _tmps.append(str(src)); return _os0.replace(src, dst, *x, **k)
+    _real_os = _attach.os
+    _attach.os = _OsSpy()
     try:
         _attach.write_registry({"a": {}}, Path(_at) / "reg" / "w.json"); _attach.write_registry({"a": {}}, Path(_at) / "reg" / "w.json")
     finally:
-        _os0.replace = _real_replace
+        _attach.os = _real_os
     check("attach: the registry is written through a temp file of its own each time (two attaches at once must not share projects.tmp)",
           len(_tmps) == 2 and _tmps[0] != _tmps[1] and not any(t.endswith("w.tmp") for t in _tmps) and not list((Path(_at) / "reg").glob("w.json.*.tmp")))
     check("attach: --apply registers the project, keeps the profile and a record of what was proposed and approved, and leaves the project alone",

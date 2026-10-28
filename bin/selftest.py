@@ -3173,6 +3173,8 @@ with _tf.TemporaryDirectory() as _fd:
         check("fleet: it says whether a project runs its own agents or the built-in crew",
               _st["alpha"]["runs"] == "own" and _st["beta"]["runs"] == "crew" and _st["beta"]["crew"] == ["surveyor", "foreman"] and _st["gamma-fleet"]["runs"] == "none", {k: v["runs"] for k, v in _st.items()})
         check("fleet: only a project with agents of its own sends the project picker to the Fleet page", _fv.projects(_cfg) == ["alpha", "gamma"], _fv.projects(_cfg))
+        check("fleet: a project that runs its own agents shows the repository's activity on its other pages, not only a pointer to Fleet",
+              "fleetRepo(fleetSrc)" in (ROOT / "dashboard" / "index.html").read_text() and "if(ownFleet) loadFleet()" in (ROOT / "dashboard" / "index.html").read_text())
         check("fleet: an explicit config path never picks up the registry", _fv.load_config(_lst)["sources"][0]["id"] == "gamma-fleet" and len(_fv.load_config(_lst)["sources"]) == 1)
     finally:
         _fv.CONFIG, _fv.REGISTRY = _oc, _or

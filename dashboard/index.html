@@ -2892,7 +2892,7 @@ const agoS = s => s == null ? "no log yet" : s < 60 ? "just now" : s < 3600 ? Ma
 async function loadFleet(force){
   if(!force && Date.now() - fleetAt < 15000) return;
   fleetAt = Date.now();
-  try{ const j = await (await fetch("/api/fleet" + (force ? "?fresh=1" : ""))).json(); if(j && Array.isArray(j.sources)){ fleetData = j; if(view === "fleet") render(); } }catch(e){}
+  try{ const j = await (await fetch("/api/fleet" + (force ? "?fresh=1" : ""))).json(); if(j && Array.isArray(j.sources)){ fleetData = j; if(view === "fleet" || fleetProjects.has(sel)) render(); } }catch(e){}
 }
 function fleetToggle(k){ fleetOpen.has(k) ? fleetOpen.delete(k) : fleetOpen.add(k); render(); }
 // An sl-details (a group, or a job's log) reports its own open and close; the page only remembers which are open.
@@ -5519,8 +5519,12 @@ function render(){
   const brainMounted = v.id === "brain" && !brainErr && $("#brain-slot .brain-host");
   const keep = ["cap-in", "note-new", "note-q", "note-edit", "bf-note", ...[...document.querySelectorAll('#view [id^="cr-"]')].map(e => e.id)].map(id => ({id, e: document.getElementById(id)})).filter(k => k.e)
     .map(k => ({id: k.id, v: k.e.value, f: document.activeElement === k.e, at: k.e.selectionStart, to: k.e.selectionEnd})).filter(k => typeof k.v === "string");     // a field the browser has not upgraded yet has no value to keep
-  const fleetNote = fleetProjects.has(sel) && !["fleet", "brain", "crew"].includes(v.id) && !atPlace
-    ? `<div class="note-line">${esc(sel)} runs its own agents, so this page has nothing from Quarterdeck's duties. ${btn("See all its work in Fleet", {size: "small", variant: "primary", click: act("go", "fleet")})}</div>` : "";
+  const ownFleet = fleetProjects.has(sel) && !["fleet", "brain", "crew"].includes(v.id) && !atPlace;
+  if(ownFleet) loadFleet();                                // a project that runs its own agents: its activity is the repository's, shown here and not only on Fleet
+  const fleetSrc = ownFleet && fleetData && fleetData.sources.find(x => x.project === sel && (x.kind === "repo-agents" || x.kind === "reported"));
+  const fleetNote = ownFleet
+    ? `<div class="note-line">${esc(sel)} runs its own agents, so Quarterdeck's duties have nothing here. Its activity, from the repository, is below. ${btn("Open it in Fleet", {size: "small", click: act("go", "fleet")})}</div>`
+      + (fleetSrc ? fleetRepo(fleetSrc) : `<sl-skeleton effect="sheen" style="height:120px"></sl-skeleton>`) : "";
   // Pages that are about a project say so plainly, with the one next step, when there are no projects at all.
   const needsProject = !atPlace && S.projects && !S.projects.length && !(S.demo && S.demo.on) && ["projects", "panels", "documents", "board", "prs", "crew", "log", "ledger", "timeline", "operations"].includes(v.id);
   renderTabs(v.id);

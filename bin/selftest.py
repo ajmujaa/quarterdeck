@@ -3756,6 +3756,9 @@ _pl = d.compose_mission("plan:p1", None, {}, [], [], {}, get_plan=lambda i: {"id
 check("steps: a plan whose cards all moved is done at every step, with the plan's own sentence for a line", _pl["state"] == "done" and not _nostart(_pl) and "moved" in _pl["line"])
 _r = _m("run:2026-01-01T00:00:00Z|alpha|surveyor", runs=[{**_run, "verdict": "CLEAN", "detail": "all fine"}])
 check("steps: a finished ledger run has no steps to show and a one-line sentence saying nothing is waiting", _r["state"] == "done" and _r["pipeline"] is None and "Nothing is waiting" in _r["line"])
+_r = _m("run:2026-01-01T00:00:00Z|alpha|logkeeper", runs=[{**_run, "duty": "logkeeper", "verdict": "SUGGESTED", "detail": "6 decision(s) the code implies"}])
+check("steps: a logkeeper list of suggestions says it wrote nothing, nothing is required, and how to record one", "wrote nothing" in _r["line"] and "logkeeper --pick N" in _r["line"] and "alpha" in _r["line"] and "nothing is waiting" in _r["line"])
+check("ledger: a run with no pull request link says Open run details, and only a run with a link says Open as a mission", 'r.url ? "Open as a mission" : "Open run details"' in (ROOT / "dashboard" / "index.html").read_text())
 check("steps: no state of any kind shows both the Done state and a Not started step (every kind, every status the demo world and the fixtures produce)",
       all(not (m["state"] == "done" and _nostart(m)) for m in [_mp(_tx_done), _fxd("nothing"), _fxd("taken"), _bm("approved", "none"), _bm("approved", "ready"), _mcy({**_cy, "status": "nothing", "stages": _cy["stages"][:2]}), _pl]))
 check("cycle: unknown, malformed and path-like cycle ids name nothing; without a reader there is nothing to show",

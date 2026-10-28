@@ -2309,8 +2309,10 @@ def mission_line(out, hint=None):
         return {"nothing": "The cycle found nothing to build, so nothing is waiting.", "report-only": "A report-only cycle: nothing was written and nothing is waiting."}.get(hint or "", body)
     if kind == "run":
         if (out.get("detail") or {}).get("title") == "SUGGESTED":
-            return (f"This run only listed the decisions the code implies. It wrote nothing to {project or 'the project'}, and nothing is waiting for you. "
-                    f'To record one, run: qtdeck run {project or "<project>"} logkeeper --pick N --why "your reason" --apply (N is its number in the list). It opens a pull request. '
+            where = project or "the project"
+            cmd = "qtdeck run " + (project or "<project>") + ' logkeeper --pick N --why "your reason" --apply'
+            return (f"This run only listed the decisions the code implies. It wrote nothing to {where}, and nothing is waiting for you. "
+                    f"To record one, run: {cmd} (N is its number in the list). It opens a pull request. "
                     "Records made from earlier lists are in History.")
         return "The run finished and its result is on this page. Nothing is waiting for you."
     return body

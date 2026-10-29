@@ -74,7 +74,7 @@ jobs:
       - name: The website loads nothing from other sites
         run: |
           if grep -rnE '<script|@import|<link[^>]*stylesheet|<iframe|src="https?:|url\(https?:' site; then echo "The site must not load scripts, styles, fonts or images from other sites."; exit 1; fi
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         if: steps.scope.outputs.skip != 'true'
         with:
           python-version: "3.12"

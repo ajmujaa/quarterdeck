@@ -2936,6 +2936,13 @@ function fleetRepo(s){
   const sess = x => li({title: esc(x.home || x.worktree || "a session"),
     sub: `<span class="mono">${esc(x.home_branch || x.branch || "no branch")}</span>${x.home && x.worktree && x.worktree !== x.home ? ` · now in <span class="mono">${esc(x.worktree)}</span>${x.branch ? " (" + esc(x.branch) + ")" : ""}` : ""}${Object.keys(x.agents_used || {}).length ? " · agents used: " + Object.entries(x.agents_used).map(([a, n]) => esc(a) + (n > 1 ? " ×" + n : "")).join(", ") : ""}<br>${x.turns} turn${x.turns === 1 ? "" : "s"} · started ${esc(agoS(x.started_ago))} · last activity ${esc(agoS(x.last_ago))}`,
     end: pill(x.state === "working" ? "running" : x.state === "idle" ? "awaiting" : "", x.state === "working" ? "working" : x.state === "idle" ? "waiting for you" : x.state) + (x.running_agents || []).map(a => pill("running", "running " + a)).join("")});
+  const flowOne = x => { const kids = (x.runs || []).filter(r => r.running || r.ended_ago != null).slice(0, 8), on = x.state === "working";
+    const nm = (x.home || x.worktree || "a session");
+    return `<div class="flow-s ${on ? "on" : ""}"><div class="flow-root ${on ? "run" : ""}"><span class="flow-dot"></span><b>${esc(nm)}</b><span class="sub">${on ? "working" : x.state === "idle" ? "waiting for you" : esc(x.state)} · last activity ${esc(agoS(x.last_ago))}</span></div>
+      <ul class="flow-kids">${kids.map(r => `<li class="flow-kid ${r.running ? "run" : ""}"><span class="flow-dot"></span><b>${esc(r.agent)}</b><span class="sub">${r.running ? "running " + esc(agoS(r.started_ago)) : "done " + esc(agoS(r.ended_ago)) + " ago"}</span></li>`).join("") || `<li class="flow-kid"><span class="sub">No sub-agent has run in this session today.</span></li>`}</ul>
+      ${x.unnamed_stops ? `<p class="hint">Plus ${x.unnamed_stops} stops from sub-agents that report no name. They are counted, never shown as running.</p>` : ""}</div>`; };
+  const liveFlow = (S_ || []).filter(x => ["working", "idle"].includes(x.state));
+  const flowCard = S_ && liveFlow.length ? card(null, liveFlow.map(flowOne).join(""), {kicker: "Live flow", count: "a session and the sub-agents it has started, from the events it reports", label: "Live flow"}) : "";
   const sessions = S_ === null
     ? callout("running", "Live sessions are not connected.", `Quarterdeck sees worktrees and pull requests, but not which Claude Code sessions are open. Turn it on with <code>bin/fleet-hook.sh install</code> (see the README, Fleet).`)
     : card(null, (liveS.map(sess).join("") || `<p class="hint">No Claude Code session is open in this repository.</p>`)
@@ -2950,7 +2957,7 @@ function fleetRepo(s){
   const agents = card(null, (s.agents || []).length ? `<div class="grid g3">${(s.agents || []).map(a => `<div class="minicard"><div class="li"><b>${esc(a.name)}</b>${a.model ? `<div class="end">${pill("", a.model)}</div>` : ""}</div><p class="sub">${esc(a.what)}</p></div>`).join("")}</div>` : `<p class="hint">No agents are defined in the repository.</p>`,
     {kicker: "Agents", count: `${(s.agents || []).length} defined in the repository`, label: "Agents"});
   return `<section class="fleet-src"><div class="phead2">${kicker("Repository")}<h2 class="card-t">${esc(s.title)}</h2><p class="sub">${esc(s.about)}</p><p class="sub">${runs}</p></div>
-    <div class="split"><div class="stack">${work}${flow}</div><div class="stack" data-calm="hide">${sessions}${agents}</div></div></section>`;
+    <div class="split"><div class="stack">${work}${flow}</div><div class="stack" data-calm="hide">${flowCard}${sessions}${agents}</div></div></section>`;
 }
 // An agent source added in a form (bin/agentsources.py): only the four mapped fields, every one shown as text. An unreachable source says so and keeps its last list.
 const SRC_PILL = {running: ["running", "running"], waiting: ["awaiting", "waiting"], done: ["done", "done"], failed: ["bad", "failed"], unknown: ["", "status unknown"]};

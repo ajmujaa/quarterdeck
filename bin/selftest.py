@@ -3177,6 +3177,18 @@ with _tf.TemporaryDirectory() as _fd:
                                   {"t": 1010.0, "event": "prompt", "session": "s1xxxxxxxx", "worktree": "verify", "branch": "HEAD", "agent": ""}], now=1020.0)[0]
         check("fleet: a session is named for where it began and says where it is now, not only the last folder it walked into",
               _hs["home"] == "main-co" and _hs["home_branch"] == "release/x" and _hs["worktree"] == "verify", _hs)
+        _fs = _fv.build_sessions([{"t": 1000.0, "event": "prompt", "session": "f1xxxxxxxx", "worktree": "w", "branch": "b", "agent": ""},
+                                  {"t": 1001.0, "event": "agent_start", "session": "f1xxxxxxxx", "worktree": "w", "branch": "b", "agent": "auditor"},
+                                  {"t": 1002.0, "event": "agent_start", "session": "f1xxxxxxxx", "worktree": "w", "branch": "b", "agent": "fork"},
+                                  {"t": 1010.0, "event": "agent_stop", "session": "f1xxxxxxxx", "worktree": "w", "branch": "b", "agent": "auditor"},
+                                  {"t": 1011.0, "event": "agent_stop", "session": "f1xxxxxxxx", "worktree": "w", "branch": "b", "agent": ""}], now=1020.0)[0]
+        _fr = {r["agent"]: r for r in _fs["runs"]}
+        check("fleet: live flow lists each named sub-agent as running or done, and counts the unnamed stops without showing them as running",
+              _fr["fork"]["running"] and not _fr["auditor"]["running"] and _fr["auditor"]["ended_ago"] == 10 and _fs["unnamed_stops"] == 1 and _fs["running_agents"] == ["fork"], _fs)
+        _fe = _fv.build_sessions([{"t": 1000.0, "event": "agent_start", "session": "f2xxxxxxxx", "worktree": "w", "branch": "b", "agent": "fork"},
+                                  {"t": 1005.0, "event": "stop", "session": "f2xxxxxxxx", "worktree": "w", "branch": "b", "agent": ""}], now=1010.0)[0]
+        check("fleet: live flow: a finished turn closes every run still open, so nothing animates after it", not _fe["runs"][0]["running"] and _fe["running_agents"] == [], _fe)
+        check("fleet: the page draws the Live flow card from the sessions' runs", "flowCard" in (ROOT / "dashboard" / "index.html").read_text() and "flowpulse" in (ROOT / "dashboard" / "assets" / "ui.css").read_text())
         check("fleet: an explicit config path never picks up the registry", _fv.load_config(_lst)["sources"][0]["id"] == "gamma-fleet" and len(_fv.load_config(_lst)["sources"]) == 1)
     finally:
         _fv.CONFIG, _fv.REGISTRY = _oc, _or

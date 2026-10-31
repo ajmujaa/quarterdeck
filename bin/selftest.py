@@ -3178,6 +3178,10 @@ with _tf.TemporaryDirectory() as _fd:
         check("fleet: only a project with agents of its own sends the project picker to the Fleet page", _fv.projects(_cfg) == ["alpha", "gamma"], _fv.projects(_cfg))
         check("fleet: a project that runs its own agents shows the repository's activity on its other pages, not only a pointer to Fleet",
               "fleetRepo(fleetSrc)" in (ROOT / "dashboard" / "index.html").read_text() and "if(ownFleet) loadFleet()" in (ROOT / "dashboard" / "index.html").read_text())
+        _hs = _fv.build_sessions([{"t": 1000.0, "event": "session_start", "session": "s1xxxxxxxx", "worktree": "main-co", "branch": "release/x", "agent": ""},
+                                  {"t": 1010.0, "event": "prompt", "session": "s1xxxxxxxx", "worktree": "verify", "branch": "HEAD", "agent": ""}], now=1020.0)[0]
+        check("fleet: a session is named for where it began and says where it is now, not only the last folder it walked into",
+              _hs["home"] == "main-co" and _hs["home_branch"] == "release/x" and _hs["worktree"] == "verify", _hs)
         check("fleet: an explicit config path never picks up the registry", _fv.load_config(_lst)["sources"][0]["id"] == "gamma-fleet" and len(_fv.load_config(_lst)["sources"]) == 1)
     finally:
         _fv.CONFIG, _fv.REGISTRY = _oc, _or

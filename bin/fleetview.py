@@ -510,7 +510,9 @@ def build_sessions(events, now=None):
         if e["worktree"]:
             s["worktree"], s["branch"] = e["worktree"], e["branch"] or s["branch"]
             if not s["home"]:                       # where the session began: it may walk through other worktrees later, and a name that follows it is not the session's
-                s["home"], s["home_branch"] = e["worktree"], e["branch"]
+                s["home"] = e["worktree"]
+            if e["worktree"] == s["home"] and e["branch"]:
+                s["home_branch"] = e["branch"]      # the branch that folder is on now: a release session checks out several in the same folder
         k = e["event"]
         if k == "prompt":
             s["state"], s["turns"] = "working", s["turns"] + 1

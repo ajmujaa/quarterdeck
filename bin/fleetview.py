@@ -503,12 +503,14 @@ def build_sessions(events, now=None):
     for e in events or []:
         if now - e["t"] > SESSION_KEEP:
             continue
-        s = by.setdefault(e["session"], {"id": e["session"][:8], "first": e["t"], "last": e["t"], "worktree": "", "branch": "", "state": "idle",
+        s = by.setdefault(e["session"], {"id": e["session"][:8], "first": e["t"], "last": e["t"], "worktree": "", "branch": "", "home": "", "home_branch": "", "state": "idle",
                                            "open": {}, "used": {}, "turns": 0, "state_t": e["t"]})
         s["last"] = max(s["last"], e["t"])
         before = s["state"]
         if e["worktree"]:
             s["worktree"], s["branch"] = e["worktree"], e["branch"] or s["branch"]
+            if not s["home"]:                       # where the session began: it may walk through other worktrees later, and a name that follows it is not the session's
+                s["home"], s["home_branch"] = e["worktree"], e["branch"]
         k = e["event"]
         if k == "prompt":
             s["state"], s["turns"] = "working", s["turns"] + 1
@@ -533,7 +535,7 @@ def build_sessions(events, now=None):
         age = now - s["last"]
         if s["state"] in ("working", "idle") and age > SESSION_QUIET:
             s["state"] = "quiet"
-        out.append({"id": s["id"], "state": s["state"], "worktree": s["worktree"], "branch": s["branch"], "turns": s["turns"],
+        out.append({"id": s["id"], "state": s["state"], "worktree": s["worktree"], "branch": s["branch"], "home": s["home"], "home_branch": s["home_branch"], "turns": s["turns"],
                     "running_agents": sorted(s["open"]), "agents_used": dict(sorted(s["used"].items(), key=lambda kv: -kv[1])),
                     "started_ago": int(now - s["first"]), "last_ago": int(age), "state_ago": int(now - s["state_t"])})
     rank = {"working": 0, "idle": 1, "quiet": 2, "ended": 3}

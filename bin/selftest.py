@@ -3173,6 +3173,10 @@ with _tf.TemporaryDirectory() as _fd:
         check("fleet: it says whether a project runs its own agents or the built-in crew",
               _st["alpha"]["runs"] == "own" and _st["beta"]["runs"] == "crew" and _st["beta"]["crew"] == ["surveyor", "foreman"] and _st["gamma-fleet"]["runs"] == "none", {k: v["runs"] for k, v in _st.items()})
         check("fleet: only a project with agents of its own sends the project picker to the Fleet page", _fv.projects(_cfg) == ["alpha", "gamma"], _fv.projects(_cfg))
+        _hs = _fv.build_sessions([{"t": 1000.0, "event": "session_start", "session": "s1xxxxxxxx", "worktree": "main-co", "branch": "release/x", "agent": ""},
+                                  {"t": 1010.0, "event": "prompt", "session": "s1xxxxxxxx", "worktree": "verify", "branch": "HEAD", "agent": ""}], now=1020.0)[0]
+        check("fleet: a session is named for where it began and says where it is now, not only the last folder it walked into",
+              _hs["home"] == "main-co" and _hs["home_branch"] == "release/x" and _hs["worktree"] == "verify", _hs)
         check("fleet: an explicit config path never picks up the registry", _fv.load_config(_lst)["sources"][0]["id"] == "gamma-fleet" and len(_fv.load_config(_lst)["sources"]) == 1)
     finally:
         _fv.CONFIG, _fv.REGISTRY = _oc, _or

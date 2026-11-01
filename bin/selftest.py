@@ -3193,7 +3193,7 @@ with _tf.TemporaryDirectory() as _fd:
         _fe = _fv.build_sessions([{"t": 1000.0, "event": "agent_start", "session": "f2xxxxxxxx", "worktree": "w", "branch": "b", "agent": "fork"},
                                   {"t": 1005.0, "event": "stop", "session": "f2xxxxxxxx", "worktree": "w", "branch": "b", "agent": ""}], now=1010.0)[0]
         check("fleet: live flow: a finished turn closes every run still open, so nothing animates after it", not _fe["runs"][0]["running"] and _fe["running_agents"] == [], _fe)
-        check("fleet: the page draws the Live flow card from the sessions' runs", "flowCard" in (ROOT / "dashboard" / "index.html").read_text() and "flowpulse" in (ROOT / "dashboard" / "assets" / "ui.css").read_text())
+        check("fleet: the page draws the Live flow card from the sessions' runs", "flowCard" in (ROOT / "dashboard" / "index.html").read_text() and "liveFlow.slice(0, 4)" in (ROOT / "dashboard" / "index.html").read_text() and "flowpulse" in (ROOT / "dashboard" / "assets" / "ui.css").read_text())
         check("fleet: an explicit config path never picks up the registry", _fv.load_config(_lst)["sources"][0]["id"] == "gamma-fleet" and len(_fv.load_config(_lst)["sources"]) == 1)
     finally:
         _fv.CONFIG, _fv.REGISTRY = _oc, _or

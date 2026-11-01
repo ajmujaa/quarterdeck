@@ -2942,7 +2942,7 @@ function fleetRepo(s){
       <ul class="flow-kids">${kids.map(r => `<li class="flow-kid ${r.running ? "run" : ""}"><span class="flow-dot"></span><b>${esc(r.agent)}</b><span class="sub">${r.running ? "running " + esc(agoS(r.started_ago)) : "done " + esc(agoS(r.ended_ago)) + " ago"}</span></li>`).join("") || `<li class="flow-kid"><span class="sub">No sub-agent has run in this session today.</span></li>`}</ul>
       ${x.unnamed_stops ? `<p class="hint">Plus ${x.unnamed_stops} stops from sub-agents that report no name. They are counted, never shown as running.</p>` : ""}</div>`; };
   const liveFlow = (S_ || []).filter(x => ["working", "idle"].includes(x.state));
-  const flowCard = S_ && liveFlow.length ? card(null, liveFlow.map(flowOne).join(""), {kicker: "Live flow", count: "a session and the sub-agents it has started, from the events it reports", label: "Live flow"}) : "";
+  const flowCard = S_ && liveFlow.length ? card(null, liveFlow.slice(0, 4).map(flowOne).join("") + (liveFlow.length > 4 ? `<p class="hint">${liveFlow.length - 4} more open ${plural(liveFlow.length - 4, "session")} are under Sessions now.</p>` : ""), {kicker: "Live flow", count: `${liveFlow.length} open ${plural(liveFlow.length, "session")}`, label: "Live flow"}) : "";
   const sessions = S_ === null
     ? callout("running", "Live sessions are not connected.", `Quarterdeck sees worktrees and pull requests, but not which Claude Code sessions are open. Turn it on with <code>bin/fleet-hook.sh install</code> (see the README, Fleet).`)
     : card(null, (liveS.map(sess).join("") || `<p class="hint">No Claude Code session is open in this repository.</p>`)

@@ -1026,3 +1026,16 @@ body{min-height:100dvh}
 .at-step h3:focus-visible{outline:2px solid var(--accent,currentColor);outline-offset:4px}
 .at-duty{padding:var(--s1) 0}
 .at-more{margin:var(--s3) 0}
+
+/* Live flow (Fleet): a session at the top, its named sub-agents below. Only a running node moves; Calm mode and reduced motion switch the movement off (.calm rule above). */
+.flow-s{display:flex;flex-direction:column;gap:0;margin-top:var(--s3)}
+.flow-root{display:flex;align-items:center;gap:10px;padding:8px 12px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--code)}
+.flow-kids{margin:0 0 0 22px;padding:0;list-style:none;border-left:2px dashed var(--line)}
+.flow-s.on .flow-kids{border-left-color:var(--ok)}
+.flow-kid{display:flex;align-items:center;gap:10px;padding:6px 0 6px 14px;position:relative;color:var(--ink-2)}
+.flow-kid:before{content:"";position:absolute;left:0;top:50%;width:10px;border-top:2px dashed var(--line)}
+.flow-kid.run:before{border-top-color:var(--ok)}
+.flow-dot{width:9px;height:9px;border-radius:50%;background:var(--line);flex:none}
+.flow-kid.run .flow-dot,.flow-root.run .flow-dot{background:var(--ok);animation:flowpulse 1.4s ease-in-out infinite}
+.flow-kid.run b{color:var(--ink)}
+@keyframes flowpulse{0%,100%{box-shadow:0 0 0 0 var(--ok-edge)}50%{box-shadow:0 0 0 6px transparent}}

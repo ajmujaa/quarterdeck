@@ -504,7 +504,7 @@ def build_sessions(events, now=None):
         if now - e["t"] > SESSION_KEEP:
             continue
         s = by.setdefault(e["session"], {"id": e["session"][:8], "first": e["t"], "last": e["t"], "worktree": "", "branch": "", "home": "", "home_branch": "", "state": "idle",
-                                           "open": {}, "used": {}, "turns": 0, "state_t": e["t"]})
+                                           "open": {}, "used": {}, "runs": [], "unnamed": 0, "turns": 0, "state_t": e["t"]})
         s["last"] = max(s["last"], e["t"])
         before = s["state"]
         if e["worktree"]:
@@ -518,18 +518,28 @@ def build_sessions(events, now=None):
             s["state"], s["turns"] = "working", s["turns"] + 1
         elif k == "stop":
             s["state"], s["open"] = "idle", {}
+            for r in s["runs"]:
+                if r["t1"] is None: r["t1"] = e["t"]
         elif k == "session_end":
             s["state"], s["open"] = "ended", {}
+            for r in s["runs"]:
+                if r["t1"] is None: r["t1"] = e["t"]
         elif k == "session_start" and s["state"] != "working":
             s["state"] = "idle"
         elif k == "agent_start" and e["agent"]:
             s["state"] = "working" if s["state"] != "ended" else "ended"
             s["open"][e["agent"]] = s["open"].get(e["agent"], 0) + 1
             s["used"][e["agent"]] = s["used"].get(e["agent"], 0) + 1
+            s["runs"].append({"agent": e["agent"], "t0": e["t"], "t1": None})
         elif k == "agent_stop" and e["agent"] and s["open"].get(e["agent"]):
             s["open"][e["agent"]] -= 1
             if not s["open"][e["agent"]]:
                 del s["open"][e["agent"]]
+            for r in reversed(s["runs"]):
+                if r["agent"] == e["agent"] and r["t1"] is None:
+                    r["t1"] = e["t"]; break
+        elif k == "agent_stop" and not e["agent"]:
+            s["unnamed"] += 1                      # Claude Code names no agent here and sent no start: counted, never shown as running
         if s["state"] != before:
             s["state_t"] = e["t"]
     out = []
@@ -538,7 +548,8 @@ def build_sessions(events, now=None):
         if s["state"] in ("working", "idle") and age > SESSION_QUIET:
             s["state"] = "quiet"
         out.append({"id": s["id"], "state": s["state"], "worktree": s["worktree"], "branch": s["branch"], "home": s["home"], "home_branch": s["home_branch"], "turns": s["turns"],
-                    "running_agents": sorted(s["open"]), "agents_used": dict(sorted(s["used"].items(), key=lambda kv: -kv[1])),
+                    "running_agents": sorted(s["open"]), "unnamed_stops": s["unnamed"],
+                    "runs": [{"agent": r["agent"], "running": r["t1"] is None, "started_ago": int(now - r["t0"]), "ended_ago": None if r["t1"] is None else int(now - r["t1"])} for r in s["runs"][-12:]][::-1], "agents_used": dict(sorted(s["used"].items(), key=lambda kv: -kv[1])),
                     "started_ago": int(now - s["first"]), "last_ago": int(age), "state_ago": int(now - s["state_t"])})
     rank = {"working": 0, "idle": 1, "quiet": 2, "ended": 3}
     return sorted(out, key=lambda x: (rank[x["state"]], x["last_ago"]))

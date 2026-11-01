@@ -2933,8 +2933,8 @@ function fleetRepo(s){
   const group = (title, hint, list, open) => { if(!list.length) return ""; const k = "g:" + s.id + ":" + title;
     return `<sl-details summary="${esc(title)} · ${list.length}" data-fk="${esc(k)}" ${open || fleetOpen.has(k) ? "open" : ""} style="margin-top:var(--s3)"><p class="sub">${esc(hint)}</p>${list.map(w => fleetTree(w, s.sessions)).join("")}</sl-details>`; };
   const S_ = s.sessions, liveS = (S_ || []).filter(x => ["working", "idle"].includes(x.state)), otherS = (S_ || []).filter(x => !["working", "idle"].includes(x.state));
-  const sess = x => li({title: esc(x.worktree || "a session"),
-    sub: `<span class="mono">${esc(x.branch || "no branch")}</span>${Object.keys(x.agents_used || {}).length ? " · agents used: " + Object.entries(x.agents_used).map(([a, n]) => esc(a) + (n > 1 ? " ×" + n : "")).join(", ") : ""}<br>${x.turns} turn${x.turns === 1 ? "" : "s"} · started ${esc(agoS(x.started_ago))} · last activity ${esc(agoS(x.last_ago))}`,
+  const sess = x => li({title: esc(x.home || x.worktree || "a session"),
+    sub: `<span class="mono">${esc(x.home_branch || x.branch || "no branch")}</span>${x.home && x.worktree && x.worktree !== x.home ? ` · now in <span class="mono">${esc(x.worktree)}</span>${x.branch ? " (" + esc(x.branch) + ")" : ""}` : ""}${Object.keys(x.agents_used || {}).length ? " · agents used: " + Object.entries(x.agents_used).map(([a, n]) => esc(a) + (n > 1 ? " ×" + n : "")).join(", ") : ""}<br>${x.turns} turn${x.turns === 1 ? "" : "s"} · started ${esc(agoS(x.started_ago))} · last activity ${esc(agoS(x.last_ago))}`,
     end: pill(x.state === "working" ? "running" : x.state === "idle" ? "awaiting" : "", x.state === "working" ? "working" : x.state === "idle" ? "waiting for you" : x.state) + (x.running_agents || []).map(a => pill("running", "running " + a)).join("")});
   const sessions = S_ === null
     ? callout("running", "Live sessions are not connected.", `Quarterdeck sees worktrees and pull requests, but not which Claude Code sessions are open. Turn it on with <code>bin/fleet-hook.sh install</code> (see the README, Fleet).`)

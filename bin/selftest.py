@@ -3039,7 +3039,7 @@ with _tf.TemporaryDirectory() as _at:
     finally:
         _attach.os = _real_os
     check("attach: the registry is written through a temp file of its own each time (two attaches at once must not share projects.tmp)",
-          len(_tmps) == 2 and _tmps[0] != _tmps[1] and not any(t.endswith("w.tmp") for t in _tmps) and not list((Path(_at) / "reg").glob("w.json.*.tmp")))
+          len(_tmps) == 2 and _tmps[0] != _tmps[1] and not any(Path(t).name == "w.tmp" for t in _tmps) and not list((Path(_at) / "reg").glob("w.json.*.tmp")), (_tmps, sorted(x.name for x in (Path(_at) / "reg").iterdir())))
     check("attach: --apply registers the project, keeps the profile and a record of what was proposed and approved, and leaves the project alone",
           "shopfront" in _got and _got["shopfront"]["verify"] == "npm test" and _rec["approved"] == _rec["proposed"] and (_scan.profile_dir() / "shopfront.json").exists() and _digest(_proj) == _snap)
     try:
